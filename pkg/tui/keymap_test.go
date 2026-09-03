@@ -3,9 +3,9 @@ package tui
 import (
 	"testing"
 
-	"github.com/textfuel/lazyjira/v2/pkg/config"
-	"github.com/textfuel/lazyjira/v2/pkg/internal/testkit"
-	"github.com/textfuel/lazyjira/v2/pkg/tui/components"
+	"github.com/lsst25/lazybitbucket/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
+	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 )
 
 func TestKeymapFromConfig_OverridesAndMatches(t *testing.T) {

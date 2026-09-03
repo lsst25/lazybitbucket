@@ -3,8 +3,8 @@ package tui
 import (
 	"slices"
 
-	"github.com/textfuel/lazyjira/v2/pkg/config"
-	"github.com/textfuel/lazyjira/v2/pkg/tui/components"
+	"github.com/lsst25/lazybitbucket/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 )
 
 // Action represents a user-triggerable action

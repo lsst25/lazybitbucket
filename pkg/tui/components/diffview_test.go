@@ -5,7 +5,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/textfuel/lazyjira/v2/pkg/internal/testkit"
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
 )
 
 func TestComputeLCS(t *testing.T) {

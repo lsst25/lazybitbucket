@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/textfuel/lazyjira/v2/pkg/jira"
+	"github.com/lsst25/lazybitbucket/pkg/jira"
 )
 
 func TestInfoPanel_RenderSubtaskRowPairs_FallbackToSubtasks(t *testing.T) {

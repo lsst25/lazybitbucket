@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/textfuel/lazyjira/v2/pkg/config"
-	"github.com/textfuel/lazyjira/v2/pkg/tui"
+	"github.com/lsst25/lazybitbucket/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/tui"
 )
 
 func assertEqual[T comparable](t *testing.T, label string, got, want T) {

@@ -7,8 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/textfuel/lazyjira/v2/pkg/jira"
-	"github.com/textfuel/lazyjira/v2/pkg/jira/jiratest"
+	"github.com/lsst25/lazybitbucket/pkg/jira"
+	"github.com/lsst25/lazybitbucket/pkg/jira/jiratest"
 )
 
 func assertErrorMsg(t *testing.T, msg tea.Msg) {

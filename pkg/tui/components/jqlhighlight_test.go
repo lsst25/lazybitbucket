@@ -5,7 +5,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/textfuel/lazyjira/v2/pkg/tui/theme"
+	"github.com/lsst25/lazybitbucket/pkg/tui/theme"
 )
 
 func segmentTexts(segments []StyledSegment) []string {

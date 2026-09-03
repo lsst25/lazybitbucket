@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/textfuel/lazyjira/v2/pkg/internal/testkit"
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
 )
 
 const relationsIssueJSON = `{

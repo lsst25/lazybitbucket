@@ -4,8 +4,8 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/textfuel/lazyjira/v2/pkg/jira"
-	"github.com/textfuel/lazyjira/v2/pkg/jira/jiratest"
+	"github.com/lsst25/lazybitbucket/pkg/jira"
+	"github.com/lsst25/lazybitbucket/pkg/jira/jiratest"
 )
 
 var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/textfuel/lazyjira/v2/pkg/internal/testkit"
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
 )
 
 func mustADF(t *testing.T, jsonStr string) any {

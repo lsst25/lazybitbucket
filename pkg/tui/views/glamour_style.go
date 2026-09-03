@@ -3,7 +3,7 @@ package views
 import (
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/textfuel/lazyjira/v2/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/config"
 )
 
 const (

@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/textfuel/lazyjira/v2/pkg/config"
-	"github.com/textfuel/lazyjira/v2/pkg/jira"
-	"github.com/textfuel/lazyjira/v2/pkg/jira/jiratest"
+	"github.com/lsst25/lazybitbucket/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/jira"
+	"github.com/lsst25/lazybitbucket/pkg/jira/jiratest"
 )
 
 func TestFetchProjects(t *testing.T) {

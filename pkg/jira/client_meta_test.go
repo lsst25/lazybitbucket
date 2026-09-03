@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/textfuel/lazyjira/v2/pkg/internal/testkit"
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
 )
 
 func TestClient_GetProjects_CloudPaginates(t *testing.T) {

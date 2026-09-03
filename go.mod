@@ -1,4 +1,4 @@
-module github.com/textfuel/lazyjira/v2
+module github.com/lsst25/lazybitbucket
 
 go 1.25.8
 

@@ -5,8 +5,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/textfuel/lazyjira/v2/pkg/internal/testkit"
-	"github.com/textfuel/lazyjira/v2/pkg/tui/theme"
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
+	"github.com/lsst25/lazybitbucket/pkg/tui/theme"
 )
 
 func TestNoneStyle_GrayForeground(t *testing.T) {

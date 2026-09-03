@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/textfuel/lazyjira/v2/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/config"
 )
 
 const (

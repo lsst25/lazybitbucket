@@ -15,8 +15,8 @@ import (
 	adfconv "github.com/seflue/adf-converter/adf"
 	adfdisplay "github.com/seflue/adf-converter/display"
 
-	"github.com/textfuel/lazyjira/v2/pkg/tui/components"
-	"github.com/textfuel/lazyjira/v2/pkg/tui/theme"
+	"github.com/lsst25/lazybitbucket/pkg/tui/components"
+	"github.com/lsst25/lazybitbucket/pkg/tui/theme"
 )
 
 // ADFRenderer renders an ADF document tree to terminal lines.

@@ -8,7 +8,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/textfuel/lazyjira/v2/pkg/jira"
+	"github.com/lsst25/lazybitbucket/pkg/jira"
 )
 
 // Call-record structs. One per method that takes arguments worth asserting.

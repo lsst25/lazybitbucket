@@ -10,10 +10,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/textfuel/lazyjira/v2/pkg/config"
-	"github.com/textfuel/lazyjira/v2/pkg/git"
-	"github.com/textfuel/lazyjira/v2/pkg/jira"
-	"github.com/textfuel/lazyjira/v2/pkg/tui/views"
+	"github.com/lsst25/lazybitbucket/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/git"
+	"github.com/lsst25/lazybitbucket/pkg/jira"
+	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
 // Git message types

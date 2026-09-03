@@ -7,10 +7,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/textfuel/lazyjira/v2/pkg/config"
-	"github.com/textfuel/lazyjira/v2/pkg/internal/testkit"
-	"github.com/textfuel/lazyjira/v2/pkg/jira"
-	"github.com/textfuel/lazyjira/v2/pkg/tui/components"
+	"github.com/lsst25/lazybitbucket/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
+	"github.com/lsst25/lazybitbucket/pkg/jira"
+	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 )
 
 func navResolverForIssues(key string) components.NavAction {

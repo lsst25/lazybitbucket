@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/textfuel/lazyjira/v2/pkg/ascii"
-	"github.com/textfuel/lazyjira/v2/pkg/jira"
+	"github.com/lsst25/lazybitbucket/pkg/ascii"
+	"github.com/lsst25/lazybitbucket/pkg/jira"
 )
 
 // mentionScanRe captures a leading boundary (start of string, or a single

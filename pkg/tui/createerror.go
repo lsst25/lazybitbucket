@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/textfuel/lazyjira/v2/pkg/jira"
+	"github.com/lsst25/lazybitbucket/pkg/jira"
 )
 
 // formatCreateError turns a create-flow failure into a user-facing message,

@@ -4,7 +4,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/textfuel/lazyjira/v2/pkg/tui/theme"
+	"github.com/lsst25/lazybitbucket/pkg/tui/theme"
 )
 
 // SearchBar is a bottom search input that filters the current panel

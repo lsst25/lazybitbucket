@@ -126,7 +126,7 @@ Use [Windows Terminal](https://aka.ms/terminal) for best rendering.
 <summary><b>Go / From source</b></summary>
 
 ```
-go install github.com/textfuel/lazyjira/v2/cmd/lazyjira@latest
+go install github.com/lsst25/lazybitbucket/cmd/lazyjira@latest
 ```
 
 Or build manually:

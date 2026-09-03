@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/textfuel/lazyjira/v2/pkg/internal/testkit"
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
 )
 
 func TestNewClient_DefaultsToCloudV3(t *testing.T) {

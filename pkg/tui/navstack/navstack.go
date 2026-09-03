@@ -1,6 +1,6 @@
 package navstack
 
-import "github.com/textfuel/lazyjira/v2/pkg/jira"
+import "github.com/lsst25/lazybitbucket/pkg/jira"
 
 // Opaque panel identifier stored in NavFrame. The semantic mapping
 // (which int = which panel) lives in the tui package; this package

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/textfuel/lazyjira/v2/pkg/ascii"
+	"github.com/lsst25/lazybitbucket/pkg/ascii"
 )
 
 // BranchTemplateData holds data available in branch name templates
