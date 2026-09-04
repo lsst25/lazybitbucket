@@ -1,179 +1,291 @@
 package tui
 
 import (
+	"context"
+	"strings"
 	"testing"
 
-	"github.com/lsst25/lazybitbucket/pkg/config"
-	"github.com/lsst25/lazybitbucket/pkg/jira"
-	"github.com/lsst25/lazybitbucket/pkg/jira/jiratest"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
+	"github.com/lsst25/lazybitbucket/pkg/tui/components"
+	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
-func focusApp(t *testing.T) *App {
+// keysApp has one pull request selected and its statuses cached.
+func keysApp(t *testing.T) *App {
 	t.Helper()
-	app := newAppWithFake(t, &jiratest.FakeClient{T: t})
-	app.keymap = DefaultKeymap()
-	app.width = 120
-	app.height = 40
+	app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
+	pr := withAuthor(newPR(testRepo, 101, testTitle), testUserUUID)
+	pr.Description = "See https://example.test/spec for the design."
+	app.merged[testFetchKey] = []bitbucket.PullRequest{pr}
+	app.prList.SetPullRequests(app.merged[testFetchKey])
+	app.previewKey = pr.Key()
+	app.prCache[pr.Key()] = &pr
+	app.statusCache[pr.Key()] = statusEntry{
+		statuses:  []bitbucket.CommitStatus{newStatus(testRepo, 412, bitbucket.StatusSuccessful)},
+		updatedOn: pr.UpdatedOn,
+		fetchedAt: testNow,
+	}
+	app.updateFocusState()
 	return app
 }
 
-func TestHandleFocusAction(t *testing.T) {
-	t.Parallel()
-
-	t.Run("switch panel toggles side", func(t *testing.T) {
-		t.Parallel()
-		app := focusApp(t)
-		app.side = sideLeft
-
-		_, _, ok := app.handleFocusAction(ActSwitchPanel)
-
-		if !ok || app.side != sideRight {
-			t.Errorf("ok=%v side=%v, want ok side=right", ok, app.side)
+// captureExternal swaps the app's external-command seam and returns a pointer
+// to the last URL or clipboard payload it saw. The seam is per-App, so tests
+// using it stay parallel-safe.
+func captureExternal(t *testing.T, app *App) (url, stdin *string) {
+	t.Helper()
+	var gotURL, gotStdin string
+	app.exec = func(input string, _ bool, _ string, args ...string) {
+		gotStdin = input
+		if len(args) > 0 {
+			gotURL = args[len(args)-1]
 		}
-	})
-
-	t.Run("focus detail jumps right", func(t *testing.T) {
-		t.Parallel()
-		app := focusApp(t)
-		_, _, ok := app.handleFocusAction(ActFocusDetail)
-		if !ok || app.side != sideRight {
-			t.Errorf("ok=%v side=%v, want right", ok, app.side)
-		}
-	})
-
-	t.Run("direct panel focus actions", func(t *testing.T) {
-		t.Parallel()
-		cases := []struct {
-			action Action
-			want   focusPanel
-		}{
-			{ActFocusStatus, focusStatus},
-			{ActFocusIssues, focusIssues},
-			{ActFocusInfo, focusInfo},
-			{ActFocusProj, focusProjects},
-		}
-		for _, testCase := range cases {
-			app := focusApp(t)
-			app.side = sideRight
-			_, _, ok := app.handleFocusAction(testCase.action)
-			if !ok || app.side != sideLeft || app.leftFocus != testCase.want {
-				t.Errorf("action %v -> ok=%v side=%v focus=%v, want left/%v", testCase.action, ok, app.side, app.leftFocus, testCase.want)
-			}
-		}
-	})
-
-	t.Run("non focus action is not handled", func(t *testing.T) {
-		t.Parallel()
-		app := focusApp(t)
-		if _, _, ok := app.handleFocusAction(ActQuit); ok {
-			t.Error("ActQuit should not be a focus action")
-		}
-	})
+	}
+	return &gotURL, &gotStdin
 }
 
-func TestHandleTabAction(t *testing.T) {
+func TestFocusActions_WalkTheLeftPanelsAndBack(t *testing.T) {
+	t.Parallel()
+	app := keysApp(t)
+
+	steps := []focusPanel{focusBuilds, focusRepos, focusStatus, focusPullRequests}
+	for _, want := range steps {
+		if _, _, ok := app.handleFocusAction(ActFocusRight); !ok {
+			t.Fatal("focus right must be handled on the left side")
+		}
+		testkit.AssertEqual(t, "leftFocus", app.leftFocus, want)
+	}
+
+	back := []focusPanel{focusStatus, focusRepos, focusBuilds, focusPullRequests}
+	for _, want := range back {
+		if _, _, ok := app.handleFocusAction(ActFocusLeft); !ok {
+			t.Fatal("focus left must be handled on the left side")
+		}
+		testkit.AssertEqual(t, "leftFocus", app.leftFocus, want)
+	}
+}
+
+func TestFocusActions_NumberKeys(t *testing.T) {
 	t.Parallel()
 
-	twoTabs := func(app *App) {
-		app.projectKey = testProject
-		app.issuesList.SetTabs([]config.IssueTabConfig{
-			{Name: "All", JQL: "project = {{.ProjectKey}}"},
-			{Name: "Mine", JQL: "assignee = currentUser()"},
+	cases := []struct {
+		name   string
+		action Action
+		want   focusPanel
+	}{
+		{"status", ActFocusStatus, focusStatus},
+		{"pull requests", ActFocusPullRequests, focusPullRequests},
+		{"builds", ActFocusBuilds, focusBuilds},
+		{"repos", ActFocusRepos, focusRepos},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			app := keysApp(t)
+			app.side = sideRight
+
+			_, _, ok := app.handleFocusAction(testCase.action)
+
+			if !ok {
+				t.Fatal("a focus action must be handled")
+			}
+			testkit.AssertEqual(t, "side", app.side, sideLeft)
+			testkit.AssertEqual(t, "leftFocus", app.leftFocus, testCase.want)
 		})
 	}
-
-	t.Run("next tab on issues advances", func(t *testing.T) {
-		t.Parallel()
-		app := focusApp(t)
-		twoTabs(app)
-		app.side = sideLeft
-		app.leftFocus = focusIssues
-
-		_, cmd, ok := app.handleTabAction(ActNextTab)
-
-		if !ok {
-			t.Fatal("ActNextTab should be handled")
-		}
-		if app.issuesList.GetTabIndex() != 1 {
-			t.Errorf("tab index = %d, want 1", app.issuesList.GetTabIndex())
-		}
-		if cmd == nil {
-			t.Error("expected fetch command for uncached tab")
-		}
-	})
-
-	t.Run("prev tab on issues wraps", func(t *testing.T) {
-		t.Parallel()
-		app := focusApp(t)
-		twoTabs(app)
-		app.side = sideLeft
-		app.leftFocus = focusIssues
-
-		_, _, _ = app.handleTabAction(ActPrevTab)
-
-		if app.issuesList.GetTabIndex() != 1 {
-			t.Errorf("tab index = %d, want 1 after wrapping back", app.issuesList.GetTabIndex())
-		}
-	})
-
-	t.Run("next tab on detail switches detail tab", func(t *testing.T) {
-		t.Parallel()
-		app := focusApp(t)
-		app.side = sideRight
-
-		_, _, ok := app.handleTabAction(ActNextTab)
-
-		if !ok {
-			t.Error("ActNextTab should be handled on the detail side")
-		}
-	})
-
-	t.Run("close jql tab removes it", func(t *testing.T) {
-		t.Parallel()
-		app := focusApp(t)
-		twoTabs(app)
-		app.side = sideLeft
-		app.leftFocus = focusIssues
-		app.issuesList.AddJQLTab("project = X")
-
-		_, _, ok := app.handleTabAction(ActCloseJQLTab)
-
-		if !ok {
-			t.Fatal("ActCloseJQLTab should be handled")
-		}
-		if app.issuesList.HasJQLTab() {
-			t.Error("JQL tab should be removed")
-		}
-	})
-
-	t.Run("non tab action is not handled", func(t *testing.T) {
-		t.Parallel()
-		app := focusApp(t)
-		if _, _, ok := app.handleTabAction(ActQuit); ok {
-			t.Error("ActQuit should not be a tab action")
-		}
-	})
 }
 
-func TestHandleIssueAction_Comments(t *testing.T) {
+func TestFocusStatus_ShowsTheSplash(t *testing.T) {
 	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	app := newAppWithFake(t, fake)
-	app.keymap = DefaultKeymap()
-	app.width = 120
-	app.height = 40
-	app.issuesList.SetIssues([]jira.Issue{{Key: testKey}})
-	app.previewKey = testKey
+	app := keysApp(t)
+	app.currentUser = &bitbucket.Account{UUID: testUserUUID, DisplayName: "Demo User"}
 
-	_, cmd, ok := app.handleIssueAction(ActComments)
+	_, _, _ = app.handleFocusAction(ActFocusStatus)
 
+	testkit.AssertEqual(t, "detail mode", app.detailView.Mode(), views.ModeSplash)
+	testkit.AssertEqual(t, "splash user", app.splashInfo.User, "Demo User")
+}
+
+func TestSwitchPanel_TogglesSides(t *testing.T) {
+	t.Parallel()
+	app := keysApp(t)
+
+	_, _, _ = app.handleFocusAction(ActSwitchPanel)
+	testkit.AssertEqual(t, "side", app.side, sideRight)
+
+	_, _, _ = app.handleFocusAction(ActSwitchPanel)
+	testkit.AssertEqual(t, "side", app.side, sideLeft)
+}
+
+func TestActivate_OnThePullRequestListOpensTheDetail(t *testing.T) {
+	t.Parallel()
+	app := keysApp(t)
+
+	_, cmd := app.handleActivate()
+
+	testkit.AssertEqual(t, "side", app.side, sideRight)
+	if cmd != nil {
+		t.Error("the detail is already previewed; opening it costs nothing")
+	}
+}
+
+func TestActivate_OnAnEmptyListDoesNothing(t *testing.T) {
+	t.Parallel()
+	app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
+
+	_, cmd := app.handleActivate()
+
+	testkit.AssertEqual(t, "side", app.side, sideLeft)
+	if cmd != nil {
+		t.Error("there is nothing to open")
+	}
+}
+
+func TestActivate_OnTheDetailPanelFallsThroughToTheView(t *testing.T) {
+	t.Parallel()
+	app := keysApp(t)
+	app.side = sideRight
+
+	model, cmd := app.handleActivate()
+
+	if model != nil || cmd != nil {
+		t.Error("activation on the detail panel must be left to the view")
+	}
+}
+
+func TestBrowserAndCopy_TargetThePullRequest(t *testing.T) {
+	t.Parallel()
+	app := keysApp(t)
+	gotURL, gotStdin := captureExternal(t, app)
+
+	_, _, ok := app.handlePullRequestAction(ActBrowser)
 	if !ok {
-		t.Fatal("ActComments should be handled")
+		t.Fatal("the browser action must be handled")
 	}
-	if app.side != sideRight {
-		t.Error("comments action should switch to detail side")
+	if !strings.Contains(*gotURL, "pull-requests") {
+		t.Errorf("opened %q, want the pull request URL", *gotURL)
 	}
-	if cmd == nil {
-		t.Error("expected fetch command for uncached issue")
+
+	_, _, ok = app.handlePullRequestAction(ActCopyURL)
+	if !ok {
+		t.Fatal("the copy action must be handled")
+	}
+	if !strings.Contains(*gotStdin, "pull-requests") {
+		t.Errorf("copied %q, want the pull request URL", *gotStdin)
+	}
+}
+
+func TestURLPicker_ListsTheReachableURLsAndOpensThePick(t *testing.T) {
+	t.Parallel()
+	app := keysApp(t)
+	gotURL, _ := captureExternal(t, app)
+
+	_, _ = app.handleActionURLPicker()
+
+	if !app.modal.IsVisible() {
+		t.Fatal("the URL picker should have opened the modal")
+	}
+	if app.onSelect == nil {
+		t.Fatal("the picker must install a selection callback")
+	}
+	rendered := plain(app.modal.View())
+	if !strings.Contains(rendered, "Pull request") {
+		t.Errorf("picker = %q, want the pull request section", rendered)
+	}
+	if !strings.Contains(rendered, "Description") {
+		t.Errorf("picker = %q, want the description section for the URLs found in the body", rendered)
+	}
+
+	_, _ = app.Update(components.ModalSelectedMsg{
+		Item: components.ModalItem{ID: "https://example.test/spec"},
+	})
+	testkit.AssertEqual(t, "opened url", *gotURL, "https://example.test/spec")
+}
+
+func TestURLPicker_WithoutAPullRequestIsANoop(t *testing.T) {
+	t.Parallel()
+	app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
+
+	_, cmd := app.handleActionURLPicker()
+
+	if cmd != nil || app.modal.IsVisible() {
+		t.Error("there are no URLs to pick from")
+	}
+}
+
+func TestRefresh_InvalidatesTheSelectedPullRequestAndRefetches(t *testing.T) {
+	t.Parallel()
+	app := keysApp(t)
+
+	_, cmd, ok := app.handlePullRequestAction(ActRefresh)
+
+	if !ok || cmd == nil {
+		t.Fatal("r should refetch the selected pull request")
+	}
+	if _, hit := app.prCache[testPRKey]; hit {
+		t.Error("the detail cache should have been invalidated")
+	}
+	if _, hit := app.statusCache[testPRKey]; hit {
+		t.Error("the status cache should have been invalidated")
+	}
+}
+
+func TestRefreshAll_RefetchesTheTabEvenWhenItIsCached(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.ListPullRequestsFunc = func(_ context.Context, _, repo string,
+		_ bitbucket.ListPullRequestsOptions,
+	) ([]bitbucket.PullRequest, error) {
+		return []bitbucket.PullRequest{newPR(repo, 101, testTitle)}, nil
+	}
+	app := keysApp(t)
+	app.client = fake
+
+	_, cmd, ok := app.handlePullRequestAction(ActRefreshAll)
+
+	if !ok || cmd == nil {
+		t.Fatal("R should always refetch the active tab")
+	}
+	if _, isLoaded := cmd().(pullRequestsLoadedMsg); !isLoaded {
+		t.Error("R should have produced a list fetch")
+	}
+}
+
+func TestHandleKeyMsg_UnknownKeyFallsThrough(t *testing.T) {
+	t.Parallel()
+	app := keysApp(t)
+
+	model, cmd := app.handleKeyMsg(runeKey('z'))
+
+	if model != nil || cmd != nil {
+		t.Error("an unbound key must be left to the focused panel")
+	}
+}
+
+func TestHandleKeyMsg_DetailScrollWorksFromTheLeftPanels(t *testing.T) {
+	t.Parallel()
+	app := keysApp(t)
+
+	model, _ := app.handleKeyMsg(runeKey('J'))
+
+	if model == nil {
+		t.Error("J should scroll the detail pane from the pull request list")
+	}
+}
+
+func TestHandleKeyMsg_HelpOverlayTakesEveryKey(t *testing.T) {
+	t.Parallel()
+	app := keysApp(t)
+	app.showHelp = true
+
+	_, _ = app.handleKeyMsg(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if app.showHelp {
+		t.Error("esc should close the help overlay")
 	}
 }

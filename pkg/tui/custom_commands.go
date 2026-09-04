@@ -12,63 +12,77 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/config"
-	"github.com/lsst25/lazybitbucket/pkg/jira"
 	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
-// customCommandFinishedMsg is sent when a custom command exits.
-// output is populated for background commands; suspended commands write
-// directly to the terminal.
+// customCommandFinishedMsg is sent when a custom command exits. output is only
+// populated for background commands; suspended ones write to the terminal.
 type customCommandFinishedMsg struct {
 	err     error
 	output  string
 	refresh bool
 }
 
-// issueScopeData holds template variables for issue-scoped commands.
-type issueScopeData struct {
+// PullRequestScopeData is the template data of a pull-request-scoped command.
+type PullRequestScopeData struct {
+	ID                int
+	Title             string
+	Description       string
+	State             string
+	Draft             bool
+	Author            string
+	AuthorNickname    string
+	SourceBranch      string
+	DestinationBranch string
+	SourceCommit      string
+	DestinationCommit string
+	URL               string
+	Repo              string
+	RepoFullName      string
+	Workspace         string
+	CommentCount      int
+	TaskCount         int
+	Reviewers         int
+	Approvals         int
+	ChangesRequested  int
+}
+
+// RepoScopeData is the template data of a repository-scoped command.
+type RepoScopeData struct {
+	Slug       string
+	Name       string
+	FullName   string
+	Workspace  string
+	URL        string
+	MainBranch string
+}
+
+// BuildScopeData is the template data of a build-scoped command.
+type BuildScopeData struct {
+	Name        string
+	State       string
 	Key         string
-	ProjectKey  string
-	ParentKey   string
-	Summary     string
-	Type        string
-	Status      string
-	Assignee    string
-	Priority    string
+	RefName     string
 	URL         string
-	GitBranch   string
+	BuildNumber int
+}
+
+// CommandData is what a custom command template is executed against. Only the
+// scopes the command declared are populated; the rest stay nil.
+type CommandData struct {
+	PR          *PullRequestScopeData
+	Repo        *RepoScopeData
+	Build       *BuildScopeData
+	Workspace   string
 	GitRepoPath string
-	JiraHost    string
-}
-
-// projectScopeData holds template variables for project-scoped commands.
-type projectScopeData struct {
-	ProjectKey  string
-	ProjectName string
-	JiraHost    string
 	GitBranch   string
-	GitRepoPath string
 }
 
-// commentScopeData holds template variables for comment-scoped commands.
-type commentScopeData struct {
-	CommentID     string
-	CommentAuthor string
-	CommentBody   string
-}
-
-// detailCommentsScopeData is used for commands active in the detail.comments
-// context, exposing both Issue and Comment fields at the top level. Issue and
-// Comment field names do not collide, so struct embedding is unambiguous.
-type detailCommentsScopeData struct {
-	issueScopeData
-	commentScopeData
-}
-
-// initCustomCommands resolves the custom commands from config at startup.
-// Resolution errors are surfaced on the status panel; the slice is left empty.
+// initCustomCommands resolves the configured commands at startup. A resolution
+// error is surfaced on the status panel and leaves the list empty.
 func (a *App) initCustomCommands() {
 	resolved, err := a.cfg.ResolveCustomCommands()
 	if err != nil {
@@ -79,52 +93,46 @@ func (a *App) initCustomCommands() {
 	a.customCmds = resolved
 }
 
-// activeContexts returns the contexts that currently apply, ordered by
-// descending specificity. First match wins in handleCustomCommand.
+// activeContexts returns the contexts that currently apply, most specific
+// first. The first match wins in handleCustomCommand.
 func (a *App) activeContexts() []config.Context {
 	var out []config.Context
-	switch a.side {
-	case sideRight:
+	if a.side == sideRight {
 		switch a.detailView.Mode() {
-		case views.ModeIssue:
-			if a.detailView.ActiveTab() == views.TabComments {
-				out = append(out, config.CtxDetailComments)
-			}
+		case views.ModePullRequest, views.ModePipeline, views.ModeStepLog:
 			out = append(out, config.CtxDetail)
-		case views.ModeProject:
-			out = append(out, config.CtxProjects)
+		case views.ModeRepo:
+			out = append(out, config.CtxRepos)
 		case views.ModeSplash:
-			// no custom command contexts on splash
+			// The splash screen carries no selection.
 		}
-	case sideLeft:
-		switch a.leftFocus {
-		case focusIssues:
-			out = append(out, config.CtxIssues)
-		case focusInfo:
-			out = append(out, config.CtxInfo)
-		case focusProjects:
-			out = append(out, config.CtxProjects)
-		case focusStatus:
-			// none
-		}
+		return out
+	}
+
+	switch a.leftFocus {
+	case focusPullRequests:
+		out = append(out, config.CtxPullRequests)
+	case focusBuilds:
+		out = append(out, config.CtxBuilds)
+	case focusRepos:
+		out = append(out, config.CtxRepos)
+	case focusStatus:
+		// No commands bind to the status panel.
 	}
 	return out
 }
 
-// handleCustomCommand checks if keyStr matches a custom command bound to an
-// active context and executes it. Returns (model, cmd, true) if handled.
+// handleCustomCommand runs the command bound to keyStr in an active context.
+// The third result reports whether the key was consumed.
 func (a *App) handleCustomCommand(keyStr string) (tea.Model, tea.Cmd, bool) {
 	for _, ctx := range a.activeContexts() {
 		for _, rc := range a.customCmds {
-			if rc.Key != keyStr {
+			if rc.Key != keyStr || !rc.HasContext(ctx) {
 				continue
 			}
-			if !rc.HasContext(ctx) {
-				continue
-			}
-			data, ok := a.buildCommandData(rc)
+			data, missing, ok := a.buildCommandData(rc, ctx)
 			if !ok {
-				a.helpBar.SetStatusMsg(fmt.Sprintf("%s: no %s selected", rc.Name, scopeNoun(rc.Scopes)))
+				a.helpBar.SetStatusMsg(fmt.Sprintf("%s: no %s selected", rc.Name, scopeNoun(missing)))
 				return a, nil, true
 			}
 			return a, a.executeCustomCommand(rc, data), true
@@ -133,124 +141,176 @@ func (a *App) handleCustomCommand(keyStr string) (tea.Model, tea.Cmd, bool) {
 	return nil, nil, false
 }
 
-// scopeNoun returns a human-readable noun for the selection a scope requires.
-func scopeNoun(s config.ScopeMask) string {
-	switch s {
-	case config.ScopeIssue:
-		return "issue"
-	case config.ScopeProject:
-		return "project"
-	case config.ScopeIssue | config.ScopeComment:
-		return "comment"
+// scopeNoun names the selection a scope needs, for the "nothing selected"
+// message.
+func scopeNoun(scope config.ScopeMask) string {
+	switch scope {
+	case config.ScopePullRequest:
+		return "pull request"
+	case config.ScopeRepo:
+		return "repository"
+	case config.ScopeBuild:
+		return "build"
 	default:
 		return "selection"
 	}
 }
 
-// buildCommandData returns the template data for a resolved command.
-// The second return is false when a required selection is missing.
-func (a *App) buildCommandData(rc config.ResolvedCustomCommand) (any, bool) {
-	switch rc.Scopes {
-	case config.ScopeIssue:
-		if a.currentIssue() == nil {
-			return nil, false
-		}
-		return a.buildIssueScopeData(), true
-	case config.ScopeProject:
-		p := a.projectList.SelectedProject()
-		if p == nil {
-			return nil, false
-		}
-		return a.buildProjectScopeData(p), true
-	case config.ScopeComment:
-		cmt := a.detailView.SelectedComment()
-		if cmt == nil {
-			return nil, false
-		}
-		return a.buildCommentScopeData(cmt), true
-	case config.ScopeIssue | config.ScopeComment:
-		if a.currentIssue() == nil {
-			return nil, false
-		}
-		cmt := a.detailView.SelectedComment()
-		if cmt == nil {
-			return nil, false
-		}
-		return detailCommentsScopeData{
-			issueScopeData:   a.buildIssueScopeData(),
-			commentScopeData: a.buildCommentScopeData(cmt),
-		}, true
-	}
-	return nil, false
-}
-
-func (a *App) buildIssueScopeData() issueScopeData {
-	sel := a.currentIssue()
-	data := issueScopeData{
-		GitBranch:   a.gitBranch,
+// buildCommandData fills one CommandData per scope bit the command declared.
+// ctx is the context the command matched in, which decides where the
+// repository scope is read from. The second result is the first scope that had
+// no source, which is only meaningful when the third is false.
+func (a *App) buildCommandData(rc config.ResolvedCustomCommand, ctx config.Context) (CommandData, config.ScopeMask, bool) {
+	data := CommandData{
+		PR:          nil,
+		Repo:        nil,
+		Build:       nil,
+		Workspace:   a.workspace,
 		GitRepoPath: a.gitRepoPath,
-		JiraHost:    a.cfg.Jira.Host,
-	}
-	if sel == nil {
-		return data
-	}
-
-	data.Key = sel.Key
-	data.Summary = sel.Summary
-
-	if parts := strings.SplitN(sel.Key, "-", 2); len(parts) == 2 {
-		data.ProjectKey = parts[0]
-	}
-
-	if sel.Parent != nil {
-		data.ParentKey = sel.Parent.Key
-	}
-	if sel.IssueType != nil {
-		data.Type = sel.IssueType.Name
-	}
-	if sel.Status != nil {
-		data.Status = sel.Status.Name
-	}
-	if sel.Assignee != nil {
-		data.Assignee = sel.Assignee.DisplayName
-	}
-	if sel.Priority != nil {
-		data.Priority = sel.Priority.Name
-	}
-
-	if a.cfg.Jira.Host != "" {
-		data.URL = fmt.Sprintf("https://%s/browse/%s", a.cfg.Jira.Host, sel.Key)
-	}
-
-	return data
-}
-
-func (a *App) buildProjectScopeData(p *jira.Project) projectScopeData {
-	return projectScopeData{
-		ProjectKey:  p.Key,
-		ProjectName: p.Name,
-		JiraHost:    a.cfg.Jira.Host,
 		GitBranch:   a.gitBranch,
-		GitRepoPath: a.gitRepoPath,
 	}
+
+	pr := a.currentPullRequest()
+
+	if rc.Scopes&config.ScopePullRequest != 0 {
+		if pr == nil {
+			return data, config.ScopePullRequest, false
+		}
+		data.PR = a.buildPullRequestScopeData(pr)
+	}
+
+	if rc.Scopes&config.ScopeRepo != 0 {
+		repo := a.buildRepoScopeData(pr, ctx)
+		if repo == nil {
+			return data, config.ScopeRepo, false
+		}
+		data.Repo = repo
+	}
+
+	if rc.Scopes&config.ScopeBuild != 0 {
+		status := a.buildsPanel.SelectedStatus()
+		if status == nil {
+			return data, config.ScopeBuild, false
+		}
+		data.Build = buildScopeData(status)
+	}
+
+	return data, 0, true
 }
 
-func (a *App) buildCommentScopeData(c *jira.Comment) commentScopeData {
-	data := commentScopeData{
-		CommentID:   c.ID,
-		CommentBody: c.Body,
+func (a *App) buildPullRequestScopeData(pr *bitbucket.PullRequest) *PullRequestScopeData {
+	summary := pr.ReviewSummary()
+	data := &PullRequestScopeData{
+		ID:                pr.ID,
+		Title:             pr.Title,
+		Description:       pr.Description,
+		State:             string(pr.State),
+		Draft:             pr.Draft,
+		Author:            pr.Author.Name(),
+		AuthorNickname:    pr.Author.Nickname,
+		SourceBranch:      pr.SourceBranch(),
+		DestinationBranch: pr.DestinationBranch(),
+		SourceCommit:      "",
+		DestinationCommit: "",
+		URL:               pr.HTMLURL(),
+		Repo:              pr.RepoSlug(),
+		RepoFullName:      pr.RepoFullName(),
+		Workspace:         pr.Workspace(),
+		CommentCount:      pr.CommentCount,
+		TaskCount:         pr.TaskCount,
+		Reviewers:         summary.Reviewers,
+		Approvals:         summary.Approved,
+		ChangesRequested:  summary.ChangesRequested,
 	}
-	if c.Author != nil {
-		data.CommentAuthor = c.Author.DisplayName
+	if pr.Source.Commit != nil {
+		data.SourceCommit = pr.Source.Commit.Hash
+	}
+	if pr.Destination.Commit != nil {
+		data.DestinationCommit = pr.Destination.Commit.Hash
 	}
 	return data
 }
 
-func (a *App) executeCustomCommand(rc config.ResolvedCustomCommand, data any) tea.Cmd {
+// buildRepoScopeData derives the repository the command should act on. In the
+// Repos context — the focused Repos panel, or the detail panel showing a
+// repository — that is the highlighted row, because that is the repository on
+// screen. Everywhere else the pull request in view wins, enriched from the
+// repository list, with the Repos panel selection as the fallback.
+func (a *App) buildRepoScopeData(pr *bitbucket.PullRequest, ctx config.Context) *RepoScopeData {
+	if ctx == config.CtxRepos {
+		if data := a.repoScopeFromSelection(); data != nil {
+			return data
+		}
+	}
+	if pr != nil {
+		return a.repoScopeFromPullRequest(pr)
+	}
+	return a.repoScopeFromSelection()
+}
+
+// repoScopeFromPullRequest builds the repository scope out of the pull request,
+// enriched from the repository list when that repository is known.
+func (a *App) repoScopeFromPullRequest(pr *bitbucket.PullRequest) *RepoScopeData {
+	slug := pr.RepoSlug()
+	data := &RepoScopeData{
+		Slug:       slug,
+		Name:       slug,
+		FullName:   pr.RepoFullName(),
+		Workspace:  pr.Workspace(),
+		URL:        "",
+		MainBranch: "",
+	}
+	for _, repo := range a.repos {
+		if repo.Slug != slug {
+			continue
+		}
+		if repo.Name != "" {
+			data.Name = repo.Name
+		}
+		data.URL = repo.HTMLURL()
+		data.MainBranch = repo.MainBranchName()
+	}
+	return data
+}
+
+// repoScopeFromSelection builds the repository scope out of the Repos panel
+// cursor. The synthetic "All repositories" row names no repository, so it
+// yields nothing and the caller falls back.
+func (a *App) repoScopeFromSelection() *RepoScopeData {
+	item := a.repoList.SelectedRepo()
+	if item == nil || item.All {
+		return nil
+	}
+	return &RepoScopeData{
+		Slug:       item.Slug,
+		Name:       item.Name,
+		FullName:   item.FullName,
+		Workspace:  a.workspace,
+		URL:        item.URL,
+		MainBranch: item.MainBranch,
+	}
+}
+
+func buildScopeData(status *bitbucket.CommitStatus) *BuildScopeData {
+	data := &BuildScopeData{
+		Name:        status.Name,
+		State:       string(status.State),
+		Key:         status.Key,
+		RefName:     status.RefName,
+		URL:         status.URL,
+		BuildNumber: 0,
+	}
+	if number, ok := status.BuildNumber(); ok {
+		data.BuildNumber = number
+	}
+	return data
+}
+
+func (a *App) executeCustomCommand(rc config.ResolvedCustomCommand, data CommandData) tea.Cmd {
 	var buf bytes.Buffer
 	if err := rc.Template.Execute(&buf, data); err != nil {
 		return func() tea.Msg {
-			return customCommandFinishedMsg{err: fmt.Errorf("template error: %w", err)}
+			return customCommandFinishedMsg{err: fmt.Errorf("template error: %w", err), output: "", refresh: false}
 		}
 	}
 	cmdStr := buf.String()
@@ -259,26 +319,25 @@ func (a *App) executeCustomCommand(rc config.ResolvedCustomCommand, data any) te
 	if shell == "" {
 		shell = "sh"
 	}
-
 	refresh := rc.Refresh
 
 	if rc.ShouldSuspend() {
-		c := exec.CommandContext(a.ctx, shell, "-c", cmdStr) //nolint:gosec // user-configured custom commands are intentionally arbitrary shell commands
+		c := exec.CommandContext(a.context(), shell, "-c", cmdStr) //nolint:gosec // user-configured custom commands are intentionally arbitrary shell commands
 		c.Stdin = os.Stdin
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		return tea.ExecProcess(c, func(err error) tea.Msg {
-			return customCommandFinishedMsg{err: err, refresh: refresh}
+			return customCommandFinishedMsg{err: err, output: "", refresh: refresh}
 		})
 	}
 
-	// Background execution: capture output and report via the tea message loop.
-	// The WaitGroup ensures Shutdown blocks until this goroutine finishes, so
-	// the child process is not orphaned on app exit.
+	// Background execution: capture the output and report it through the
+	// message loop. The WaitGroup keeps Shutdown from orphaning the child.
+	ctx := a.context()
 	a.cmdWg.Add(1)
 	return func() tea.Msg {
 		defer a.cmdWg.Done()
-		c := exec.CommandContext(a.ctx, shell, "-c", cmdStr) //nolint:gosec // user-configured custom commands are intentionally arbitrary shell commands
+		c := exec.CommandContext(ctx, shell, "-c", cmdStr) //nolint:gosec // user-configured custom commands are intentionally arbitrary shell commands
 		c.Cancel = func() error {
 			return c.Process.Signal(syscall.SIGTERM)
 		}
@@ -301,19 +360,17 @@ func (a *App) handleCustomCommandFinished(msg customCommandFinishedMsg) (tea.Mod
 	if tail := lastNonEmptyLine(msg.output); tail != "" {
 		a.helpBar.SetStatusMsg(tail)
 	}
-	// Refresh the previewed issue only when the command declares refresh: true.
+	// Only a command that declared refresh: true costs a request.
 	if msg.refresh {
-		if cur := a.currentIssue(); cur != nil {
-			delete(a.issueCache, cur.Key)
-			delete(a.childrenCache, cur.Key)
-			cmds = append(cmds, fetchIssueDetail(a.client, cur.Key))
+		if _, cmd, _ := a.handleActionRefresh(); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 	}
 	return a, tea.Batch(cmds...)
 }
 
-// lastNonEmptyLine returns the last non-empty line of s, trimmed. Used to
-// surface a single concise message from arbitrary command output.
+// lastNonEmptyLine is the last non-blank line of s, trimmed: one concise
+// message out of arbitrary command output.
 func lastNonEmptyLine(s string) string {
 	lines := strings.Split(s, "\n")
 	for _, v := range slices.Backward(lines) {
@@ -324,18 +381,16 @@ func lastNonEmptyLine(s string) string {
 	return ""
 }
 
-// allUIContexts is the universe of UI contexts for shadowing analysis.
+// allUIContexts is the universe of UI contexts, used for shadowing analysis.
 var allUIContexts = []config.Context{
-	config.CtxIssues,
-	config.CtxInfo,
-	config.CtxProjects,
+	config.CtxPullRequests,
+	config.CtxBuilds,
+	config.CtxRepos,
 	config.CtxDetail,
-	config.CtxDetailComments,
 }
 
-// quitReachableWarning returns a warning string if every keybinding for
-// ActQuit is shadowed by custom commands across every UI context, leaving
-// the user no way to quit. Empty string means quit is still reachable.
+// quitReachableWarning returns a warning when every key bound to ActQuit is
+// shadowed by a custom command in every UI context, leaving no way out.
 func quitReachableWarning(km Keymap, cmds []config.ResolvedCustomCommand) string {
 	keys := km[ActQuit]
 	if len(keys) == 0 {
@@ -363,7 +418,7 @@ func keyShadowsContext(key string, ctx config.Context, cmds []config.ResolvedCus
 	return false
 }
 
-// customCommandHelpItems returns HelpItem entries for the help bar in the given context.
+// customCommandHelpItems returns the help bar entries for a context.
 func (a *App) customCommandHelpItems(ctx config.Context) []components.HelpItem {
 	items := make([]components.HelpItem, 0)
 	for _, rc := range a.customCmds {
@@ -374,15 +429,12 @@ func (a *App) customCommandHelpItems(ctx config.Context) []components.HelpItem {
 	return items
 }
 
-// customCommandBindings returns Binding entries for the help overlay in the given context.
+// customCommandBindings returns the help overlay entries for a context.
 func (a *App) customCommandBindings(ctx config.Context) []Binding {
 	bindings := make([]Binding, 0)
 	for _, rc := range a.customCmds {
 		if rc.HasContext(ctx) {
-			bindings = append(bindings, Binding{
-				Key:         rc.Key,
-				Description: rc.Name,
-			})
+			bindings = append(bindings, Binding{Key: rc.Key, Description: rc.Name})
 		}
 	}
 	return bindings

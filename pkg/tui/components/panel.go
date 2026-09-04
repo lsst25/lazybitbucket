@@ -89,7 +89,9 @@ func renderPanelImpl(title, footer, content string, width, innerHeight int, bord
 		styledTitle +
 		borderStyle.Render(strings.Repeat("─", topPadding)+"╮")
 
-	// Content lines.
+	// Content lines. A caller with a terminal too short for its own chrome can
+	// arrive with a negative height; clamp so the truncation below cannot panic.
+	innerHeight = max(innerHeight, 0)
 	lines := strings.Split(content, "\n")
 	for len(lines) < innerHeight {
 		lines = append(lines, "")

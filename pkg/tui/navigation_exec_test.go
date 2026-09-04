@@ -5,25 +5,34 @@ import (
 	"testing"
 )
 
+// execCapture records the single external command an App dispatched through
+// its exec seam. The seam is per-App, so every subtest gets its own capture and
+// the subtests can run in parallel.
+type execCapture struct {
+	input       string
+	waitForExit bool
+	name        string
+	args        []string
+}
+
+func appWithExecCapture() (*App, *execCapture) {
+	got := &execCapture{}
+	app := newTestApp()
+	app.exec = func(input string, waitForExit bool, name string, args ...string) {
+		*got = execCapture{input: input, waitForExit: waitForExit, name: name, args: args}
+	}
+	return app, got
+}
+
 func TestExternalCommandDispatch(t *testing.T) {
-	type capture struct {
-		input       string
-		waitForExit bool
-		name        string
-		args        []string
-	}
-	var got capture
-	original := runExternalCommand
-	t.Cleanup(func() { runExternalCommand = original })
-	runExternalCommand = func(input string, waitForExit bool, name string, args ...string) {
-		got = capture{input: input, waitForExit: waitForExit, name: name, args: args}
-	}
+	t.Parallel()
 
 	t.Run("openBrowser launches without waiting", func(t *testing.T) {
-		got = capture{}
-		url := "https://x.atlassian.net/browse/" + testKey
+		t.Parallel()
+		app, got := appWithExecCapture()
+		url := "https://bitbucket.org/" + testWorkspace + "/" + testRepo
 
-		openBrowser(url)
+		app.openBrowser(url)
 
 		if got.name == "" {
 			t.Fatal("openBrowser did not dispatch a command")
@@ -40,9 +49,10 @@ func TestExternalCommandDispatch(t *testing.T) {
 	})
 
 	t.Run("copyToClipboard feeds stdin and waits", func(t *testing.T) {
-		got = capture{}
+		t.Parallel()
+		app, got := appWithExecCapture()
 
-		copyToClipboard("payload")
+		app.copyToClipboard("payload")
 
 		if got.name == "" {
 			t.Fatal("copyToClipboard did not dispatch a command")

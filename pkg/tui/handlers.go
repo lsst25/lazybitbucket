@@ -1,16 +1,12 @@
 package tui
 
 import (
-	"time"
-
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/lsst25/lazybitbucket/pkg/jira"
 	"github.com/lsst25/lazybitbucket/pkg/tui/components"
-	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
-// handleResize handles terminal resize events.
+// handleResize re-lays out the panels for a new terminal size.
 func (a *App) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	a.width = msg.Width
 	a.height = msg.Height
@@ -21,106 +17,96 @@ func (a *App) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-// handleSearchChanged filters the active panel by query.
+// handleSearchChanged filters the focused list as the user types.
 func (a *App) handleSearchChanged(msg components.SearchChangedMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case a.side == sideLeft && a.leftFocus == focusIssues:
-		a.issuesList.SetFilter(msg.Query)
-	case a.side == sideLeft && a.leftFocus == focusInfo:
-		a.infoPanel.SetFilter(msg.Query)
-	case a.side == sideLeft && a.leftFocus == focusProjects:
-		a.projectList.SetFilter(msg.Query)
+	if a.side != sideLeft {
+		return a, nil
+	}
+	switch a.leftFocus {
+	case focusPullRequests:
+		a.prList.SetFilter(msg.Query)
+	case focusBuilds:
+		a.buildsPanel.SetFilter(msg.Query)
+	case focusRepos:
+		a.repoList.SetFilter(msg.Query)
+	case focusStatus:
 	}
 	return a, nil
 }
 
-// handleSearchConfirmed finalizes search: selects the filtered item and loads data.
+// handleSearchConfirmed drops the filter and keeps the cursor where the search
+// landed, so the next action targets what the user searched for.
 func (a *App) handleSearchConfirmed() (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-	switch {
-	case a.side == sideLeft && a.leftFocus == focusIssues:
-		selectedIssue := a.issuesList.SelectedIssue()
-		a.issuesList.ClearFilter()
-		if selectedIssue != nil {
-			if _, cmd := a.Update(views.IssueSelectedMsg{Issue: selectedIssue}); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
-	case a.side == sideLeft && a.leftFocus == focusInfo:
-		a.infoPanel.ClearFilter()
-	case a.side == sideLeft && a.leftFocus == focusProjects:
-		if p := a.projectList.SelectedProject(); p != nil {
-			if cmd := a.selectProject(p); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			cmds = append(cmds, a.fetchActiveTab())
-		}
-		a.projectList.SetFilter("")
+	if a.side != sideLeft {
+		return a, nil
 	}
-	return a, tea.Batch(cmds...)
-}
-
-// handleSearchCancelled clears search filter.
-func (a *App) handleSearchCancelled() (tea.Model, tea.Cmd) {
-	a.issuesList.SetFilter("")
-	a.infoPanel.SetFilter("")
-	a.projectList.SetFilter("")
+	switch a.leftFocus {
+	case focusPullRequests:
+		selected := a.prList.SelectedPullRequest()
+		a.prList.ClearFilter()
+		if selected != nil {
+			return a, a.previewSelected()
+		}
+	case focusBuilds:
+		// Keep the highlighted build across the filter reset, like the pull
+		// request pane does, so Enter afterwards opens the build the user saw.
+		selected := a.buildsPanel.SelectedStatus()
+		a.buildsPanel.ClearFilter()
+		if selected != nil {
+			a.buildsPanel.SelectByKey(selected.Key)
+		}
+	case focusRepos:
+		repo := a.repoList.SelectedRepo()
+		a.repoList.SetFilter("")
+		if repo != nil {
+			return a, a.selectRepo(repo)
+		}
+	case focusStatus:
+	}
 	return a, nil
 }
 
-// handleAutoFetch re-fetches issues on a timer.
+// handleSearchCancelled clears every list filter.
+func (a *App) handleSearchCancelled() (tea.Model, tea.Cmd) {
+	a.prList.ClearFilter()
+	a.buildsPanel.ClearFilter()
+	a.repoList.SetFilter("")
+	return a, nil
+}
+
+// handleAutoFetch refreshes the active tab and re-arms the timer.
 func (a *App) handleAutoFetch() (tea.Model, tea.Cmd) {
+	if a.refreshEvery <= 0 {
+		return a, nil
+	}
 	var cmds []tea.Cmd
-	if cmd := a.fetchActiveTab(); cmd != nil {
+	if cmd := a.refreshCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
-	cmds = append(cmds, tea.Tick(30*time.Second, func(t time.Time) tea.Msg {
-		return autoFetchTickMsg{}
-	}))
+	cmds = append(cmds, autoFetchTick(a.refreshEvery))
 	return a, tea.Batch(cmds...)
 }
 
-func (a *App) selectProject(p *jira.Project) tea.Cmd {
-	a.projectKey = p.Key
-	a.projectID = p.ID
-	a.statusPanel.SetProject(p.Key)
-	a.projectList.SetActiveKey(p.Key)
-	a.issuesList.InvalidateTabCache()
-	a.issueCache = make(map[string]*jira.Issue)
-	a.childrenCache = make(map[string][]jira.Issue)
-	a.createMetaCache = make(map[string][]jira.CreateMetaField)
-	a.invalidateInFlight()
-	a.infoPanel.SetIssue(nil)
-	a.resolveBoardID()
-	if !a.demoMode {
-		go saveLastProject(p.Key)
-	}
-	if _, ok := a.usersCache[p.Key]; !ok {
-		return prefetchUsers(p.Key)
-	}
-	return nil
-}
-
-// routeToPanel forwards input to the focused panel.
+// routeToPanel forwards an unclaimed message to the focused panel.
 func (a *App) routeToPanel(msg tea.Msg) tea.Cmd {
 	var cmds []tea.Cmd
 	if a.side == sideLeft {
 		switch a.leftFocus {
-		case focusIssues:
-			updated, cmd := a.issuesList.Update(msg)
-			a.issuesList = updated
+		case focusPullRequests:
+			updated, cmd := a.prList.Update(msg)
+			a.prList = updated
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
-		case focusInfo:
-			updated, cmd := a.infoPanel.Update(msg)
-			a.infoPanel = updated
+		case focusBuilds:
+			updated, cmd := a.buildsPanel.Update(msg)
+			a.buildsPanel = updated
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
-		case focusProjects:
-			updated, cmd := a.projectList.Update(msg)
-			a.projectList = updated
+		case focusRepos:
+			updated, cmd := a.repoList.Update(msg)
+			a.repoList = updated
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}

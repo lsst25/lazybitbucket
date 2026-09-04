@@ -8,24 +8,19 @@
 #   @up [N]               → Type "k" + Sleep
 #   @tab_next [N]         → Type "]" + Sleep
 #   @tab_prev [N]         → Type "[" + Sleep
-#   @panel N              → Type "N" + Sleep (focus panel 0-3)
-#   @open                 → Type "l" + Sleep (open issue in detail)
-#   @select               → Space + Sleep (select item)
-#   @create               → Type "n" + Sleep (open create issue form)
-#   @transition           → Type "t" + Sleep + Enter + Sleep (pick first transition)
+#   @panel N              → Type "N" + Sleep (focus panel 0-4)
+#   @open                 → Type "l" + Sleep (focus the next panel; on the left side it cycles)
+#   @select               → Space + Sleep (open/activate the highlighted row)
+#   @back                 → Backspace + Sleep (step log → pipeline → pull request)
+#   @browse               → Type "o" + Sleep (open the selection in the browser)
 #   @search TEXT          → Type "/" + Sleep + Type "TEXT" + Enter + Sleep
 #   @help                 → Type "?" + Sleep ... Escape + Sleep
-#   @expand               → Space + Sleep (expand block in detail)
+#   @expand               → Space + Sleep (activate the highlighted block in the detail panel)
 #   @close                → Escape + Sleep (close modal/overlay)
 #   @quit                 → Type "q" + Sleep
 #   @wait [MS]            → Sleep Nms (default 500)
 #   @switch_tab           → Tab + Sleep (switch left/right panel)
-#   @edit                 → Type "e" + Sleep (context-aware edit)
-#   @edit_type TEXT       → Type "e" + Sleep + type TEXT (50ms) + Enter + Sleep
-#   @toggle [N]           → Space + Sleep (toggle checklist item, repeated N times)
 #   @confirm              → Enter + Sleep (confirm modal/input)
-#   @comments             → Type "c" + Sleep (jump to comments tab)
-#   @priority             → Type "p" + Sleep (open priority picker)
 #
 # Pipe mode:   ./e2e/tape.sh e2e/tapes/foo.tape.sh | vhs -
 # Env override: LAYOUT=vertical ./e2e/tape.sh file.tape.sh | vhs -
@@ -67,7 +62,7 @@ process_line() {
             echo 'Set TypingSpeed 0ms'
             echo 'Set Theme "Catppuccin Mocha"'
             echo ''
-            echo 'Type "./lazyjira --demo"'
+            echo 'Type "./lazybitbucket --demo"'
             echo 'Enter'
             echo 'Sleep 2s'
             ;;
@@ -108,11 +103,11 @@ process_line() {
         @select)
             printf 'Space\nSleep %sms\n' "$LONG_SLEEP"
             ;;
-        @create)
-            printf 'Type "n"\nSleep %sms\n' "$LONG_SLEEP"
+        @back)
+            printf 'Backspace\nSleep %sms\n' "$LONG_SLEEP"
             ;;
-        @transition)
-            printf 'Type "t"\nSleep %sms\nEnter\nSleep %sms\n' "$LONG_SLEEP" "500"
+        @browse)
+            printf 'Type "o"\nSleep %sms\n' "$LONG_SLEEP"
             ;;
         @search\ *)
             local text="${line#@search }"
@@ -139,29 +134,8 @@ process_line() {
         @switch_tab)
             printf 'Tab\nSleep %sms\n' "$DEFAULT_SLEEP"
             ;;
-        @edit_type\ *)
-            local text="${line#@edit_type }"
-            printf 'Type "e"\nSleep %sms\n' "$LONG_SLEEP"
-            # clear existing text then type new value
-            printf 'Ctrl+a\nCtrl+k\n'
-            printf 'Set TypingSpeed 50ms\nType "%s"\nSet TypingSpeed 0ms\n' "$text"
-            printf 'Sleep %sms\nEnter\nSleep %sms\n' "$LONG_SLEEP" "500"
-            ;;
-        @edit)
-            printf 'Type "e"\nSleep %sms\n' "$LONG_SLEEP"
-            ;;
-        @toggle*)
-            local n="${line#@toggle}"; n="${n// /}"; n="${n:-1}"
-            repeat "$n" printf 'Space\nSleep %sms\n' "$DEFAULT_SLEEP"
-            ;;
         @confirm)
             printf 'Enter\nSleep %sms\n' "500"
-            ;;
-        @comments)
-            printf 'Type "c"\nSleep %sms\n' "$LONG_SLEEP"
-            ;;
-        @priority)
-            printf 'Type "p"\nSleep %sms\n' "$LONG_SLEEP"
             ;;
         @*)
             echo "# WARNING: unknown directive: $line" >&2

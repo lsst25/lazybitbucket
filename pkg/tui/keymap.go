@@ -7,45 +7,38 @@ import (
 	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 )
 
-// Action represents a user-triggerable action
+// Action represents a user-triggerable action.
 type Action string
 
-// Actions each can be remapped to different keys via config
+// Actions, each remappable to different keys via config.
 const (
-	ActQuit           Action = "quit"
-	ActHelp           Action = "help"
-	ActSearch         Action = "search"
-	ActSwitchPanel    Action = "switchPanel"
-	ActFocusRight     Action = "focusRight"
-	ActFocusLeft      Action = "focusLeft"
-	ActSelect         Action = "select" // primary: mark active + open
-	ActOpen           Action = "open"   // secondary: open/preview without marking
-	ActPrevTab        Action = "prevTab"
-	ActNextTab        Action = "nextTab"
-	ActFocusDetail    Action = "focusDetail"
-	ActFocusStatus    Action = "focusStatus"
-	ActFocusIssues    Action = "focusIssues"
-	ActFocusInfo      Action = "focusInfo"
-	ActFocusProj      Action = "focusProjects"
-	ActCopyURL        Action = "copyURL"
-	ActBrowser        Action = "browser"
-	ActURLPicker      Action = "urlPicker"
-	ActTransition     Action = "transition"
-	ActRefresh        Action = "refresh"
-	ActRefreshAll     Action = "refreshAll"
-	ActInfoTab        Action = "infoTab" // legacy: now focuses Info panel
-	ActEdit           Action = "edit"
-	ActComments       Action = "comments"
-	ActNew            Action = "new"
-	ActPriority       Action = "editPriority"
-	ActAssignee       Action = "editAssignee"
-	ActJQLSearch      Action = "jqlSearch"
-	ActCloseJQLTab    Action = "closeJQLTab"
-	ActCreateBranch   Action = "createBranch"
-	ActCreateIssue    Action = "createIssue"
-	ActCreateSubtask  Action = "createSubtask"
-	ActDuplicateIssue Action = "duplicateIssue"
-	ActShowParent     Action = "showParent"
+	ActQuit        Action = "quit"
+	ActHelp        Action = "help"
+	ActSearch      Action = "search"
+	ActSwitchPanel Action = "switchPanel"
+	ActRefresh     Action = "refresh"
+	ActRefreshAll  Action = "refreshAll"
+	ActPrevTab     Action = "prevTab"
+	ActNextTab     Action = "nextTab"
+
+	ActFocusDetail       Action = "focusDetail"
+	ActFocusStatus       Action = "focusStatus"
+	ActFocusPullRequests Action = "focusPullRequests"
+	ActFocusBuilds       Action = "focusBuilds"
+	ActFocusRepos        Action = "focusRepos"
+	ActFocusLeft         Action = "focusLeft"
+	ActFocusRight        Action = "focusRight"
+
+	// ActSelect marks and opens; ActOpen opens without marking. The Builds and
+	// Repos panels reuse both — the handler decides by focus.
+	ActSelect Action = "select"
+	ActOpen   Action = "open"
+
+	ActBrowser   Action = "browser"
+	ActURLPicker Action = "urlPicker"
+	ActCopyURL   Action = "copyURL"
+	ActCheckout  Action = "checkout"
+	ActBack      Action = "back"
 
 	ActNavDown     Action = "navDown"
 	ActNavUp       Action = "navUp"
@@ -60,45 +53,37 @@ const (
 	ActDetailHalfUp     Action = "detailHalfPageUp"
 )
 
-// Keymap maps actions to key strings. Multiple keys can trigger the same action
+// Keymap maps actions to key strings. Several keys may trigger one action.
 type Keymap map[Action][]string
 
-// DefaultKeymap returns the default key bindings
+// DefaultKeymap returns the default key bindings.
 func DefaultKeymap() Keymap {
 	return Keymap{
-		ActQuit:           {"q", "ctrl+c"},
-		ActHelp:           {"?"},
-		ActSearch:         {"/"},
-		ActSwitchPanel:    {"tab"},
-		ActFocusRight:     {"l", "right"},
-		ActFocusLeft:      {"h", "left", "esc"},
-		ActSelect:         {" "},
-		ActOpen:           {"enter"},
-		ActPrevTab:        {"["},
-		ActNextTab:        {"]"},
-		ActFocusDetail:    {"0"},
-		ActFocusStatus:    {"1"},
-		ActFocusIssues:    {"2"},
-		ActFocusInfo:      {"3"},
-		ActFocusProj:      {"4"},
-		ActCopyURL:        {"y"},
-		ActBrowser:        {"o"},
-		ActURLPicker:      {"u"},
-		ActTransition:     {"t"},
-		ActRefresh:        {"r"},
-		ActRefreshAll:     {"R"},
-		ActInfoTab:        {"i"},
-		ActEdit:           {"e"},
-		ActComments:       {"c"},
-		ActNew:            {"n"},
-		ActPriority:       {"p"},
-		ActAssignee:       {"a"},
-		ActJQLSearch:      {"s"},
-		ActCloseJQLTab:    {"x"},
-		ActCreateBranch:   {"b"},
-		ActDuplicateIssue: {"ctrl+n"},
-		ActCreateSubtask:  {"S"},
-		ActShowParent:     {"backspace"},
+		ActQuit:        {"q", "ctrl+c"},
+		ActHelp:        {"?"},
+		ActSearch:      {"/"},
+		ActSwitchPanel: {"tab"},
+		ActRefresh:     {"r"},
+		ActRefreshAll:  {"R"},
+		ActPrevTab:     {"["},
+		ActNextTab:     {"]"},
+
+		ActFocusDetail:       {"0"},
+		ActFocusStatus:       {"1"},
+		ActFocusPullRequests: {"2"},
+		ActFocusBuilds:       {"3"},
+		ActFocusRepos:        {"4"},
+		ActFocusLeft:         {"h", "left", "esc"},
+		ActFocusRight:        {"l", "right"},
+
+		ActSelect: {" "},
+		ActOpen:   {"enter"},
+
+		ActBrowser:   {"o"},
+		ActURLPicker: {"u"},
+		ActCopyURL:   {"y"},
+		ActCheckout:  {"c"},
+		ActBack:      {"backspace"},
 
 		ActNavDown:     {"j", "down", "ctrl+j"},
 		ActNavUp:       {"k", "up", "ctrl+k"},
@@ -114,8 +99,10 @@ func DefaultKeymap() Keymap {
 	}
 }
 
-// KeymapFromConfig builds a Keymap starting from defaults and overriding
-// with any non-empty values from the user's keybinding config.
+// KeymapFromConfig starts from the defaults and applies every non-empty
+// override. There is one set line per remappable action and only for fields
+// config actually has, so no binding is silently unreachable and no config key
+// is silently dead.
 func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	km := DefaultKeymap()
 	set := func(action Action, val string) {
@@ -123,7 +110,7 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 			km[action] = []string{val}
 		}
 	}
-	// Universal
+
 	set(ActQuit, kcfg.Universal.Quit)
 	set(ActHelp, kcfg.Universal.Help)
 	set(ActSearch, kcfg.Universal.Search)
@@ -134,40 +121,37 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	set(ActNextTab, kcfg.Universal.NextTab)
 	set(ActFocusDetail, kcfg.Universal.FocusDetail)
 	set(ActFocusStatus, kcfg.Universal.FocusStatus)
-	set(ActFocusIssues, kcfg.Universal.FocusIssues)
-	set(ActFocusInfo, kcfg.Universal.FocusInfo)
-	set(ActFocusProj, kcfg.Universal.FocusProj)
-	set(ActJQLSearch, kcfg.Universal.JQLSearch)
-	// Issues (Select, Open, FocusRight are shared with Projects panel)
-	set(ActSelect, kcfg.Issues.Select)
-	set(ActOpen, kcfg.Issues.Open)
-	set(ActFocusRight, kcfg.Issues.FocusRight)
-	set(ActTransition, kcfg.Issues.Transition)
-	set(ActBrowser, kcfg.Issues.Browser)
-	set(ActURLPicker, kcfg.Issues.URLPicker)
-	set(ActCopyURL, kcfg.Issues.CopyURL)
-	set(ActCloseJQLTab, kcfg.Issues.CloseJQLTab)
-	set(ActCreateBranch, kcfg.Issues.CreateBranch)
-	set(ActCreateIssue, kcfg.Issues.CreateIssue)
-	set(ActCreateSubtask, kcfg.Issues.CreateSubtask)
-	// Detail
+	set(ActFocusPullRequests, kcfg.Universal.FocusPullRequests)
+	set(ActFocusBuilds, kcfg.Universal.FocusBuilds)
+	set(ActFocusRepos, kcfg.Universal.FocusRepos)
+
+	// The Repos and Builds panels reuse these three.
+	set(ActSelect, kcfg.PullRequests.Select)
+	set(ActOpen, kcfg.PullRequests.Open)
+	set(ActFocusRight, kcfg.PullRequests.FocusRight)
+	set(ActBrowser, kcfg.PullRequests.Browser)
+	set(ActURLPicker, kcfg.PullRequests.URLPicker)
+	set(ActCopyURL, kcfg.PullRequests.CopyURL)
+	set(ActCheckout, kcfg.PullRequests.Checkout)
+
 	set(ActFocusLeft, kcfg.Detail.FocusLeft)
-	set(ActInfoTab, kcfg.Detail.InfoTab)
+	set(ActBack, kcfg.Detail.Back)
 	set(ActDetailScrollDown, kcfg.Detail.ScrollDown)
 	set(ActDetailScrollUp, kcfg.Detail.ScrollUp)
 	set(ActDetailHalfDown, kcfg.Detail.HalfPageDown)
 	set(ActDetailHalfUp, kcfg.Detail.HalfPageUp)
-	// Navigation
+
 	set(ActNavDown, kcfg.Navigation.Down)
 	set(ActNavUp, kcfg.Navigation.Up)
 	set(ActNavTop, kcfg.Navigation.Top)
 	set(ActNavBottom, kcfg.Navigation.Bottom)
 	set(ActNavHalfDown, kcfg.Navigation.HalfDown)
 	set(ActNavHalfUp, kcfg.Navigation.HalfUp)
+
 	return km
 }
 
-// Match returns the action for the given key, or "" if none
+// Match returns the action bound to a key, or "" when it is unbound.
 func (km Keymap) Match(key string) Action {
 	for action, keys := range km {
 		if slices.Contains(keys, key) {
@@ -186,6 +170,7 @@ var navActionMap = map[Action]components.NavAction{
 	ActNavHalfUp:   components.NavHalfUp,
 }
 
+// MatchNav resolves a key to a list navigation action.
 func (km Keymap) MatchNav(key string) components.NavAction {
 	for action, nav := range navActionMap {
 		if slices.Contains(km[action], key) {
@@ -195,7 +180,7 @@ func (km Keymap) MatchNav(key string) components.NavAction {
 	return components.NavNone
 }
 
-// Keys returns the first key bound to the action (for display in help)
+// Keys returns the first key bound to an action, for display in help.
 func (km Keymap) Keys(action Action) string {
 	if keys, ok := km[action]; ok && len(keys) > 0 {
 		k := keys[0]

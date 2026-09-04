@@ -1,48 +1,20 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
-// Valid values for Config.Converter. Empty string is treated as ConverterBuiltin.
-const (
-	ConverterBuiltin      = "builtin"
-	ConverterAdfConverter = "adf-converter"
-)
-
-func validateConverter(value string) error {
-	switch value {
-	case "", ConverterBuiltin, ConverterAdfConverter:
-		return nil
-	default:
-		return fmt.Errorf("unknown converter %q; valid: %q (default), %q, %q",
-			value, "", ConverterBuiltin, ConverterAdfConverter)
-	}
-}
-
-// Valid values for Config.Renderer. Empty string is treated as RendererBuiltin.
-const (
-	RendererBuiltin = "builtin"
-	RendererGlamour = "glamour"
-)
-
-func validateRenderer(value string) error {
-	switch value {
-	case "", RendererBuiltin, RendererGlamour:
-		return nil
-	default:
-		return fmt.Errorf("unknown renderer %q; valid: %q (default), %q, %q",
-			value, "", RendererBuiltin, RendererGlamour)
-	}
-}
-
 // Valid values for Config.RendererStyle. Empty string is treated as
-// RendererStyleAuto. Used by the glamour renderer to select the Glamour
-// theme; ignored when renderer is "builtin".
+// RendererStyleAuto. Selects the glamour theme used to render Markdown
+// (pull request descriptions, comments).
 const (
 	RendererStyleAuto  = "auto"
 	RendererStyleDark  = "dark"
@@ -60,22 +32,45 @@ func validateRendererStyle(value string) error {
 	}
 }
 
+// DefaultBaseURL is the Bitbucket Cloud REST base URL used when
+// bitbucket.baseUrl is unset. It mirrors bitbucket.DefaultBaseURL; the value
+// is duplicated so pkg/config stays independent of the API client.
+const DefaultBaseURL = "https://api.bitbucket.org/2.0"
+
+// appName is the directory name used under the user config dir.
+const appName = "lazybitbucket"
+
+// DefaultEditor is used when neither `editor`, $VISUAL nor $EDITOR is set.
+const DefaultEditor = "nvim"
+
+// DefaultRefreshInterval is the auto-refresh period applied when
+// `refreshInterval` is unset.
+const DefaultRefreshInterval = "120s"
+
+// refreshOffKeyword disables auto-refresh when used as `refreshInterval`.
+const refreshOffKeyword = "off"
+
 type Config struct {
-	Jira             JiraConfig            `yaml:"jira"`
-	Projects         []ProjectConfig       `yaml:"projects"`
-	GUI              GUIConfig             `yaml:"gui"`
-	Keybinding       KeybindingConfig      `yaml:"keybinding"`
-	IssueTabs        []IssueTabConfig      `yaml:"issueTabs"`
-	MaxResults       *int                  `yaml:"maxResults"`
-	Cache            CacheConfig           `yaml:"cache"`
-	Refresh          RefreshConfig         `yaml:"refresh"`
-	Fields           []FieldConfig         `yaml:"fields"`
-	DeprecatedFields []FieldConfig         `yaml:"customFields,omitempty"`
-	Git              GitConfig             `yaml:"git"`
-	CustomCommands   []CustomCommandConfig `yaml:"customCommands"`
-	Converter        string                `yaml:"converter"`
-	Renderer         string                `yaml:"renderer"`
-	RendererStyle    string                `yaml:"rendererStyle"`
+	Bitbucket       BitbucketConfig        `yaml:"bitbucket"`
+	GUI             GUIConfig              `yaml:"gui"`
+	Keybinding      KeybindingConfig       `yaml:"keybinding"`
+	PullRequestTabs []PullRequestTabConfig `yaml:"pullRequestTabs"`
+	MaxResults      *int                   `yaml:"maxResults"`
+	RefreshInterval string                 `yaml:"refreshInterval"`
+	Git             GitConfig              `yaml:"git"`
+	CustomCommands  []CustomCommandConfig  `yaml:"customCommands"`
+	Editor          string                 `yaml:"editor"`
+	RendererStyle   string                 `yaml:"rendererStyle"`
+}
+
+// BitbucketConfig holds the connection settings. Token is never persisted to
+// config.yml (yaml:"-"); it comes from the environment or auth.json.
+type BitbucketConfig struct {
+	Workspace    string   `yaml:"workspace"`
+	Repositories []string `yaml:"repositories"`
+	Email        string   `yaml:"email"`
+	Token        string   `yaml:"-"`
+	BaseURL      string   `yaml:"baseUrl"`
 }
 
 type CustomCommandConfig struct {
@@ -93,39 +88,90 @@ func (c CustomCommandConfig) ShouldSuspend() bool {
 }
 
 type GitConfig struct {
-	CloseOnCheckout bool               `yaml:"closeOnCheckout"`
-	AsciiOnly       bool               `yaml:"asciiOnly"`
-	BranchFormat    []BranchFormatRule `yaml:"branchFormat"`
+	CloseOnCheckout bool `yaml:"closeOnCheckout"`
 }
 
-type BranchFormatRule struct {
-	When     BranchFormatCondition `yaml:"when"`
-	Template string                `yaml:"template"`
+// Pull request states accepted by a tab's `state:` key.
+const (
+	stateOpen       = "OPEN"
+	stateMerged     = "MERGED"
+	stateDeclined   = "DECLINED"
+	stateSuperseded = "SUPERSEDED"
+)
+
+var pullRequestStates = []string{stateOpen, stateMerged, stateDeclined, stateSuperseded}
+
+// Field names accepted in gui.pullRequestListFields.
+const (
+	FieldRepo      = "repo"
+	FieldID        = "id"
+	FieldTitle     = "title"
+	FieldAuthor    = "author"
+	FieldApprovals = "approvals"
+	FieldBuild     = "build"
+	FieldUpdated   = "updated"
+	FieldBranch    = "branch"
+	FieldState     = "state"
+)
+
+var pullRequestListFields = []string{
+	FieldRepo, FieldID, FieldTitle, FieldAuthor, FieldApprovals,
+	FieldBuild, FieldUpdated, FieldBranch, FieldState,
 }
 
-type BranchFormatCondition struct {
-	Type string `yaml:"type"`
+// PullRequestListFieldNames returns every field name accepted in
+// gui.pullRequestListFields, in canonical order.
+func PullRequestListFieldNames() []string {
+	return slices.Clone(pullRequestListFields)
 }
 
-type IssueTabConfig struct {
+// DefaultPullRequestListFields returns the columns shown when
+// gui.pullRequestListFields is unset.
+func DefaultPullRequestListFields() []string {
+	// Order matters: a narrow pull request list drops columns from the end, so
+	// the approval and build signals sit ahead of author and updated (see the
+	// narrow-width rule in pkg/tui/views).
+	return []string{FieldRepo, FieldID, FieldTitle, FieldApprovals, FieldBuild, FieldAuthor, FieldUpdated}
+}
+
+// PullRequestTabConfig is one tab above the pull request list. State selects
+// the Bitbucket PR state to query; Filter narrows the result client-side.
+type PullRequestTabConfig struct {
 	Name       string `yaml:"name"`
-	JQL        string `yaml:"jql"`
+	State      string `yaml:"state"`
+	Filter     string `yaml:"filter"`
+	Query      string `yaml:"query"`
 	MaxResults *int   `yaml:"maxResults"`
 }
 
-type FieldConfig struct {
-	ID        string `yaml:"id"`
-	Name      string `yaml:"name"`
-	Type      string `yaml:"type"`
-	Multiline bool   `yaml:"multiline"`
+// ResolveState returns the uppercased tab state, defaulting to OPEN.
+func (t PullRequestTabConfig) ResolveState() string {
+	if state := strings.ToUpper(strings.TrimSpace(t.State)); state != "" {
+		return state
+	}
+	return stateOpen
 }
 
+// DefaultPullRequestTabs returns the default pull request tab configuration
+func DefaultPullRequestTabs() []PullRequestTabConfig {
+	return []PullRequestTabConfig{
+		{Name: "Open", Filter: "all"},
+		{Name: "Mine", Filter: "mine"},
+		{Name: "Reviewing", Filter: "reviewing"},
+	}
+}
+
+// KeybindingConfig groups the user-overridable keys by panel.
+//
+// There is deliberately no `repos` key group: the keymap is keyed by action and
+// the Repos and Builds panels reuse the select/open/focus-right actions from
+// `pullRequests`. A separate group would silently overwrite the pull request
+// bindings — the dead-config bug lazyjira had with `projects`.
 type KeybindingConfig struct {
-	Universal  UniversalKeys  `yaml:"universal"`
-	Navigation NavigationKeys `yaml:"navigation"`
-	Issues     IssueKeys      `yaml:"issues"`
-	Projects   ProjectKeys    `yaml:"projects"`
-	Detail     DetailKeys     `yaml:"detail"`
+	Universal    UniversalKeys   `yaml:"universal"`
+	Navigation   NavigationKeys  `yaml:"navigation"`
+	PullRequests PullRequestKeys `yaml:"pullRequests"`
+	Detail       DetailKeys      `yaml:"detail"`
 }
 
 type NavigationKeys struct {
@@ -138,181 +184,73 @@ type NavigationKeys struct {
 }
 
 type UniversalKeys struct {
-	Quit        string `yaml:"quit"`
-	Help        string `yaml:"help"`
-	Search      string `yaml:"search"`
-	SwitchPanel string `yaml:"switchPanel"`
-	Refresh     string `yaml:"refresh"`
-	RefreshAll  string `yaml:"refreshAll"`
-	PrevTab     string `yaml:"prevTab"`
-	NextTab     string `yaml:"nextTab"`
-	FocusDetail string `yaml:"focusDetail"`
-	FocusStatus string `yaml:"focusStatus"`
-	FocusIssues string `yaml:"focusIssues"`
-	FocusInfo   string `yaml:"focusInfo"`
-	FocusProj   string `yaml:"focusProjects"`
-	JQLSearch   string `yaml:"jqlSearch"`
+	Quit              string `yaml:"quit"`
+	Help              string `yaml:"help"`
+	Search            string `yaml:"search"`
+	SwitchPanel       string `yaml:"switchPanel"`
+	Refresh           string `yaml:"refresh"`
+	RefreshAll        string `yaml:"refreshAll"`
+	PrevTab           string `yaml:"prevTab"`
+	NextTab           string `yaml:"nextTab"`
+	FocusDetail       string `yaml:"focusDetail"`
+	FocusStatus       string `yaml:"focusStatus"`
+	FocusPullRequests string `yaml:"focusPullRequests"`
+	FocusBuilds       string `yaml:"focusBuilds"`
+	FocusRepos        string `yaml:"focusRepos"`
 }
 
-type IssueKeys struct {
-	Select        string `yaml:"select"`
-	Open          string `yaml:"open"`
-	FocusRight    string `yaml:"focusRight"`
-	Transition    string `yaml:"transition"`
-	Browser       string `yaml:"browser"`
-	URLPicker     string `yaml:"urlPicker"`
-	CopyURL       string `yaml:"copyURL"`
-	CloseJQLTab   string `yaml:"closeJQLTab"`
-	CreateBranch  string `yaml:"createBranch"`
-	CreateIssue   string `yaml:"createIssue"`
-	CreateSubtask string `yaml:"createSubtask"`
-}
-
-type ProjectKeys struct {
+type PullRequestKeys struct {
 	Select     string `yaml:"select"`
 	Open       string `yaml:"open"`
 	FocusRight string `yaml:"focusRight"`
+	Browser    string `yaml:"browser"`
+	URLPicker  string `yaml:"urlPicker"`
+	CopyURL    string `yaml:"copyURL"`
+	Checkout   string `yaml:"checkout"`
 }
 
 type DetailKeys struct {
 	FocusLeft    string `yaml:"focusLeft"`
-	InfoTab      string `yaml:"infoTab"`
+	Back         string `yaml:"back"`
 	ScrollDown   string `yaml:"scrollDown"`
 	ScrollUp     string `yaml:"scrollUp"`
 	HalfPageDown string `yaml:"halfPageDown"`
 	HalfPageUp   string `yaml:"halfPageUp"`
 }
 
-type JiraConfig struct {
-	Host       string    `yaml:"host"`
-	Email      string    `yaml:"email"`
-	Token      string    `yaml:"-"`
-	ServerType string    `yaml:"serverType"`
-	TLS        TLSConfig `yaml:"tls"`
-}
-
-// IsCloud returns true if this is a Jira Cloud instance (or unset, which defaults to Cloud)
-func (j JiraConfig) IsCloud() bool {
-	return j.ServerType == "" || j.ServerType == "cloud"
-}
-
-type TLSConfig struct {
-	CertFile string `yaml:"certFile"`
-	KeyFile  string `yaml:"keyFile"`
-	CAFile   string `yaml:"caFile"`
-	Insecure bool   `yaml:"insecure"`
-}
-
-type ProjectConfig struct {
-	Key     string `yaml:"key"`
-	BoardID int    `yaml:"boardId"` // TODO not yet wired up
-}
-
-// UnmarshalYAML lets `projects:` accept either the full mapping form
-//
-//	projects:
-//	  - key: ORCH
-//	    boardId: 42
-//
-// or the shorthand string form used in most personal configs:
-//
-//	projects:
-//	  - ORCH
-//
-// The bare-string form maps straight to Key with BoardID left at its zero
-// value. Without this, a list of bare strings unmarshals into a struct and
-// yaml.v3 returns "cannot unmarshal !!str into config.ProjectConfig", which
-// previously propagated as a nil *Config and a SIGSEGV (#41).
-func (p *ProjectConfig) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind == yaml.ScalarNode {
-		return node.Decode(&p.Key)
-	}
-	// Full form: decode into a type alias so we don't recurse into this
-	// UnmarshalYAML method.
-	type rawProjectConfig ProjectConfig
-	return node.Decode((*rawProjectConfig)(p))
-}
-
 type GUIConfig struct {
-	Theme                string            `yaml:"theme"`
-	ThemeColors          map[string]string `yaml:"themeColors,omitempty"`
-	ThemeDark            map[string]string `yaml:"themeDark,omitempty"`
-	ThemeLight           map[string]string `yaml:"themeLight,omitempty"`
-	Language             string            `yaml:"language"` // TODO not yet wired up
-	SidePanelWidth       int               `yaml:"sidePanelWidth"`
-	CollapsedPanelHeight int               `yaml:"collapsedPanelHeight"`
-	ShowIcons            bool              `yaml:"showIcons"`  // TODO not yet wired up
-	DateFormat           string            `yaml:"dateFormat"` // TODO not yet wired up
-	Mouse                bool              `yaml:"mouse"`      // TODO not yet wired up
-	Borders              string            `yaml:"borders"`    // TODO not yet wired up
-	IssueListFields      []string          `yaml:"issueListFields"`
-	PrefillFromTab       *bool             `yaml:"prefillFromTab"`
-	SelectCreatedIssue   *bool             `yaml:"selectCreatedIssue"`
-	TypeIcons            map[string]string `yaml:"typeIcons"`
-	StatusIcons          map[string]string `yaml:"statusIcons"`
-	PriorityIcons        map[string]string `yaml:"priorityIcons"`
-}
-
-// ShouldPrefillFromTab returns true when the creation form should prefill from tab JQL
-func (g GUIConfig) ShouldPrefillFromTab() bool {
-	return g.PrefillFromTab == nil || *g.PrefillFromTab
-}
-
-// ShouldSelectCreatedIssue returns true when the app should auto-select a newly created issue
-func (g GUIConfig) ShouldSelectCreatedIssue() bool {
-	return g.SelectCreatedIssue == nil || *g.SelectCreatedIssue
-}
-
-// TODO not yet wired up
-type CacheConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	TTL     string `yaml:"ttl"`
-}
-
-// TODO not yet wired up
-type RefreshConfig struct {
-	AutoRefresh bool   `yaml:"autoRefresh"`
-	Interval    string `yaml:"interval"`
+	Theme                 string            `yaml:"theme"`
+	ThemeColors           map[string]string `yaml:"themeColors,omitempty"`
+	ThemeDark             map[string]string `yaml:"themeDark,omitempty"`
+	ThemeLight            map[string]string `yaml:"themeLight,omitempty"`
+	SidePanelWidth        int               `yaml:"sidePanelWidth"`
+	CollapsedPanelHeight  int               `yaml:"collapsedPanelHeight"`
+	PullRequestListFields []string          `yaml:"pullRequestListFields"`
 }
 
 // DefaultConfig returns a Config populated with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
 		GUI: GUIConfig{
-			Theme:                "default",
-			Language:             "en",
-			SidePanelWidth:       40,
-			CollapsedPanelHeight: 5,
-			ShowIcons:            true,
-			DateFormat:           "2006-01-02",
-			Mouse:                true,
-			Borders:              "rounded",
-			IssueListFields: []string{
-				"key", "status", "summary",
-			},
+			Theme:                 "default",
+			SidePanelWidth:        40,
+			CollapsedPanelHeight:  5,
+			PullRequestListFields: DefaultPullRequestListFields(),
 		},
-		IssueTabs: DefaultIssueTabs(),
-		Cache: CacheConfig{
-			Enabled: true,
-			TTL:     "5m",
-		},
-		Refresh: RefreshConfig{
-			AutoRefresh: true,
-			Interval:    "30s",
-		},
+		PullRequestTabs: DefaultPullRequestTabs(),
+		RefreshInterval: DefaultRefreshInterval,
 	}
 }
 
 // DefaultMaxResults is the fallback page size used when neither the global
-// `maxResults` nor a tab-specific override is set. Note that the Jira server
-// may enforce its own upper bound and silently return fewer issues than
-// requested.
+// `maxResults` nor a tab-specific override is set. It applies per repository
+// per tab; Bitbucket caps the pull request page size at 50.
 const DefaultMaxResults = 50
 
-// ResolveGlobalMaxResults returns the effective page size for queries that
-// are not tied to a configured tab (ad-hoc JQL searches, JQL tabs): global
-// config value if set and positive, otherwise the compile-time default.
-// A nil or non-positive pointer is treated as "unset".
+// ResolveGlobalMaxResults returns the effective page size for queries that are
+// not tied to a configured tab: the global config value if set and positive,
+// otherwise the compile-time default. A nil or non-positive pointer is treated
+// as "unset".
 func (c *Config) ResolveGlobalMaxResults() int {
 	if c.MaxResults != nil && *c.MaxResults > 0 {
 		return *c.MaxResults
@@ -320,41 +258,81 @@ func (c *Config) ResolveGlobalMaxResults() int {
 	return DefaultMaxResults
 }
 
-// ResolveMaxResults returns the effective page size for a given tab:
-// per-tab override first, then the global/default chain. A nil or
-// non-positive pointer is treated as "unset".
-func (c *Config) ResolveMaxResults(tab IssueTabConfig) int {
+// ResolveMaxResults returns the effective page size for a given tab: per-tab
+// override first, then the global/default chain. A nil or non-positive pointer
+// is treated as "unset".
+func (c *Config) ResolveMaxResults(tab PullRequestTabConfig) int {
 	if tab.MaxResults != nil && *tab.MaxResults > 0 {
 		return *tab.MaxResults
 	}
 	return c.ResolveGlobalMaxResults()
 }
 
-// DefaultIssueTabs returns the default issue tab configuration
-func DefaultIssueTabs() []IssueTabConfig {
-	return []IssueTabConfig{
-		{Name: "All", JQL: "project = {{.ProjectKey}} AND statusCategory != Done ORDER BY updated DESC"},
-		{Name: "Assigned", JQL: "project = {{.ProjectKey}} AND assignee=currentUser() AND statusCategory != Done ORDER BY priority DESC, updated DESC"},
+// ResolveRefreshInterval returns the auto-refresh period. An unset value means
+// DefaultRefreshInterval; "0" and "off" disable auto-refresh (zero duration);
+// anything time.ParseDuration rejects, and negative durations, are an error
+// (surfaced by Load).
+func (c *Config) ResolveRefreshInterval() (time.Duration, error) {
+	value := strings.TrimSpace(c.RefreshInterval)
+	if value == "" {
+		value = DefaultRefreshInterval
 	}
+	if value == "0" || strings.EqualFold(value, refreshOffKeyword) {
+		return 0, nil
+	}
+
+	interval, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid refreshInterval %q: %w", c.RefreshInterval, err)
+	}
+	if interval < 0 {
+		return 0, fmt.Errorf("invalid refreshInterval %q: must not be negative", c.RefreshInterval)
+	}
+	return interval, nil
 }
 
-// ConfigDir returns the lazyjira configuration directory path
-// Order of precedence: LAZYJIRA_CONFIG_DIR env, XDG_CONFIG_HOME/lazyjira, os.UserConfigDir()/lazyjira, ~/.config/lazyjira
+// ResolveEditor returns the editor command: `editor` from the config file,
+// then $VISUAL, then $EDITOR, then DefaultEditor.
+func (c *Config) ResolveEditor() string {
+	if c.Editor != "" {
+		return c.Editor
+	}
+	if editor := os.Getenv("VISUAL"); editor != "" {
+		return editor
+	}
+	if editor := os.Getenv("EDITOR"); editor != "" {
+		return editor
+	}
+	return DefaultEditor
+}
+
+// ResolveBaseURL returns the Bitbucket REST base URL without a trailing slash,
+// falling back to DefaultBaseURL.
+func (c *Config) ResolveBaseURL() string {
+	if base := strings.TrimRight(strings.TrimSpace(c.Bitbucket.BaseURL), "/"); base != "" {
+		return base
+	}
+	return DefaultBaseURL
+}
+
+// ConfigDir returns the lazybitbucket configuration directory path.
+// Order of precedence: LAZYBITBUCKET_CONFIG_DIR env, XDG_CONFIG_HOME/lazybitbucket,
+// os.UserConfigDir()/lazybitbucket, ~/.config/lazybitbucket
 func ConfigDir() string {
-	if dir := os.Getenv("LAZYJIRA_CONFIG_DIR"); dir != "" {
+	if dir := os.Getenv("LAZYBITBUCKET_CONFIG_DIR"); dir != "" {
 		return dir
 	}
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "lazyjira")
+		return filepath.Join(dir, appName)
 	}
 	if dir, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(dir, "lazyjira")
+		return filepath.Join(dir, appName)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "."
 	}
-	return filepath.Join(home, ".config", "lazyjira")
+	return filepath.Join(home, ".config", appName)
 }
 
 // ConfigPath returns the full path to the config file
@@ -362,8 +340,8 @@ func ConfigPath() string {
 	return filepath.Join(ConfigDir(), "config.yml")
 }
 
-// Load reads the config file, merges it with defaults, and applies
-// environment variable overrides for Jira credentials
+// Load reads the config file, merges it with defaults, applies the BITBUCKET_*
+// environment overrides and validates the result.
 func Load() (*Config, error) {
 	cfg := DefaultConfig()
 
@@ -378,59 +356,91 @@ func Load() (*Config, error) {
 		}
 	}
 
-	if cfg.Fields == nil && len(cfg.DeprecatedFields) > 0 {
-		cfg.Fields = cfg.DeprecatedFields
-		cfg.DeprecatedFields = nil
-	}
+	applyEnvOverrides(cfg)
 
-	// Environment variables always take precedence.
-	if v := os.Getenv("JIRA_HOST"); v != "" {
-		cfg.Jira.Host = v
-	}
-	if v := os.Getenv("JIRA_EMAIL"); v != "" {
-		cfg.Jira.Email = v
-	}
-	if v := os.Getenv("JIRA_API_TOKEN"); v != "" {
-		cfg.Jira.Token = v
-	}
-	if v := os.Getenv("JIRA_SERVER_TYPE"); v != "" {
-		cfg.Jira.ServerType = v
-	}
-	if v := os.Getenv("JIRA_TLS_CERT"); v != "" {
-		cfg.Jira.TLS.CertFile = v
-	}
-	if v := os.Getenv("JIRA_TLS_KEY"); v != "" {
-		cfg.Jira.TLS.KeyFile = v
-	}
-	if v := os.Getenv("JIRA_TLS_CA"); v != "" {
-		cfg.Jira.TLS.CAFile = v
-	}
-	if v := os.Getenv("JIRA_TLS_INSECURE"); v == "1" || v == "true" {
-		cfg.Jira.TLS.Insecure = true
-	}
-
-	if _, err := cfg.ResolveCustomCommands(); err != nil {
-		return nil, err
-	}
-
-	if err := validateConverter(cfg.Converter); err != nil {
-		return nil, err
-	}
-
-	if err := validateRenderer(cfg.Renderer); err != nil {
-		return nil, err
-	}
-
-	if err := validateRendererStyle(cfg.RendererStyle); err != nil {
+	if err := validate(cfg); err != nil {
 		return nil, err
 	}
 
 	return cfg, nil
 }
 
-// Save writes the config to the config file. The Jira API token is never
-// persisted because the Token field carries the yaml:"-" tag
+// applyEnvOverrides applies the BITBUCKET_* environment variables, which
+// always take precedence over the config file.
+func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv("BITBUCKET_WORKSPACE"); v != "" {
+		cfg.Bitbucket.Workspace = v
+	}
+	if repos := splitRepositories(os.Getenv("BITBUCKET_REPOSITORIES")); len(repos) > 0 {
+		cfg.Bitbucket.Repositories = repos
+	}
+	if v := os.Getenv("BITBUCKET_EMAIL"); v != "" {
+		cfg.Bitbucket.Email = v
+	}
+	if v := os.Getenv("BITBUCKET_TOKEN"); v != "" {
+		cfg.Bitbucket.Token = v
+	}
+	if v := os.Getenv("BITBUCKET_API_URL"); v != "" {
+		cfg.Bitbucket.BaseURL = v
+	}
+}
+
+// splitRepositories parses a comma-separated repository slug list, trimming
+// whitespace and dropping empty entries.
+func splitRepositories(value string) []string {
+	parts := strings.Split(value, ",")
+	repos := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if slug := strings.TrimSpace(part); slug != "" {
+			repos = append(repos, slug)
+		}
+	}
+	return repos
+}
+
+func validate(cfg *Config) error {
+	if _, err := cfg.ResolveCustomCommands(); err != nil {
+		return err
+	}
+	if err := validateRendererStyle(cfg.RendererStyle); err != nil {
+		return err
+	}
+	if _, err := cfg.ResolveRefreshInterval(); err != nil {
+		return err
+	}
+	for i, tab := range cfg.PullRequestTabs {
+		if err := validateTabState(i, tab); err != nil {
+			return err
+		}
+	}
+	return validateListFields(cfg.GUI.PullRequestListFields)
+}
+
+func validateTabState(index int, tab PullRequestTabConfig) error {
+	if slices.Contains(pullRequestStates, tab.ResolveState()) {
+		return nil
+	}
+	return fmt.Errorf("pullRequestTabs[%d] (%q): unknown state %q; valid: %s",
+		index, tab.Name, tab.State, strings.Join(pullRequestStates, ", "))
+}
+
+func validateListFields(fields []string) error {
+	for _, field := range fields {
+		if !slices.Contains(pullRequestListFields, field) {
+			return fmt.Errorf("gui.pullRequestListFields: unknown field %q; valid: %s",
+				field, strings.Join(pullRequestListFields, ", "))
+		}
+	}
+	return nil
+}
+
+// Save writes the config to the config file. The API token is never persisted
+// because the Token field carries the yaml:"-" tag
 func Save(cfg *Config) error {
+	if cfg == nil {
+		return errors.New("save config: nil config")
+	}
+
 	dir := ConfigDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

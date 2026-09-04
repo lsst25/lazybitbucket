@@ -21,14 +21,14 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. Run lazyjira
+        1. Run lazybitbucket
         2. Navigate to ...
         3. Press ...
   - type: input
     id: version
     attributes:
-      label: lazyjira version
-      placeholder: "lazyjira --version"
+      label: lazybitbucket version
+      placeholder: "lazybitbucket --version"
     validations:
       required: true
   - type: dropdown

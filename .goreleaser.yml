@@ -1,8 +1,8 @@
 version: 2
 
 builds:
-  - main: ./cmd/lazyjira
-    binary: lazyjira
+  - main: ./cmd/lazybitbucket
+    binary: lazybitbucket
     ldflags:
       - -s -w -X main.version={{.Version}}
     env:
@@ -25,19 +25,19 @@ archives:
           - zip
 
 brews:
-  - name: lazyjira
-    description: "Terminal UI for Jira"
-    homepage: "https://github.com/textfuel/lazyjira"
+  - name: lazybitbucket
+    description: "Terminal UI for Bitbucket Cloud pull requests"
+    homepage: "https://github.com/lsst25/lazybitbucket"
     repository:
-      owner: textfuel
+      owner: lsst25
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
 
 nfpms:
-  - package_name: lazyjira
-    maintainer: "textfuel <https://github.com/textfuel>"
-    homepage: "https://github.com/textfuel/lazyjira"
-    description: "Terminal UI for Jira"
+  - package_name: lazybitbucket
+    maintainer: "lsst25 <https://github.com/lsst25>"
+    homepage: "https://github.com/lsst25/lazybitbucket"
+    description: "Terminal UI for Bitbucket Cloud pull requests"
     license: MIT
     formats:
       - deb
@@ -45,20 +45,20 @@ nfpms:
       - apk
 
 aurs:
-  - name: lazyjira-bin
-    homepage: "https://github.com/textfuel/lazyjira"
-    description: "Terminal UI for Jira (prebuilt binary)"
+  - name: lazybitbucket-bin
+    homepage: "https://github.com/lsst25/lazybitbucket"
+    description: "Terminal UI for Bitbucket Cloud pull requests (prebuilt binary)"
     license: "MIT"
     private_key: "{{ .Env.AUR_SSH_PRIVATE_KEY }}"
-    git_url: "ssh://aur@aur.archlinux.org/lazyjira-bin.git"
+    git_url: "ssh://aur@aur.archlinux.org/lazybitbucket-bin.git"
     provides:
-      - lazyjira
+      - lazybitbucket
     conflicts:
-      - lazyjira
-      - lazyjira-git
+      - lazybitbucket
+      - lazybitbucket-git
     package: |-
-      install -Dm755 "./lazyjira" "${pkgdir}/usr/bin/lazyjira"
-      install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/lazyjira/LICENSE"
+      install -Dm755 "./lazybitbucket" "${pkgdir}/usr/bin/lazybitbucket"
+      install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/lazybitbucket/LICENSE"
     commit_author:
       name: goreleaserbot
       email: bot@goreleaser.com
@@ -69,4 +69,4 @@ changelog:
 release:
   footer: |
     ---
-    **Full changelog:** [CHANGELOG.md](https://github.com/textfuel/lazyjira/blob/main/CHANGELOG.md)
+    **Full changelog:** [CHANGELOG.md](https://github.com/lsst25/lazybitbucket/blob/main/CHANGELOG.md)

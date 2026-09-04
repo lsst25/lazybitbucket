@@ -3,67 +3,98 @@ package views
 import (
 	"fmt"
 	"math"
-	"regexp"
-	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
-	"github.com/lsst25/lazybitbucket/pkg/jira"
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 	"github.com/lsst25/lazybitbucket/pkg/tui/theme"
 )
 
+// DetailTab is a tab within the pull request view. Step 1 has a single one;
+// step 2 adds Diff, Commits and Comments, at which point the tab bar appears.
 type DetailTab int
 
+// Tabs of the pull request view.
 const (
-	TabDetails DetailTab = iota
-	TabComments
-	TabHistory
+	TabOverview DetailTab = iota
 )
 
-// MainMode controls what the right panel displays
+// MainMode is what the right-hand panel is showing. Unlike lazyjira's
+// tab-driven detail view, the mode decides both the body and whether the panel
+// is a scrolling text pane or a block list.
 type MainMode int
 
+// Modes of the detail panel.
 const (
-	ModeIssue MainMode = iota
+	ModePullRequest MainMode = iota
+	ModePipeline
+	ModeStepLog
+	ModeRepo
 	ModeSplash
-	ModeProject
 )
 
-// SplashInfo holds data for the splash/status screen
+// maxBlockLines is how many lines of a block are shown before it is collapsed
+// behind an ellipsis and offered for expansion.
+const maxBlockLines = 8
+
+const (
+	// notRunLabel is the duration cell of a step that never ran.
+	notRunLabel = "not run"
+	// resultNotRun is the step result Bitbucket reports for a step that was
+	// skipped because an earlier one failed.
+	resultNotRun = "NOT_RUN"
+)
+
+// SplashInfo is the startup screen's content.
 type SplashInfo struct {
 	Version    string
 	AuthMethod string
-	Host       string
-	Email      string
-	Project    string
+	Workspace  string
+	User       string
+	RepoCount  int
+	RepoNote   string
 }
 
-const (
-	maxBlockLines  = 8 // max visible lines per entry before collapsing
-	unknownLabel   = "Unknown"
-	noneLabel      = "none"
-	noneLabelUpper = "None"
-)
-
-// ExpandBlockMsg is sent when user wants to expand a collapsed block
+// ExpandBlockMsg asks the app to open a truncated block in a read-only modal.
 type ExpandBlockMsg struct {
 	Title string
 	Lines []string
 }
 
-// NavigateIssueMsg is sent when user activates a block linked to a Jira issue
-type NavigateIssueMsg struct {
-	Key string
+// StepSelectedMsg is emitted when the user activates a pipeline step, and asks
+// the app to fetch that step's log.
+type StepSelectedMsg struct {
+	PipelineUUID string
+	StepUUID     string
 }
 
+// DetailView is the [0] panel. It renders a pull request, one of its pipeline
+// runs, a step log, a repository or the splash screen, depending on its mode.
 type DetailView struct {
-	issue      *jira.Issue
-	project    *jira.Project
-	splash     SplashInfo
+	pr             *bitbucket.PullRequest
+	statuses       []bitbucket.CommitStatus
+	statusesLoaded bool
+
+	pipeline        *bitbucket.Pipeline
+	steps           []bitbucket.PipelineStep
+	pipelineBuild   int
+	pipelineLoading bool
+	pipelineErr     string
+
+	stepUUID       string
+	stepLog        string
+	stepLogLoading bool
+	stepLogErr     string
+
+	repo   *RepoItem
+	splash SplashInfo
+
 	mode       MainMode
 	activeTab  DetailTab
 	scrollY    int
@@ -71,127 +102,294 @@ type DetailView struct {
 	blocks     [][]string
 	blockKeys  []string
 	dblClick   components.DblClickDetector
-	width      int
-	height     int
-	focused    bool
-	theme      *theme.Theme
-	renderer   ADFRenderer
+
+	width   int
+	height  int
+	focused bool
+	theme   *theme.Theme
+
+	renderer MarkdownRenderer
+	// ResolveNav is assigned by the app; the view is keyboard-inert until it is.
 	ResolveNav components.NavResolver
 }
 
-// NewDetailView constructs a DetailView with the given ADF renderer.
-func NewDetailView(renderer ADFRenderer) *DetailView {
-	return &DetailView{theme: theme.Default, mode: ModeIssue, renderer: renderer}
+// NewDetailView constructs a detail view rendering Markdown with renderer.
+func NewDetailView(renderer MarkdownRenderer) *DetailView {
+	return &DetailView{theme: theme.Default, mode: ModePullRequest, renderer: renderer}
 }
 
+// Mode reports what the panel is currently showing.
 func (d *DetailView) Mode() MainMode { return d.mode }
 
-// IssueKey returns the key of the currently displayed issue, or ""
-func (d *DetailView) IssueKey() string {
-	if d.issue != nil && d.mode == ModeIssue {
-		return d.issue.Key
+// PullRequestKey is the key of the pull request in view, "" when the panel is
+// showing something that is not tied to one.
+func (d *DetailView) PullRequestKey() string {
+	if d.pr == nil {
+		return ""
 	}
-	return ""
+	switch d.mode {
+	case ModePullRequest, ModePipeline, ModeStepLog:
+		return d.pr.Key()
+	default:
+		return ""
+	}
 }
 
-func (d *DetailView) SetIssue(issue *jira.Issue) {
+// SetPullRequest shows a pull request. Scroll and tab are only reset when the
+// key changes, so a background refresh does not yank the user's place.
+func (d *DetailView) SetPullRequest(pr *bitbucket.PullRequest) {
+	changed := d.adoptPullRequest(pr)
+	d.mode = ModePullRequest
+	if changed {
+		d.resetPullRequestView()
+	}
+}
+
+// UpdatePullRequestData refreshes the pull request without changing the mode,
+// which is what the background detail fetch does while the user reads a
+// pipeline.
+func (d *DetailView) UpdatePullRequestData(pr *bitbucket.PullRequest) {
+	if d.adoptPullRequest(pr) {
+		d.resetPullRequestView()
+	}
+}
+
+// adoptPullRequest stores pr and reports whether it is a different one.
+func (d *DetailView) adoptPullRequest(pr *bitbucket.PullRequest) bool {
 	prevKey := ""
-	if d.issue != nil {
-		prevKey = d.issue.Key
+	if d.pr != nil {
+		prevKey = d.pr.Key()
 	}
-	d.issue = issue
-	d.mode = ModeIssue
-	// Only reset tab/scroll when switching to a different issue.
-	if issue == nil || issue.Key != prevKey {
-		d.scrollY = 0
-		d.activeTab = TabDetails
+	d.pr = pr
+	if pr == nil {
+		return prevKey != ""
 	}
+	return pr.Key() != prevKey
 }
 
-// UpdateIssueData stores issue data without changing mode (for background updates)
-func (d *DetailView) UpdateIssueData(issue *jira.Issue) {
-	prevKey := ""
-	if d.issue != nil {
-		prevKey = d.issue.Key
-	}
-	d.issue = issue
-	if issue != nil && issue.Key != prevKey {
-		d.scrollY = 0
-		d.activeTab = TabDetails
-	}
+func (d *DetailView) resetPullRequestView() {
+	d.scrollY = 0
+	d.listCursor = 0
+	d.activeTab = TabOverview
+	d.statuses = nil
+	d.statusesLoaded = false
+	d.clearPipeline()
 }
 
-func (d *DetailView) SetProject(project *jira.Project) {
-	d.project = project
-	d.mode = ModeProject
+func (d *DetailView) clearPipeline() {
+	d.pipeline = nil
+	d.steps = nil
+	d.pipelineBuild = 0
+	d.pipelineLoading = false
+	d.pipelineErr = ""
+	d.clearStepLog()
+}
+
+func (d *DetailView) clearStepLog() {
+	d.stepUUID = ""
+	d.stepLog = ""
+	d.stepLogLoading = false
+	d.stepLogErr = ""
+}
+
+// SetStatuses feeds the overview's Builds line. Statuses for another pull
+// request are dropped.
+func (d *DetailView) SetStatuses(key string, statuses []bitbucket.CommitStatus) {
+	if d.pr == nil || d.pr.Key() != key {
+		return
+	}
+	d.statuses = bitbucket.LatestStatuses(statuses)
+	d.statusesLoaded = true
+}
+
+// SetPipelineLoading switches to the pipeline view with a placeholder body
+// while the run is fetched. A call for another pull request is dropped.
+func (d *DetailView) SetPipelineLoading(key string, buildNumber int) {
+	if d.pr == nil || d.pr.Key() != key {
+		return
+	}
+	d.clearPipeline()
+	d.mode = ModePipeline
+	d.pipelineBuild = buildNumber
+	d.pipelineLoading = true
+	d.scrollY = 0
+	d.listCursor = 0
+}
+
+// SetPipeline shows a pipeline run and its steps. A run for another pull
+// request is dropped.
+func (d *DetailView) SetPipeline(key string, p *bitbucket.Pipeline, steps []bitbucket.PipelineStep) {
+	if d.pr == nil || d.pr.Key() != key {
+		return
+	}
+	d.clearStepLog()
+	d.mode = ModePipeline
+	d.pipeline = p
+	d.steps = steps
+	d.pipelineLoading = false
+	d.pipelineErr = ""
+	if p != nil {
+		d.pipelineBuild = p.BuildNumber
+	}
+	d.scrollY = 0
+	d.listCursor = 0
+}
+
+// SetPipelineError shows why a pipeline run could not be fetched. An error for
+// another pull request is dropped.
+func (d *DetailView) SetPipelineError(key, msg string) {
+	if d.pr == nil || d.pr.Key() != key {
+		return
+	}
+	d.mode = ModePipeline
+	d.pipelineErr = msg
+	d.pipelineLoading = false
 	d.scrollY = 0
 }
 
+// SetStepLogLoading switches to the step log view with a placeholder body. A
+// call for another pipeline, or another step, is dropped.
+func (d *DetailView) SetStepLogLoading(pipelineUUID, stepUUID string) {
+	if !d.pipelineMatches(pipelineUUID) {
+		return
+	}
+	d.mode = ModeStepLog
+	d.stepUUID = stepUUID
+	d.stepLog = ""
+	d.stepLogErr = ""
+	d.stepLogLoading = true
+	d.scrollY = 0
+}
+
+// SetStepLog shows a step's log text. A log for another pipeline, or for a step
+// the user has already navigated away from, is dropped.
+func (d *DetailView) SetStepLog(pipelineUUID, stepUUID, text string) {
+	if !d.stepMatches(pipelineUUID, stepUUID) {
+		return
+	}
+	d.mode = ModeStepLog
+	d.stepUUID = stepUUID
+	d.stepLog = text
+	d.stepLogErr = ""
+	d.stepLogLoading = false
+	d.scrollY = 0
+}
+
+// SetStepLogError shows why a step log could not be fetched.
+func (d *DetailView) SetStepLogError(pipelineUUID, stepUUID, msg string) {
+	if !d.stepMatches(pipelineUUID, stepUUID) {
+		return
+	}
+	d.mode = ModeStepLog
+	d.stepUUID = stepUUID
+	d.stepLogErr = msg
+	d.stepLogLoading = false
+	d.scrollY = 0
+}
+
+func (d *DetailView) pipelineMatches(pipelineUUID string) bool {
+	return d.pipeline != nil && d.pipeline.UUID == pipelineUUID
+}
+
+// stepMatches reports whether a step-log response is still the one the user is
+// waiting on. The check is identity-based: Back() clears stepUUID and leaves
+// ModePipeline, so a response that lands after the user walked out of the log
+// is dropped instead of yanking them back into it.
+func (d *DetailView) stepMatches(pipelineUUID, stepUUID string) bool {
+	if !d.pipelineMatches(pipelineUUID) {
+		return false
+	}
+	return d.mode == ModeStepLog && d.stepUUID != "" && d.stepUUID == stepUUID
+}
+
+// Pipeline returns the pipeline run in view, nil when there is none.
+func (d *DetailView) Pipeline() *bitbucket.Pipeline { return d.pipeline }
+
+// SelectedStep returns the step under the block cursor, nil outside the
+// pipeline view.
+func (d *DetailView) SelectedStep() *bitbucket.PipelineStep {
+	if d.mode != ModePipeline {
+		return nil
+	}
+	if d.listCursor < 0 || d.listCursor >= len(d.steps) {
+		return nil
+	}
+	return &d.steps[d.listCursor]
+}
+
+// Back walks one step out of the drill-down: step log to pipeline, pipeline to
+// pull request. It reports whether the mode changed.
+func (d *DetailView) Back() bool {
+	switch d.mode {
+	case ModeStepLog:
+		d.clearStepLog()
+		d.mode = ModePipeline
+		d.scrollY = 0
+		return true
+	case ModePipeline:
+		d.clearPipeline()
+		d.mode = ModePullRequest
+		d.scrollY = 0
+		d.listCursor = 0
+		return true
+	default:
+		return false
+	}
+}
+
+// SetRepo shows a repository's metadata.
+func (d *DetailView) SetRepo(repo *RepoItem) {
+	d.repo = repo
+	d.mode = ModeRepo
+	d.scrollY = 0
+}
+
+// SetSplash shows the startup screen.
 func (d *DetailView) SetSplash(info SplashInfo) {
 	d.splash = info
 	d.mode = ModeSplash
 	d.scrollY = 0
 }
 
+// SetSize records the panel geometry; it must precede View.
 func (d *DetailView) SetSize(w, h int) { d.width = w; d.height = h }
+
+// SetFocused toggles focus, resetting the block cursor when focus is lost.
 func (d *DetailView) SetFocused(focused bool) {
 	if d.focused && !focused {
-		// Actually losing focus — reset list cursor.
 		d.listCursor = 0
 	}
 	d.focused = focused
 }
 
+// ActiveTab returns the tab in view.
 func (d *DetailView) ActiveTab() DetailTab { return d.activeTab }
 
+// SetActiveTab switches tabs and rewinds the body.
 func (d *DetailView) SetActiveTab(tab DetailTab) {
 	d.activeTab = tab
 	d.scrollY = 0
 	d.listCursor = 0
 }
 
-func (d *DetailView) SelectedComment() *jira.Comment {
-	if d.issue == nil || d.activeTab != TabComments {
-		return nil
-	}
-	if d.listCursor >= 0 && d.listCursor < len(d.issue.Comments) {
-		return &d.issue.Comments[d.listCursor]
-	}
-	return nil
-}
+// NextTab moves to the following visible tab.
+func (d *DetailView) NextTab() { d.cycleTab(1) }
 
-func (d *DetailView) Init() tea.Cmd { return nil }
+// PrevTab moves to the preceding visible tab.
+func (d *DetailView) PrevTab() { d.cycleTab(-1) }
 
-func (d *DetailView) NextTab() {
-	vt := d.visibleTabs()
-	for i, t := range vt {
+func (d *DetailView) cycleTab(delta int) {
+	tabs := d.visibleTabs()
+	if len(tabs) == 0 {
+		return
+	}
+	for i, t := range tabs {
 		if t == d.activeTab {
-			d.activeTab = vt[(i+1)%len(vt)]
-			d.scrollY = 0
-			d.listCursor = 0
+			d.SetActiveTab(tabs[((i+delta)%len(tabs)+len(tabs))%len(tabs)])
 			return
 		}
 	}
-	if len(vt) > 0 {
-		d.activeTab = vt[0]
-		d.scrollY = 0
-	}
-}
-
-func (d *DetailView) PrevTab() {
-	vt := d.visibleTabs()
-	for i, t := range vt {
-		if t == d.activeTab {
-			d.activeTab = vt[(i+len(vt)-1)%len(vt)]
-			d.scrollY = 0
-			d.listCursor = 0
-			return
-		}
-	}
-	if len(vt) > 0 {
-		d.activeTab = vt[0]
-		d.scrollY = 0
-	}
+	d.SetActiveTab(tabs[0])
 }
 
 func (d *DetailView) visibleTabs() []DetailTab {
@@ -203,94 +401,76 @@ func (d *DetailView) visibleTabs() []DetailTab {
 	return tabs
 }
 
-// ClickTab switches tab based on x position in the title bar
+type tabLabel struct {
+	tab   DetailTab
+	label string
+}
+
+// tabLabels is the tab set for the current mode. With a single tab the bar is
+// not drawn at all, so the title stays the plain mode title until step 2 adds
+// Diff, Commits and Comments here.
+func (d *DetailView) tabLabels() []tabLabel {
+	if d.mode != ModePullRequest || d.pr == nil {
+		return nil
+	}
+	return []tabLabel{{tab: TabOverview, label: "Overview"}}
+}
+
+// ClickTab switches tabs from a click on the title bar. It is a no-op while the
+// tab bar is not drawn.
 func (d *DetailView) ClickTab(x int) {
-	if d.issue == nil {
-		return
-	}
 	labels := d.tabLabels()
-	if len(labels) == 0 {
+	if len(labels) < 2 {
 		return
 	}
-
-	// Tabs start after "[0] KEY" + " - " (the border char "╭" is col 0).
-	prefix := "[0] " + d.issue.Key
-	sepW := 3 // " - "
-	tabsStart := len(prefix) + sepW
-
-	if x < tabsStart {
+	const sepW = 3 // " - "
+	pos := lipgloss.Width(d.titlePrefix()) + sepW
+	if x < pos {
 		return
 	}
-
-	// Each tab owns from its start to the next tab's start (inclusive of separator).
-	pos := tabsStart
 	for i, tl := range labels {
-		labelW := len(tl.label)
-		var zoneEnd int
-		if i < len(labels)-1 {
-			zoneEnd = pos + labelW + sepW
-		} else {
-			zoneEnd = pos + labelW + 10 // last tab: generous zone
+		zoneEnd := pos + len(tl.label) + sepW
+		if i == len(labels)-1 {
+			zoneEnd = pos + len(tl.label) + 10
 		}
 		if x >= pos && x < zoneEnd {
-			d.activeTab = tl.tab
-			d.scrollY = 0
-			d.listCursor = 0
+			d.SetActiveTab(tl.tab)
 			return
 		}
 		pos = zoneEnd
 	}
 }
 
+// ScrollBy moves the block cursor in list modes and the line offset otherwise.
 func (d *DetailView) ScrollBy(delta int) {
 	if d.IsListTab() {
-		d.listCursor += delta
-		if d.listCursor < 0 {
-			d.listCursor = 0
-		}
-		if count := d.listTabItemCount(); d.listCursor >= count {
-			d.listCursor = count - 1
-		}
-		if d.listCursor < 0 {
-			d.listCursor = 0
-		}
-	} else {
-		d.scrollY += delta
-		if d.scrollY < 0 {
-			d.scrollY = 0
-		}
+		d.listCursor = clampIndex(d.listCursor+delta, d.listTabItemCount())
+		return
 	}
+	d.scrollY = max(d.scrollY+delta, 0)
 }
 
-// ClickItem selects a list item. Double-click on truncated block expands it.
-// Returns an ExpandBlockMsg if double-click on truncated block, nil otherwise
+// ClickItem selects the block under relY. A double-click on a truncated block
+// expands it.
 func (d *DetailView) ClickItem(relY int) tea.Cmd {
-	if !d.IsListTab() || d.issue == nil {
+	if !d.IsListTab() {
 		return nil
 	}
-	// relY=0 is title bar, relY=1+ is content. Find which block the click falls in.
-	// We need to map content line to block index.
-	// Simple approach: the clicked line (accounting for scroll) maps to a block.
-	clickedLine := d.scrollY + relY - 1 // -1 for title border
-	if clickedLine < 0 {
+	blockWidth := max(d.width-2, 10) - 1
+	blocks := d.renderActiveBlocks(blockWidth)
+	if len(blocks) == 0 {
 		return nil
 	}
 
-	// Walk blocks to find which one contains the clicked line.
-	blockWidth := max(d.width-2, 10) - 1 // -1 for list bar prefix
-	blocks := d.renderActiveTabBlocks(blockWidth)
-	if blocks == nil {
+	clickedLine := d.scrollY + relY - 1 - len(d.listModeHeader(max(d.width-2, 10)))
+	if clickedLine < 0 {
 		return nil
 	}
 
 	linePos := 0
 	for i, block := range blocks {
-		displayH := len(block)
-		if displayH > maxBlockLines {
-			displayH = maxBlockLines + 1
-		}
-		blockEnd := linePos + displayH
-		if clickedLine >= linePos && clickedLine < blockEnd {
+		displayH := displayBlockHeight(block)
+		if clickedLine >= linePos && clickedLine < linePos+displayH {
 			d.listCursor = i
 			if d.dblClick.Click(i) && len(block) > maxBlockLines {
 				return func() tea.Msg {
@@ -299,47 +479,30 @@ func (d *DetailView) ClickItem(relY int) tea.Cmd {
 			}
 			return nil
 		}
-		linePos = blockEnd + 1
+		linePos += displayH + 1
 	}
 	return nil
 }
 
-// listTabItemCount returns the number of items for list-based tabs, 0 for text tabs.
+// IsListTab reports whether the panel is a block list rather than scrolling
+// text. Only the pipeline view is.
+func (d *DetailView) IsListTab() bool { return d.mode == ModePipeline }
+
+// listTabItemCount is the number of blocks in list mode, 0 in text modes.
 func (d *DetailView) listTabItemCount() int {
-	if d.issue == nil {
+	if d.mode != ModePipeline {
 		return 0
 	}
-	switch d.activeTab {
-	case TabComments:
-		return len(d.issue.Comments)
-	case TabHistory:
-		return len(d.issue.Changelog)
-	default:
-		return 0
-	}
+	return len(d.steps)
 }
 
-func (d *DetailView) IsListTab() bool {
-	switch d.activeTab {
-	case TabComments, TabHistory:
-		return true
-	default:
-		return false
-	}
-}
+// VisibleRows is the number of body lines the panel can show.
+func (d *DetailView) VisibleRows() int { return max(d.height-2, 1) }
 
-func (d *DetailView) ListCursorUp() {
-	if d.listCursor > 0 {
-		d.listCursor--
-	}
-}
+// Init satisfies the bubbletea component shape; the view has no startup work.
+func (d *DetailView) Init() tea.Cmd { return nil }
 
-func (d *DetailView) ListCursorDown() {
-	if count := d.listTabItemCount(); d.listCursor < count-1 {
-		d.listCursor++
-	}
-}
-
+// Update handles keys while the panel is focused.
 func (d *DetailView) Update(msg tea.Msg) (*DetailView, tea.Cmd) {
 	if !d.focused {
 		return d, nil
@@ -352,8 +515,6 @@ func (d *DetailView) Update(msg tea.Msg) (*DetailView, tea.Cmd) {
 
 	if key == "tab" {
 		d.NextTab()
-		d.scrollY = 0
-		d.listCursor = 0
 		return d, nil
 	}
 	if key == "enter" || key == " " {
@@ -371,9 +532,9 @@ func (d *DetailView) Update(msg tea.Msg) (*DetailView, tea.Cmd) {
 	case components.NavUp:
 		d.handleCursorUp()
 	case components.NavHalfDown:
-		d.handleHalfPageDown()
+		d.handleHalfPage(d.VisibleRows() / 2)
 	case components.NavHalfUp:
-		d.handleHalfPageUp()
+		d.handleHalfPage(-d.VisibleRows() / 2)
 	case components.NavTop:
 		d.scrollY = 0
 		d.listCursor = 0
@@ -388,138 +549,607 @@ func (d *DetailView) Update(msg tea.Msg) (*DetailView, tea.Cmd) {
 }
 
 func (d *DetailView) handleCursorDown() {
-	if count := d.listTabItemCount(); count > 0 {
-		if d.listCursor < count-1 {
-			d.listCursor++
-		} else {
-			d.listCursor = 0
-		}
-	} else {
+	count := d.listTabItemCount()
+	if count == 0 {
 		d.scrollY++
+		return
+	}
+	if d.listCursor < count-1 {
+		d.listCursor++
+	} else {
+		d.listCursor = 0
 	}
 }
 
 func (d *DetailView) handleCursorUp() {
-	if count := d.listTabItemCount(); count > 0 {
-		if d.listCursor > 0 {
-			d.listCursor--
-		} else {
-			d.listCursor = count - 1
+	count := d.listTabItemCount()
+	if count == 0 {
+		if d.scrollY > 0 {
+			d.scrollY--
 		}
-	} else if d.scrollY > 0 {
-		d.scrollY--
+		return
 	}
-}
-
-func (d *DetailView) handleHalfPageDown() {
-	if count := d.listTabItemCount(); count > 0 {
-		d.listCursor += d.VisibleRows() / 2
-		if d.listCursor >= count {
-			d.listCursor = count - 1
-		}
+	if d.listCursor > 0 {
+		d.listCursor--
 	} else {
-		d.scrollY += d.VisibleRows() / 2
+		d.listCursor = count - 1
 	}
 }
 
-func (d *DetailView) handleHalfPageUp() {
-	if d.listTabItemCount() > 0 {
-		d.listCursor -= d.VisibleRows() / 2
-		if d.listCursor < 0 {
-			d.listCursor = 0
-		}
-	} else {
-		d.scrollY -= d.VisibleRows() / 2
-		if d.scrollY < 0 {
-			d.scrollY = 0
-		}
+func (d *DetailView) handleHalfPage(delta int) {
+	if count := d.listTabItemCount(); count > 0 {
+		d.listCursor = clampIndex(d.listCursor+delta, count)
+		return
 	}
+	d.scrollY = max(d.scrollY+delta, 0)
 }
 
+// handleActivation implements the Enter precedence in the pipeline view: a step
+// with a UUID opens its log, otherwise a truncated block expands.
 func (d *DetailView) handleActivation() (*DetailView, tea.Cmd) {
-	if d.IsListTab() && d.listCursor >= 0 && d.listCursor < len(d.blocks) {
-		if d.listCursor < len(d.blockKeys) && d.blockKeys[d.listCursor] != "" {
-			key := d.blockKeys[d.listCursor]
-			return d, func() tea.Msg {
-				return NavigateIssueMsg{Key: key}
-			}
+	if !d.IsListTab() || d.listCursor < 0 || d.listCursor >= len(d.blocks) {
+		return d, nil
+	}
+	if d.listCursor < len(d.blockKeys) && d.blockKeys[d.listCursor] != "" && d.pipeline != nil {
+		pipelineUUID := d.pipeline.UUID
+		stepUUID := d.blockKeys[d.listCursor]
+		return d, func() tea.Msg {
+			return StepSelectedMsg{PipelineUUID: pipelineUUID, StepUUID: stepUUID}
 		}
-		block := d.blocks[d.listCursor]
-		if len(block) > maxBlockLines {
-			return d, func() tea.Msg {
-				return ExpandBlockMsg{Title: "Details", Lines: block}
-			}
+	}
+	block := d.blocks[d.listCursor]
+	if len(block) > maxBlockLines {
+		return d, func() tea.Msg {
+			return ExpandBlockMsg{Title: "Details", Lines: block}
 		}
 	}
 	return d, nil
 }
 
-func (d *DetailView) VisibleRows() int {
-	return max(d.height-2, 1)
-}
-
+// View renders the panel for the current mode.
 func (d *DetailView) View() string {
 	contentWidth, innerH := components.PanelDimensions(d.width, d.height)
 
-	if d.mode == ModeSplash {
+	switch d.mode {
+	case ModeSplash:
 		return d.renderSplash(contentWidth, innerH)
-	}
-	if d.mode == ModeProject && d.project != nil {
-		return d.renderProjectView(contentWidth, innerH)
+	case ModeRepo:
+		if d.repo != nil {
+			return d.renderRepo(contentWidth, innerH)
+		}
+	case ModePullRequest:
+		if d.pr == nil {
+			placeholder := lipgloss.NewStyle().Foreground(theme.ColorGray).
+				Render("Select a pull request to view details")
+			return components.RenderPanel(d.buildTitle(titleBudget(contentWidth)),
+				clampLine(placeholder, contentWidth), d.width, innerH, d.focused)
+		}
+	case ModePipeline, ModeStepLog:
 	}
 
 	visible := d.VisibleRows()
-
-	if d.issue == nil {
-		title := "[0] Detail"
-		placeholder := lipgloss.NewStyle().Foreground(theme.ColorGray).Render("Select an issue to view details")
-		return components.RenderPanel(title, placeholder, d.width, innerH, d.focused)
-	}
-
-	title := d.buildTitle(contentWidth)
-
-	var contentLines []string
-	if count := d.listTabItemCount(); count > 0 {
-		contentLines = d.renderBlockList(contentWidth, visible)
-	} else {
-		switch d.activeTab {
-		case TabDetails:
-			contentLines = d.renderDescription(contentWidth)
-		default:
-			contentLines = []string{" No content."}
-		}
-	}
-
+	contentLines := d.bodyLines(contentWidth, visible)
 	totalLines := len(contentLines)
-	contentLines = d.clampAndSliceScroll(contentLines, visible)
-
-	body := strings.Join(contentLines, "\n")
+	contentLines = clampLines(d.clampAndSliceScroll(contentLines, visible), contentWidth)
 
 	footer := ""
 	if count := d.listTabItemCount(); count > 0 {
 		footer = fmt.Sprintf("%d of %d", d.listCursor+1, count)
 	}
 	scroll := &components.ScrollInfo{Total: totalLines, Visible: visible, Offset: d.scrollY}
-	return components.RenderPanelFull(title, footer, body, d.width, innerH, d.focused, scroll)
+	return components.RenderPanelFull(d.buildTitle(titleBudget(contentWidth)), footer,
+		strings.Join(contentLines, "\n"), d.width, innerH, d.focused, scroll)
 }
 
-func (d *DetailView) renderBlockList(contentWidth, visible int) []string {
+// titleBudget is the room the top border leaves for the title: the panel's
+// content width less the column the closing "╮" needs.
+func titleBudget(contentWidth int) int { return max(contentWidth-1, 0) }
+
+// clampLine truncates s to width display columns, keeping ANSI intact.
+func clampLine(s string, width int) string {
+	if ansi.StringWidth(s) > width {
+		return ansi.Truncate(s, width, "")
+	}
+	return s
+}
+
+// clampLines truncates every body line to the panel's content width in place.
+// renderPanelImpl pads short lines but never truncates long ones, so a single
+// over-wide line (splash art, a placeholder, an unbreakable URL out of glamour)
+// would widen the whole layout and push the neighbouring column off screen.
+func clampLines(lines []string, width int) []string {
+	for i, line := range lines {
+		lines[i] = clampLine(line, width)
+	}
+	return lines
+}
+
+func (d *DetailView) bodyLines(contentWidth, visible int) []string {
+	switch d.mode {
+	case ModePipeline:
+		header := d.listModeHeader(contentWidth)
+		if d.pipelineLoading || d.pipelineErr != "" || d.pipeline == nil {
+			return header
+		}
+		return append(header, d.renderBlockList(contentWidth, visible, len(header))...)
+	case ModeStepLog:
+		return d.renderStepLog(contentWidth)
+	case ModePullRequest, ModeRepo, ModeSplash:
+		return d.renderOverview(contentWidth)
+	default:
+		return []string{" No content."}
+	}
+}
+
+// titlePrefix is the mode title, without any tab bar.
+func (d *DetailView) titlePrefix() string {
+	switch d.mode {
+	case ModePullRequest:
+		if d.pr == nil {
+			return "[0] Detail"
+		}
+		return "[0] #" + strconv.Itoa(d.pr.ID) + " " + d.pr.RepoSlug()
+	case ModePipeline:
+		return "[0] Pipeline #" + strconv.Itoa(d.pipelineBuild)
+	case ModeStepLog:
+		return "[0] Pipeline #" + strconv.Itoa(d.pipelineBuild) + " · " + d.currentStepName()
+	case ModeRepo:
+		if d.repo == nil {
+			return "[0] Repo"
+		}
+		return "[0] Repo: " + d.repo.Label()
+	case ModeSplash:
+		return "[0] lazybitbucket"
+	default:
+		return "[0] Detail"
+	}
+}
+
+// buildTitle appends the tab bar to the mode title, but only once there are at
+// least two tabs to choose between.
+func (d *DetailView) buildTitle(maxWidth int) string {
+	prefix := d.titlePrefix()
+	labels := d.tabLabels()
+	if len(labels) < 2 {
+		return components.TruncateEnd(prefix, maxWidth)
+	}
+
+	activeStyle := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
+	inactiveStyle := lipgloss.NewStyle().Foreground(theme.ColorWhite)
+	sep := lipgloss.NewStyle().Foreground(theme.ColorGray).Render(" - ")
+
+	parts := make([]string, 0, len(labels))
+	for _, t := range labels {
+		if t.tab == d.activeTab {
+			parts = append(parts, activeStyle.Render(t.label))
+		} else {
+			parts = append(parts, inactiveStyle.Render(t.label))
+		}
+	}
+	return prefix + sep + strings.Join(parts, sep)
+}
+
+func (d *DetailView) currentStepName() string {
+	for i := range d.steps {
+		if d.steps[i].UUID == d.stepUUID {
+			return d.steps[i].DisplayName(i)
+		}
+	}
+	return "step"
+}
+
+// ---------------------------------------------------------------------------
+// Overview (pull request) rendering
+// ---------------------------------------------------------------------------
+
+func (d *DetailView) renderOverview(width int) []string {
+	if d.pr == nil {
+		return []string{" No content."}
+	}
+	pr := d.pr
+	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
+	bold := lipgloss.NewStyle().Bold(true)
+
+	var lines []string
+	for _, l := range wrapText(pr.Title, width-2) {
+		lines = append(lines, " "+bold.Render(l))
+	}
+
+	identity := "#" + strconv.Itoa(pr.ID) + " · " + pr.RepoFullName() + " · " +
+		stateStyle(pr.State).Render(string(pr.State))
+	if pr.Draft {
+		identity += gray.Render(" · draft")
+	}
+	lines = append(lines, " "+identity)
+	lines = append(lines, " "+components.TruncateEnd(pr.SourceBranch()+" → "+pr.DestinationBranch(), width-2))
+
+	meta := fmt.Sprintf("Author: %s   Created %s ago · Updated %s ago · %d comments · %d tasks",
+		theme.AuthorRender(pr.Author.Name()), timeAgo(pr.CreatedOn), timeAgo(pr.UpdatedOn),
+		pr.CommentCount, pr.TaskCount)
+	lines = append(lines, " "+meta)
+	lines = append(lines, " "+d.reviewersLine())
+	lines = append(lines, d.buildsLines(width)...)
+
+	lines = append(lines, " "+gray.Render(strings.Repeat("─", max(width-2, 1))))
+	lines = append(lines, d.renderDescription(width)...)
+	return lines
+}
+
+func (d *DetailView) reviewersLine() string {
+	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
+	green := lipgloss.NewStyle().Foreground(theme.ColorGreen)
+	red := lipgloss.NewStyle().Foreground(theme.ColorRed)
+
+	pr := d.pr
+	if !pr.HasReviewData() {
+		return "Reviewers: " + gray.Render("loading…")
+	}
+
+	seen := make(map[string]bool)
+	var parts []string
+	appendReviewer := func(acct bitbucket.Account, state bitbucket.ParticipantState, approved bool) {
+		if seen[acct.UUID] {
+			return
+		}
+		seen[acct.UUID] = true
+		switch {
+		case approved || state == bitbucket.ParticipantApproved:
+			parts = append(parts, green.Render("✓ ")+theme.AuthorRender(acct.Name()))
+		case state == bitbucket.ParticipantChangesRequested:
+			parts = append(parts, red.Render("✗ ")+theme.AuthorRender(acct.Name()))
+		default:
+			parts = append(parts, gray.Render("· ")+theme.AuthorRender(acct.Name()))
+		}
+	}
+
+	for _, p := range pr.Participants {
+		if p.Role != bitbucket.RoleReviewer && !p.Approved && p.State == "" {
+			continue
+		}
+		appendReviewer(p.User, p.State, p.Approved)
+	}
+	for _, reviewer := range pr.Reviewers {
+		appendReviewer(reviewer, "", false)
+	}
+
+	if len(parts) == 0 {
+		return "Reviewers: " + gray.Render("(none)")
+	}
+	return "Reviewers: " + strings.Join(parts, "   ")
+}
+
+func (d *DetailView) buildsLines(width int) []string {
+	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
+	if !d.statusesLoaded {
+		return []string{" Builds: " + gray.Render("loading…")}
+	}
+	if len(d.statuses) == 0 {
+		return []string{" Builds: " + gray.Render("none")}
+	}
+	lines := make([]string, 0, len(d.statuses))
+	for _, status := range d.statuses {
+		name := status.Name
+		if name == "" {
+			name = status.Key
+		}
+		label := fmt.Sprintf("%s %s  %s (%s)",
+			buildGlyph(status.State, false), string(status.State),
+			components.TruncateEnd(name, max(width-30, 8)), timeAgo(status.UpdatedOn))
+		lines = append(lines, " Builds: "+label)
+	}
+	return lines
+}
+
+func (d *DetailView) renderDescription(width int) []string {
+	if d.pr.Description == "" {
+		return []string{" " + lipgloss.NewStyle().Foreground(theme.ColorGray).Render("(no description)")}
+	}
+	rendered := d.renderer.Render(d.pr.Description, width-1)
+	if len(rendered) == 0 {
+		return []string{" " + lipgloss.NewStyle().Foreground(theme.ColorGray).Render("(no description)")}
+	}
+	lines := make([]string, 0, len(rendered))
+	for _, l := range rendered {
+		lines = append(lines, " "+l)
+	}
+	return lines
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline rendering
+// ---------------------------------------------------------------------------
+
+// listModeHeader is the fixed preamble drawn above the block list. Its height
+// is what the block hit-test and auto-scroll offset by.
+func (d *DetailView) listModeHeader(width int) []string {
+	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
+
+	if d.pipelineErr != "" {
+		return []string{" " + d.theme.ErrorText.Render(components.TruncateEnd(d.pipelineErr, width-2))}
+	}
+	if d.pipelineLoading || d.pipeline == nil {
+		return []string{" " + gray.Render(fmt.Sprintf("Loading pipeline #%d…", d.pipelineBuild))}
+	}
+
+	p := d.pipeline
+	summary := p.State.Summary()
+	head := fmt.Sprintf("Pipeline #%d · %s · %s · %s",
+		p.BuildNumber, pipelineResultStyle(summary).Render(summary),
+		formatDuration(p.Duration()), p.Trigger.Name)
+	if p.Creator != nil {
+		head += " · by " + theme.AuthorRender(p.Creator.Name())
+	}
+	if age := timeAgo(p.CreatedOn); age != "" {
+		head += " · " + age + " ago"
+	}
+
+	lines := []string{" " + head, " " + gray.Render(pipelineTargetLine(p.Target))}
+	if p.State.Result != nil && p.State.Result.Error != nil {
+		errText := p.State.Result.Error.Key
+		if msg := p.State.Result.Error.Message; msg != "" {
+			errText = strings.TrimPrefix(errText+": "+msg, ": ")
+		}
+		for _, l := range wrapText(errText, width-2) {
+			lines = append(lines, " "+d.theme.ErrorText.Render(l))
+		}
+	}
+	lines = append(lines, " "+gray.Render(strings.Repeat("─", max(width-2, 1))))
+	return lines
+}
+
+func pipelineTargetLine(target bitbucket.PipelineTarget) string {
+	if pr := target.PullRequest; pr != nil {
+		return fmt.Sprintf("PR #%d %s → %s", pr.ID, target.Source, target.Destination)
+	}
+	if branch := target.BranchName(); branch != "" {
+		return "branch " + branch
+	}
+	return "target " + target.Type
+}
+
+// renderStepBlocks builds one block per pipeline step: a headline with glyph,
+// name and duration, plus the error message lines of a failed step.
+func (d *DetailView) renderStepBlocks(width int) [][]string {
+	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
+	blocks := make([][]string, 0, len(d.steps))
+
+	nameWidth := max(width-14, 8)
+	for i := range d.steps {
+		step := d.steps[i]
+		result := stepResultName(step)
+		glyph, style := stepGlyph(step)
+
+		duration := formatDuration(step.Duration())
+		if result == resultNotRun {
+			duration = notRunLabel
+		}
+
+		name := components.TruncateEnd(step.DisplayName(i), nameWidth)
+		var headline string
+		if result == resultNotRun || result == "EXPIRED" {
+			// A step that never ran is dimmed whole, glyph included.
+			headline = gray.Render(glyph + " " + padRight(name, nameWidth) + " " + duration)
+		} else {
+			headline = style.Render(glyph) + " " + padRight(name, nameWidth) + " " + gray.Render(duration)
+		}
+
+		block := []string{headline}
+		if step.State.Result != nil && step.State.Result.Error != nil {
+			errText := step.State.Result.Error.Key
+			if msg := step.State.Result.Error.Message; msg != "" {
+				errText = strings.TrimPrefix(errText+": "+msg, ": ")
+			}
+			for _, l := range wrapText(errText, width-4) {
+				block = append(block, "   "+d.theme.ErrorText.Render(l))
+			}
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks
+}
+
+// stepResultName is the step's terminal result, "" while it has not finished.
+func stepResultName(step bitbucket.PipelineStep) string {
+	if step.State.Result == nil {
+		return ""
+	}
+	return step.State.Result.Name
+}
+
+func stepGlyph(step bitbucket.PipelineStep) (string, lipgloss.Style) {
+	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
+	switch stepResultName(step) {
+	case "SUCCESSFUL":
+		return "✔", lipgloss.NewStyle().Foreground(theme.ColorGreen)
+	case "FAILED", "ERROR":
+		return "✘", lipgloss.NewStyle().Foreground(theme.ColorRed)
+	case "STOPPED":
+		return "■", gray
+	case resultNotRun, "EXPIRED":
+		return "-", gray
+	default:
+		if step.State.Name == "IN_PROGRESS" {
+			return "●", lipgloss.NewStyle().Foreground(theme.ColorYellow)
+		}
+		return "·", gray
+	}
+}
+
+// pipelineResultStyle colours a pipeline or step outcome word.
+func pipelineResultStyle(name string) lipgloss.Style {
+	switch name {
+	case "SUCCESSFUL":
+		return lipgloss.NewStyle().Foreground(theme.ColorGreen)
+	case "FAILED", "ERROR":
+		return lipgloss.NewStyle().Foreground(theme.ColorRed)
+	case "STOPPED", "EXPIRED", resultNotRun:
+		return lipgloss.NewStyle().Foreground(theme.ColorGray)
+	default:
+		return lipgloss.NewStyle().Foreground(theme.ColorYellow)
+	}
+}
+
+// formatDuration renders a run or step duration compactly: "35s", "9m46s",
+// "1h05m".
+func formatDuration(d time.Duration) string {
+	secs := max(int(d.Seconds()), 0)
+	switch {
+	case secs < 60:
+		return strconv.Itoa(secs) + "s"
+	case secs < 3600:
+		return fmt.Sprintf("%dm%02ds", secs/60, secs%60)
+	default:
+		return fmt.Sprintf("%dh%02dm", secs/3600, (secs%3600)/60)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step log rendering
+// ---------------------------------------------------------------------------
+
+func (d *DetailView) renderStepLog(width int) []string {
+	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
+	switch {
+	case d.stepLogErr != "":
+		lines := make([]string, 0, 2)
+		for _, l := range wrapText(d.stepLogErr, width-2) {
+			lines = append(lines, " "+d.theme.ErrorText.Render(l))
+		}
+		return lines
+	case d.stepLogLoading:
+		return []string{" " + gray.Render("Loading log…")}
+	case strings.TrimSpace(d.stepLog) == "":
+		return []string{" " + gray.Render("(empty log)")}
+	}
+
+	var lines []string
+	for _, raw := range strings.Split(strings.ReplaceAll(d.stepLog, "\r\n", "\n"), "\n") {
+		for _, chunk := range hardWrapLine(raw, width-2) {
+			lines = append(lines, " "+chunk)
+		}
+	}
+	return lines
+}
+
+// ---------------------------------------------------------------------------
+// Repo and splash rendering
+// ---------------------------------------------------------------------------
+
+func (d *DetailView) renderRepo(contentWidth, innerH int) string {
+	repo := d.repo
+	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
+	val := d.theme.ValueStyle
+
+	lines := []string{
+		fmt.Sprintf(" %-12s %s", "Slug:", val.Render(repo.Label())),
+		fmt.Sprintf(" %-12s %s", "Name:", val.Render(repo.Name)),
+	}
+	if repo.FullName != "" {
+		lines = append(lines, fmt.Sprintf(" %-12s %s", "Full name:", val.Render(repo.FullName)))
+	}
+	if repo.MainBranch != "" {
+		lines = append(lines, fmt.Sprintf(" %-12s %s", "Main branch:", val.Render(repo.MainBranch)))
+	}
+	if repo.OpenCount >= 0 {
+		lines = append(lines, fmt.Sprintf(" %-12s %s", "Open PRs:", val.Render(strconv.Itoa(repo.OpenCount))))
+	}
+	if repo.URL != "" {
+		lines = append(lines, fmt.Sprintf(" %-12s %s", "URL:", gray.Render(repo.URL)))
+	}
+
+	title := components.TruncateEnd(d.titlePrefix(), titleBudget(contentWidth))
+	return components.RenderPanel(title, strings.Join(clampLines(lines, contentWidth), "\n"),
+		d.width, innerH, d.focused)
+}
+
+// splashArtWidth is the block banner's 51 columns plus its two-column indent.
+// A narrower panel gets a plain heading instead of a chopped-up banner.
+const splashArtWidth = 53
+
+// splashArt is "lazybitbucket" as a 51-column block banner.
+const splashArt = `█   ███ ███ █ █ ██  ███ ███ ██  █ █ ███ █ █ ███ ███
+█   █ █   █ █ █ █ █  █   █  █ █ █ █ █   █ █ █    █
+█   ███  █  ███ ██   █   █  ██  █ █ █   ██  ██   █
+█   █ █ █    █  █ █  █   █  █ █ █ █ █   █ █ █    █
+███ █ █ ███  █  ██  ███  █  ██  ███ ███ █ █ ███  █`
+
+func (d *DetailView) renderSplash(contentWidth, innerH int) string {
+	green := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
+	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
+	label := lipgloss.NewStyle().Foreground(theme.ColorGreen)
+	val := lipgloss.NewStyle()
+
+	artLines := strings.Split(splashArt, "\n")
+	lines := make([]string, 0, len(artLines)+9)
+	if contentWidth >= splashArtWidth {
+		for _, l := range artLines {
+			lines = append(lines, "  "+green.Render(l))
+		}
+	} else {
+		lines = append(lines, "  "+green.Render("lazybitbucket"))
+	}
+
+	s := d.splash
+	repos := strconv.Itoa(s.RepoCount)
+	if s.RepoNote != "" {
+		repos = s.RepoNote
+	}
+
+	lines = append(lines,
+		"",
+		gray.Render("  lazybitbucket "+s.Version),
+		"",
+		"  "+strings.Repeat("─", 30),
+		"",
+		fmt.Sprintf("  %s      %s", label.Render("Auth:"), val.Render(s.AuthMethod)),
+		fmt.Sprintf("  %s %s", label.Render("Workspace:"), val.Render(s.Workspace)),
+		fmt.Sprintf("  %s      %s", label.Render("User:"), val.Render(s.User)),
+		fmt.Sprintf("  %s     %s", label.Render("Repos:"), val.Render(repos)),
+	)
+
+	title := components.TruncateEnd(d.titlePrefix(), titleBudget(contentWidth))
+	return components.RenderPanel(title, strings.Join(clampLines(lines, contentWidth), "\n"),
+		d.width, innerH, d.focused)
+}
+
+// ---------------------------------------------------------------------------
+// Block list engine
+// ---------------------------------------------------------------------------
+
+// renderActiveBlocks dispatches block rendering for the current mode.
+func (d *DetailView) renderActiveBlocks(width int) [][]string {
+	if d.mode != ModePipeline {
+		return nil
+	}
+	return d.renderStepBlocks(width)
+}
+
+// buildBlockKeys pairs each block with the step it renders, so activating a
+// block can name the step to fetch a log for.
+func (d *DetailView) buildBlockKeys(blocks [][]string) []string {
+	keys := make([]string, len(blocks))
+	for i := range blocks {
+		if i < len(d.steps) {
+			keys[i] = d.steps[i].UUID
+		}
+	}
+	return keys
+}
+
+// renderBlockList draws the blocks with a cursor bar, collapsing anything
+// longer than maxBlockLines. headerLines is how many lines precede the list, so
+// auto-scroll keeps the selected block visible in the whole body.
+func (d *DetailView) renderBlockList(contentWidth, visible, headerLines int) []string {
 	blockWidth := contentWidth - 1
-	blocks := d.renderActiveTabBlocks(blockWidth)
+	blocks := d.renderActiveBlocks(blockWidth)
 
-	if d.listCursor >= len(blocks) {
-		d.listCursor = len(blocks) - 1
-	}
-	if d.listCursor < 0 {
-		d.listCursor = 0
-	}
-
+	d.listCursor = clampIndex(d.listCursor, len(blocks))
 	d.blocks = blocks
 	d.blockKeys = d.buildBlockKeys(blocks)
 
 	bar := lipgloss.NewStyle().Foreground(theme.ColorBlue).Render("▎")
 	ellipsis := lipgloss.NewStyle().Foreground(theme.ColorGray).Render("    ...")
-	sep := strings.Repeat("─", blockWidth)
+	sep := strings.Repeat("─", max(blockWidth, 1))
 
 	var lines []string
 	for i, block := range blocks {
@@ -529,38 +1159,40 @@ func (d *DetailView) renderBlockList(contentWidth, visible int) []string {
 			displayBlock = block[:maxBlockLines]
 			truncated = true
 		}
+		prefix := " "
+		if i == d.listCursor && d.focused {
+			prefix = bar
+		}
 		for _, line := range displayBlock {
-			if i == d.listCursor && d.focused {
-				lines = append(lines, bar+line)
-			} else {
-				lines = append(lines, " "+line)
-			}
+			lines = append(lines, prefix+line)
 		}
 		if truncated {
-			if i == d.listCursor && d.focused {
-				lines = append(lines, bar+ellipsis)
-			} else {
-				lines = append(lines, " "+ellipsis)
-			}
+			lines = append(lines, prefix+ellipsis)
 		}
 		if i < len(blocks)-1 {
 			lines = append(lines, " "+sep)
 		}
 	}
 
-	d.autoScrollToBlock(blocks, visible)
+	d.autoScrollToBlock(blocks, visible, headerLines)
 	return lines
 }
 
-func (d *DetailView) autoScrollToBlock(blocks [][]string, visible int) {
-	displayBlockHeight := func(block []string) int {
-		h := len(block)
-		if h > maxBlockLines {
-			h = maxBlockLines + 1
-		}
-		return h
+// displayBlockHeight is how many lines a block occupies once collapsed.
+func displayBlockHeight(block []string) int {
+	if len(block) > maxBlockLines {
+		return maxBlockLines + 1
 	}
-	lineStart := 0
+	return len(block)
+}
+
+// autoScrollToBlock moves scrollY so the whole selected block stays visible,
+// with one line of margin when the panel is tall enough to afford it.
+func (d *DetailView) autoScrollToBlock(blocks [][]string, visible, headerLines int) {
+	if len(blocks) == 0 {
+		return
+	}
+	lineStart := headerLines
 	for i := 0; i < d.listCursor && i < len(blocks); i++ {
 		lineStart += displayBlockHeight(blocks[i]) + 1
 	}
@@ -577,775 +1209,22 @@ func (d *DetailView) autoScrollToBlock(blocks [][]string, visible int) {
 	}
 }
 
+// clampAndSliceScroll clamps scrollY to the content and returns the visible
+// window of lines.
 func (d *DetailView) clampAndSliceScroll(contentLines []string, visible int) []string {
 	maxScroll := max(len(contentLines)-visible, 0)
-	if d.scrollY > maxScroll {
-		d.scrollY = maxScroll
-	}
-	if d.scrollY < 0 {
-		d.scrollY = 0
-	}
-	scrolled := contentLines
-	if d.scrollY < len(scrolled) {
-		scrolled = scrolled[d.scrollY:]
-	} else {
-		scrolled = nil
-	}
+	d.scrollY = min(max(d.scrollY, 0), maxScroll)
+	scrolled := contentLines[min(d.scrollY, len(contentLines)):]
 	if len(scrolled) > visible {
 		scrolled = scrolled[:visible]
 	}
 	return scrolled
 }
 
-type tabLabel struct {
-	tab   DetailTab
-	label string
-}
-
-func (d *DetailView) tabLabels() []tabLabel {
-	var tabs []tabLabel
-	tabs = append(tabs, tabLabel{TabDetails, "Body"})
-	if d.issue != nil {
-		tabs = append(tabs, tabLabel{TabComments, "Cmt"})
+// clampIndex keeps i inside [0, count), returning 0 for an empty range.
+func clampIndex(i, count int) int {
+	if count <= 0 {
+		return 0
 	}
-	if d.issue != nil && len(d.issue.Changelog) > 0 {
-		tabs = append(tabs, tabLabel{TabHistory, "Hist"})
-	}
-	return tabs
-}
-
-func (d *DetailView) buildTitle(maxWidth int) string {
-	tabs := d.tabLabels()
-
-	activeStyle := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
-	inactiveStyle := lipgloss.NewStyle().Foreground(theme.ColorWhite)
-	sepStyle := lipgloss.NewStyle().Foreground(theme.ColorGray)
-
-	prefix := "[0] " + d.issue.Key
-
-	var tabParts []string
-	for _, t := range tabs {
-		if t.tab == d.activeTab {
-			tabParts = append(tabParts, activeStyle.Render(t.label))
-		} else {
-			tabParts = append(tabParts, inactiveStyle.Render(t.label))
-		}
-	}
-
-	sep := sepStyle.Render(" - ")
-	return prefix + sep + strings.Join(tabParts, sep)
-}
-
-func (d *DetailView) renderDescription(width int) []string {
-	// Try rich ADF rendering first.
-	if d.issue.DescriptionADF != nil {
-		if lines := d.renderer.Render(d.issue.DescriptionADF, width-1); len(lines) > 0 {
-			result := make([]string, len(lines))
-			for i, l := range lines {
-				result[i] = " " + l
-			}
-			return result
-		}
-	}
-
-	// Fallback: plain text (Server/DC may use Jira wiki markup).
-	valStyle := d.theme.ValueStyle
-	desc := wikiToPlain(d.issue.Description)
-	if desc == "" {
-		desc = "(no description)"
-	}
-	wrapped := wrapText(desc, width-2)
-	styled := colorURLsWrapped(wrapped)
-	lines := make([]string, 0, len(styled))
-	for _, line := range styled {
-		lines = append(lines, " "+colorMentions(valStyle.Render(line)))
-	}
-	return lines
-}
-
-func urlStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(theme.ColorCyan).Underline(true)
-}
-
-// colorURLs highlights http/https URLs in a single line with underlined cyan.
-func colorURLs(s string) string {
-	result := s
-	for _, prefix := range []string{"https://", "http://"} {
-		for {
-			start := strings.Index(result, prefix)
-			if start == -1 {
-				break
-			}
-			rest := result[start:]
-			end := strings.IndexAny(rest, " \t\n")
-			if end == -1 {
-				end = len(rest)
-			}
-			rawURL := rest[:end]
-			colored := urlStyle().Render(rawURL)
-			result = result[:start] + colored + rest[end:]
-		}
-	}
-	return result
-}
-
-// colorURLsWrapped highlights URLs across wrapped lines. If a URL was split
-// by wrapText, the continuation on the next line is also highlighted.
-func colorURLsWrapped(lines []string) []string {
-	result := make([]string, len(lines))
-	urlCont := false
-	for i, line := range lines {
-		if urlCont {
-			// Previous line ended mid-URL — highlight continuation.
-			end := strings.IndexAny(line, " \t")
-			if end == -1 {
-				result[i] = urlStyle().Render(line)
-				urlCont = true
-				continue
-			}
-			result[i] = urlStyle().Render(line[:end]) + colorURLs(line[end:])
-		} else {
-			result[i] = colorURLs(line)
-		}
-		// Check if this line ends mid-URL (URL extends to end of line).
-		urlCont = lineEndsInURL(lines[i])
-	}
-	return result
-}
-
-// lineEndsInURL returns true if the raw line ends inside a URL.
-func lineEndsInURL(line string) bool {
-	lastURL := strings.LastIndex(line, "https://")
-	if idx := strings.LastIndex(line, "http://"); idx > lastURL {
-		lastURL = idx
-	}
-	if lastURL == -1 {
-		return false
-	}
-	// If no space after the URL start, it extends to end of line.
-	return !strings.ContainsAny(line[lastURL:], " \t")
-}
-
-// colorMentions replaces \x00MENTION:@Name\x00 markers with colored author names.
-func colorMentions(s string) string {
-	const prefix = "\x00MENTION:"
-	const suffix = "\x00"
-	result := s
-	for {
-		start := strings.Index(result, prefix)
-		if start == -1 {
-			break
-		}
-		rest := result[start+len(prefix):]
-		name, after, found := strings.Cut(rest, suffix)
-		if !found {
-			break
-		}
-		colored := theme.AuthorRender(name)
-		result = result[:start] + colored + after
-	}
-	return result
-}
-
-// buildBlockKeys returns an issue key per block for navigable tabs (subtasks, links).
-func (d *DetailView) buildBlockKeys(blocks [][]string) []string {
-	return make([]string, len(blocks))
-}
-
-// renderActiveTabBlocks dispatches block rendering to the current tab.
-func (d *DetailView) renderActiveTabBlocks(width int) [][]string {
-	switch d.activeTab { //nolint:exhaustive
-	case TabComments:
-		return d.renderCommentBlocks(width)
-	case TabHistory:
-		return d.renderHistoryBlocks(width)
-	}
-	return nil
-}
-
-// renderEntry renders a single author+time header + content block + separator.
-
-func (d *DetailView) renderHistoryBlocks(width int) [][]string {
-	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
-	blocks := make([][]string, 0, len(d.issue.Changelog))
-
-	// Reverse order: newest first.
-	for _, v := range slices.Backward(d.issue.Changelog) {
-		entry := v
-		author := unknownLabel
-		if entry.Author != nil {
-			author = entry.Author.DisplayName
-		}
-
-		var block []string
-		block = append(block, " "+theme.AuthorRender(author)+" "+gray.Render(timeAgo(entry.Created)))
-
-		for _, item := range entry.Items {
-			from := cleanWikiMarkup(item.FromString)
-			to := cleanWikiMarkup(item.ToString)
-			if from == "" {
-				from = noneLabel
-			}
-			if to == "" {
-				to = noneLabel
-			}
-
-			field := strings.ToLower(item.Field)
-
-			if field == "description" || field == "comment" || field == "environment" {
-				block = append(block, "   "+gray.Render(item.Field)+gray.Render(":"))
-				block = append(block, renderDiff(from, to, width-4)...)
-				continue
-			}
-
-			if isMultiSelectField(field) {
-				block = append(block, "   "+gray.Render(item.Field)+":")
-				block = append(block, renderMultiSelectDiff(from, to)...)
-				continue
-			}
-
-			// Build plain-text line first, wrap, then apply styling.
-			plainLine := fmt.Sprintf("   %s: %s → %s", item.Field, from, to)
-			wrapped := wrapText(plainLine, width-2)
-			for _, wl := range wrapped {
-				// Apply field-name gray.
-				wl = strings.Replace(wl, item.Field+":", gray.Render(item.Field)+":", 1)
-				// Apply value coloring.
-				if field == fieldStatus {
-					if from != noneLabel {
-						wl = strings.Replace(wl, from, statusNameStyle(from).Render(from), 1)
-					}
-					if to != noneLabel {
-						wl = strings.Replace(wl, to, statusNameStyle(to).Render(to), 1)
-					}
-				} else if isPersonField(field) {
-					if from != noneLabel {
-						wl = strings.Replace(wl, from, theme.AuthorRender(from), 1)
-					}
-					if to != noneLabel {
-						wl = strings.Replace(wl, to, theme.AuthorRender(to), 1)
-					}
-				}
-				block = append(block, colorURLs(wl))
-			}
-		}
-
-		blocks = append(blocks, block)
-	}
-	return blocks
-}
-
-// statusNameStyle returns a color style based on status name heuristics.
-func statusNameStyle(name string) lipgloss.Style {
-	lower := strings.ToLower(name)
-	switch {
-	case strings.Contains(lower, "done") || strings.Contains(lower, "resolved") ||
-		strings.Contains(lower, "closed") || strings.Contains(lower, "complete"):
-		return lipgloss.NewStyle().Foreground(theme.ColorGreen)
-	case strings.Contains(lower, "progress") || strings.Contains(lower, "development") ||
-		strings.Contains(lower, "review") || strings.Contains(lower, "testing"):
-		return lipgloss.NewStyle().Foreground(theme.ColorYellow)
-	case strings.Contains(lower, "todo") || strings.Contains(lower, "open") ||
-		strings.Contains(lower, "new") || strings.Contains(lower, "backlog") ||
-		strings.Contains(lower, "ready"):
-		return lipgloss.NewStyle().Foreground(theme.ColorCyan)
-	default:
-		return lipgloss.NewStyle().Foreground(theme.ColorWhite)
-	}
-}
-
-// isPersonField returns true if the field name likely contains a person value.
-func isPersonField(field string) bool {
-	personFields := []string{
-		"assignee", "reviewer", "reporter", "creator", "tester",
-		"qa", "developer", "lead", "owner", "approver",
-	}
-	lower := strings.ToLower(field)
-	for _, pf := range personFields {
-		if lower == pf || strings.Contains(lower, pf) {
-			return true
-		}
-	}
-	return false
-}
-
-func isMultiSelectField(field string) bool {
-	switch field {
-	case "labels", "components", "fix versions", "affects versions", "tags", "component":
-		return true
-	}
-	return false
-}
-
-func renderMultiSelectDiff(from, to string) []string {
-	red := lipgloss.NewStyle().Foreground(theme.ColorRed)
-	green := lipgloss.NewStyle().Foreground(theme.ColorGreen)
-
-	parseSet := func(s string) map[string]struct{} {
-		m := make(map[string]struct{})
-		if s == "" || s == noneLabel {
-			return m
-		}
-		for _, v := range strings.Split(s, ",") {
-			v = strings.TrimSpace(v)
-			if v != "" {
-				m[v] = struct{}{}
-			}
-		}
-		return m
-	}
-
-	parseList := func(s string) []string {
-		if s == "" || s == noneLabel {
-			return nil
-		}
-		var out []string
-		for _, v := range strings.Split(s, ",") {
-			v = strings.TrimSpace(v)
-			if v != "" {
-				out = append(out, v)
-			}
-		}
-		return out
-	}
-
-	fromSet := parseSet(from)
-	toSet := parseSet(to)
-	fromList := parseList(from)
-	toList := parseList(to)
-
-	var lines []string
-	// Removed items (in from but not in to), preserve original order.
-	for _, v := range fromList {
-		if _, ok := toSet[v]; !ok {
-			lines = append(lines, red.Render("   - "+v))
-		}
-	}
-	// Added items (in to but not in from), preserve original order.
-	for _, v := range toList {
-		if _, ok := fromSet[v]; !ok {
-			lines = append(lines, green.Render("   + "+v))
-		}
-	}
-	return lines
-}
-
-func (d *DetailView) renderCommentBlocks(width int) [][]string {
-	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
-	valStyle := d.theme.ValueStyle
-	blocks := make([][]string, 0, len(d.issue.Comments))
-	for _, c := range d.issue.Comments {
-		author := unknownLabel
-		if c.Author != nil {
-			author = c.Author.DisplayName
-		}
-		block := []string{" " + theme.AuthorRender(author) + " " + gray.Render(timeAgo(c.Created))}
-
-		// Try rich ADF rendering first.
-		var bodyLines []string
-		if c.BodyADF != nil {
-			bodyLines = d.renderer.Render(c.BodyADF, width-1)
-		}
-		if len(bodyLines) > 0 {
-			for _, l := range bodyLines {
-				block = append(block, " "+l)
-			}
-		} else {
-			// Fallback: plain text (Server/DC may use wiki markup).
-			wrapped := colorURLsWrapped(wrapText(wikiToPlain(c.Body), width-2))
-			for _, wl := range wrapped {
-				block = append(block, " "+colorMentions(valStyle.Render(wl)))
-			}
-		}
-		blocks = append(blocks, block)
-	}
-	return blocks
-}
-
-func (d *DetailView) renderSplash(contentWidth, innerH int) string {
-	green := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
-	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
-	label := lipgloss.NewStyle().Foreground(theme.ColorGreen)
-	val := lipgloss.NewStyle()
-
-	ascii := `   _                  _ _
-  | |                (_|_)
-  | | __ _ _____   _  _ _ _ __ __ _
-  | |/ _` + "`" + ` |_  / | | || | | '__/ _` + "`" + ` |
-  | | (_| |/ /| |_| || | | | | (_| |
-  |_|\__,_/___|\__, || |_|_|  \__,_|
-                __/ |/ |
-               |___/__/`
-
-	var lines []string
-	for _, l := range strings.Split(ascii, "\n") {
-		lines = append(lines, green.Render(l))
-	}
-	lines = append(lines, "")
-	lines = append(lines, gray.Render("  lazyjira "+d.splash.Version))
-	lines = append(lines, gray.Render("  (c) 2026 textfuel"))
-
-	// Connection info.
-	s := d.splash
-	lines = append(lines, "")
-	lines = append(lines, "  "+strings.Repeat("─", 30))
-	lines = append(lines, "")
-	lines = append(lines, fmt.Sprintf("  %s  %s", label.Render("Auth:"), val.Render(s.AuthMethod)))
-	lines = append(lines, fmt.Sprintf("  %s  %s", label.Render("Host:"), val.Render(s.Host)))
-	lines = append(lines, fmt.Sprintf("  %s %s", label.Render("Email:"), val.Render(s.Email)))
-	if s.Project != "" {
-		lines = append(lines, fmt.Sprintf("  %s  %s", label.Render("Project:"), val.Render(s.Project)))
-	}
-
-	content := strings.Join(lines, "\n")
-	return components.RenderPanel("[0] lazyjira", content, d.width, innerH, d.focused)
-}
-
-func (d *DetailView) renderProjectView(contentWidth, innerH int) string {
-	p := d.project
-	valStyle := d.theme.ValueStyle
-	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
-
-	var lines []string
-	lines = append(lines, fmt.Sprintf(" %-11s %s", "Key:", valStyle.Render(p.Key)))
-	lines = append(lines, fmt.Sprintf(" %-11s %s", "Name:", valStyle.Render(p.Name)))
-	if p.Lead != nil {
-		lines = append(lines, fmt.Sprintf(" %-11s %s", "Lead:", theme.AuthorRender(p.Lead.DisplayName)))
-	}
-	if p.ID != "" {
-		lines = append(lines, fmt.Sprintf(" %-11s %s", "ID:", gray.Render(p.ID)))
-	}
-
-	content := strings.Join(lines, "\n")
-	title := "[0] Project: " + p.Name
-	title = components.TruncateEnd(title, contentWidth-2)
-	return components.RenderPanel(title, content, d.width, innerH, d.focused)
-}
-
-// renderDiff shows removed lines in red and added lines in green.
-func renderDiff(from, to string, maxWidth int) []string {
-	redStyle := lipgloss.NewStyle().Foreground(theme.ColorRed)
-	greenStyle := lipgloss.NewStyle().Foreground(theme.ColorGreen)
-
-	fromLines := strings.Split(strings.TrimSpace(from), "\n")
-	toLines := strings.Split(strings.TrimSpace(to), "\n")
-
-	// Build sets for simple diff.
-	fromSet := make(map[string]bool)
-	toSet := make(map[string]bool)
-	for _, l := range fromLines {
-		fromSet[strings.TrimSpace(l)] = true
-	}
-	for _, l := range toLines {
-		toSet[strings.TrimSpace(l)] = true
-	}
-
-	var lines []string
-
-	// Show removed lines (in from but not in to).
-	for _, l := range fromLines {
-		trimmed := strings.TrimSpace(l)
-		if trimmed == "" || trimmed == "none" {
-			continue
-		}
-		if !toSet[trimmed] {
-			for _, wl := range wrapText("- "+trimmed, maxWidth) {
-				lines = append(lines, "    "+redStyle.Render(wl))
-			}
-		}
-	}
-
-	// Show added lines (in to but not in from).
-	for _, l := range toLines {
-		trimmed := strings.TrimSpace(l)
-		if trimmed == "" || trimmed == "none" {
-			continue
-		}
-		if !fromSet[trimmed] {
-			for _, wl := range wrapText("+ "+trimmed, maxWidth) {
-				lines = append(lines, "    "+greenStyle.Render(wl))
-			}
-		}
-	}
-
-	if len(lines) == 0 {
-		lines = append(lines, "    "+lipgloss.NewStyle().Foreground(theme.ColorGray).Render("(content changed)"))
-	}
-
-	return lines
-}
-
-// URLGroup is a named group of URLs for the URL picker
-type URLGroup struct {
-	Section string
-	URLs    []string
-}
-
-// ExtractURLs returns URLs found in the issue, grouped by source
-func ExtractURLs(issue *jira.Issue, host string) []URLGroup {
-	if issue == nil {
-		return nil
-	}
-	seen := make(map[string]bool)
-	// Skip the issue's own URL — it's already open.
-	seen[host+"/browse/"+issue.Key] = true
-
-	add := func(urls *[]string, u string) {
-		if u != "" && !seen[u] {
-			seen[u] = true
-			*urls = append(*urls, u)
-		}
-	}
-
-	var groups []URLGroup
-
-	// Body (description): prefer ADF, fallback to plain text.
-	var body []string
-	if issue.DescriptionADF != nil {
-		for _, u := range extractADFURLs(issue.DescriptionADF) {
-			add(&body, u)
-		}
-	} else {
-		for _, u := range findURLs(issue.Description) {
-			add(&body, u)
-		}
-	}
-	if len(body) > 0 {
-		groups = append(groups, URLGroup{"Body", body})
-	}
-
-	// Comments: prefer ADF, fallback to plain text.
-	var comments []string
-	for _, c := range issue.Comments {
-		if c.BodyADF != nil {
-			for _, u := range extractADFURLs(c.BodyADF) {
-				add(&comments, u)
-			}
-		} else {
-			for _, u := range findURLs(c.Body) {
-				add(&comments, u)
-			}
-		}
-	}
-	if len(comments) > 0 {
-		groups = append(groups, URLGroup{"Comments", comments})
-	}
-
-	// Linked issues.
-	var links []string
-	for _, link := range issue.IssueLinks {
-		if link.OutwardIssue != nil {
-			add(&links, host+"/browse/"+link.OutwardIssue.Key)
-		}
-		if link.InwardIssue != nil {
-			add(&links, host+"/browse/"+link.InwardIssue.Key)
-		}
-	}
-	if len(links) > 0 {
-		groups = append(groups, URLGroup{"Links", links})
-	}
-
-	// History (changelog).
-	var history []string
-	for _, entry := range issue.Changelog {
-		for _, item := range entry.Items {
-			for _, u := range findURLs(item.FromString) {
-				add(&history, u)
-			}
-			for _, u := range findURLs(item.ToString) {
-				add(&history, u)
-			}
-		}
-	}
-	if len(history) > 0 {
-		groups = append(groups, URLGroup{"History", history})
-	}
-
-	return groups
-}
-
-// findURLs extracts http/https URLs from text.
-func findURLs(text string) []string {
-	var urls []string
-	for _, word := range strings.Fields(text) {
-		// Strip surrounding punctuation/brackets.
-		word = strings.TrimLeft(word, "([{<\"'")
-		word = strings.TrimRight(word, ".,;:!?)]}>\"'")
-		if strings.HasPrefix(word, "http://") || strings.HasPrefix(word, "https://") {
-			urls = append(urls, word)
-		}
-	}
-	return urls
-}
-
-// cleanWikiMarkup strips Jira wiki markup from changelog values
-// handles patterns like [~accountid:...], {code:lang}...{code}, [text|url]
-func cleanWikiMarkup(s string) string {
-	if s == "" {
-		return s
-	}
-	result := strings.ReplaceAll(s, "\r", "")
-
-	// [~accountid:UUID] → replace with @user (unresolved mentions)
-	for {
-		start := strings.Index(result, "[~accountid:")
-		if start == -1 {
-			break
-		}
-		end := strings.Index(result[start:], "]")
-		if end == -1 {
-			break
-		}
-		result = result[:start] + "@user" + result[start+end+1:]
-	}
-
-	// {code:lang}...{code} → just the content
-	for {
-		start := strings.Index(result, "{code")
-		if start == -1 {
-			break
-		}
-		// Find closing }
-		endOpen := strings.Index(result[start:], "}")
-		if endOpen == -1 {
-			break
-		}
-		// Find {code} closing tag
-		closeTag := strings.Index(result[start+endOpen+1:], "{code}")
-		if closeTag == -1 {
-			// No closing tag, just strip the opening
-			result = result[:start] + result[start+endOpen+1:]
-			continue
-		}
-		content := result[start+endOpen+1 : start+endOpen+1+closeTag]
-		result = result[:start] + strings.TrimSpace(content) + result[start+endOpen+1+closeTag+6:]
-	}
-
-	// [text|url] → text
-	for {
-		start := strings.Index(result, "[")
-		if start == -1 {
-			break
-		}
-		end := strings.Index(result[start:], "]")
-		if end == -1 {
-			break
-		}
-		inner := result[start+1 : start+end]
-		if pipe := strings.Index(inner, "|"); pipe != -1 {
-			inner = inner[:pipe]
-		}
-		result = result[:start] + inner + result[start+end+1:]
-	}
-
-	return strings.TrimSpace(result)
-}
-
-func wrapText(text string, width int) []string {
-	if width <= 0 {
-		width = 80
-	}
-	var lines []string
-	for _, paragraph := range strings.Split(text, "\n") {
-		if lipgloss.Width(paragraph) <= width {
-			lines = append(lines, paragraph)
-			continue
-		}
-		runes := []rune(paragraph)
-		for len(runes) > 0 {
-			// Measure runes until we exceed width.
-			w := 0
-			cut := 0
-			for i, r := range runes {
-				rw := lipgloss.Width(string(r))
-				if w+rw > width {
-					break
-				}
-				w += rw
-				cut = i + 1
-			}
-			if cut == 0 {
-				cut = 1 // at least one rune to avoid infinite loop
-			}
-			if cut < len(runes) {
-				// Back up to last space for word-wrap.
-				for j := cut - 1; j > 0; j-- {
-					if runes[j] == ' ' {
-						cut = j
-						break
-					}
-				}
-			}
-			lines = append(lines, string(runes[:cut]))
-			runes = runes[cut:]
-			// Trim leading spaces from next line.
-			for len(runes) > 0 && runes[0] == ' ' {
-				runes = runes[1:]
-			}
-		}
-	}
-	return lines
-}
-
-// wikiToPlain converts Jira wiki markup to plain text with basic formatting
-// handles *bold*, [text|url], {code}...{code} blocks, and h1 through h6 headings
-var (
-	wikiLinkRe      = regexp.MustCompile(`\[([^|\]]+)\|([^\]]+)\]`)
-	wikiPlainLinkRe = regexp.MustCompile(`\[([^\]|]+)\]`)
-	wikiBoldRe      = regexp.MustCompile(`\*([^\n*]+)\*`)
-	wikiItalicRe    = regexp.MustCompile(`_([^\n_]+)_`)
-	wikiHeadingRe   = regexp.MustCompile(`(?m)^h[1-6]\.\s*`)
-)
-
-// wikiToPlain converts Jira wiki markup to readable plain text.
-func wikiToPlain(s string) string {
-	if s == "" {
-		return s
-	}
-	// Strip carriage returns — Jira Server often sends \r\n which corrupts
-	// terminal output (\r moves cursor to column 0 causing text overlap).
-	s = strings.ReplaceAll(s, "\r", "")
-	s = wikiLinkRe.ReplaceAllString(s, "$1 ($2)")
-	s = wikiPlainLinkRe.ReplaceAllString(s, "$1")
-	s = wikiBoldRe.ReplaceAllString(s, "$1")
-	s = wikiItalicRe.ReplaceAllString(s, "$1")
-	s = wikiHeadingRe.ReplaceAllString(s, "")
-	for _, tag := range []string{"{code}", "{noformat}", "{quote}"} {
-		s = strings.ReplaceAll(s, tag, "")
-	}
-	return s
-}
-
-// RenderDescriptionPreview renders description text for preview in create form
-// Cloud converts markdown to ADF then renders richly
-// Server strips wiki markup and colors URLs
-func RenderDescriptionPreview(text string, width int, isCloud bool, renderer ADFRenderer) []string {
-	if text == "" || width <= 0 {
-		return nil
-	}
-	if isCloud {
-		adf := MarkdownToADF(text)
-		if lines := renderer.Render(adf, width); len(lines) > 0 {
-			return lines
-		}
-	}
-	plain := wikiToPlain(text)
-	wrapped := wrapText(plain, width)
-	return colorURLsWrapped(wrapped)
-}
-
-func timeAgo(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	case d < 30*24*time.Hour:
-		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-	default:
-		return fmt.Sprintf("%dmo ago", int(d.Hours()/(24*30)))
-	}
+	return min(max(i, 0), count-1)
 }

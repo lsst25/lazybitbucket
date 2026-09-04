@@ -1,76 +1,59 @@
 # Configuration
 
-lazyjira is configured through a YAML file.
+lazybitbucket is configured through a YAML file.
 
 ## Config file location
 
 | OS | Path |
 |----|------|
-| Linux | `~/.config/lazyjira/config.yml` |
-| macOS | `~/Library/Application Support/lazyjira/config.yml` |
-| Windows | `%AppData%\lazyjira\config.yml` |
+| Linux | `~/.config/lazybitbucket/config.yml` |
+| macOS | `~/Library/Application Support/lazybitbucket/config.yml` |
+| Windows | `%AppData%\lazybitbucket\config.yml` |
 
-You can override the config directory with the `LAZYJIRA_CONFIG_DIR` environment variable. `XDG_CONFIG_HOME` is also respected on Linux.
+You can override the config directory with the `LAZYBITBUCKET_CONFIG_DIR` environment variable. `XDG_CONFIG_HOME` is also respected on Linux.
 
-`CONFIG_DIR` is no longer supported. If you previously used it, rename it to `LAZYJIRA_CONFIG_DIR`.
+Resolution order: `LAZYBITBUCKET_CONFIG_DIR` → `$XDG_CONFIG_HOME/lazybitbucket` → the OS user config dir → `~/.config/lazybitbucket`.
 
 ## Environment variables
 
-Jira credentials can be set via environment variables. These always take priority over the config file and auth.json.
+These always take priority over the config file and `auth.json`.
 
 | Variable | Description |
 |----------|-------------|
-| `JIRA_HOST` | Jira instance URL |
-| `JIRA_EMAIL` | Account email (Cloud only) |
-| `JIRA_API_TOKEN` | API token / PAT |
-| `JIRA_SERVER_TYPE` | `cloud` (default), `server`, or `datacenter` |
-| `JIRA_TLS_CERT` | Path to client certificate PEM |
-| `JIRA_TLS_KEY` | Path to client private key PEM |
-| `JIRA_TLS_CA` | Path to custom CA bundle PEM |
-| `JIRA_TLS_INSECURE` | Set to `1` or `true` to skip TLS verification |
+| `BITBUCKET_WORKSPACE` | Workspace slug |
+| `BITBUCKET_REPOSITORIES` | Comma-separated repository slugs |
+| `BITBUCKET_EMAIL` | Atlassian account email. Setting it together with a token switches auth to HTTP Basic |
+| `BITBUCKET_TOKEN` | API token or access token. Sent as `Authorization: Bearer` unless an email is also set |
+| `BITBUCKET_API_URL` | API base URL. Defaults to `https://api.bitbucket.org/2.0` |
+| `LAZYBITBUCKET_CONFIG_DIR` | Override the config directory |
+
+The token is never read from or written to `config.yml`. It lives in `auth.json` or in the environment.
 
 ## Default config
 
 Do not copy the entire thing into your config. Only add the settings you want to change.
 
 ```yaml
-jira:
-    host: ""
+bitbucket:
+    workspace: ""
+    repositories: []
     email: ""
-    serverType: cloud
-projects: []
+    baseUrl: ""       # "" → https://api.bitbucket.org/2.0
 gui:
     theme: default
     themeColors: {}   # optional palette overrides (see Themes section)
     themeDark: {}     # applied on dark presets only
     themeLight: {}    # applied on light presets only
-    language: en
     sidePanelWidth: 40
     collapsedPanelHeight: 5
-    showIcons: true
-    dateFormat: "2006-01-02"
-    mouse: true
-    borders: rounded
-    issueListFields:
-        - key
-        - status
-        - summary
-    selectCreatedIssue: true
-    typeIcons:
-        Bug: "🐞"
-        Story: "📖"
-        Sub-task: "📎"
-    statusIcons:
-        To do: "📋"
-        On hold: "⏸️"
-        Future: "🔜"
-    priorityIcons:
-        Highest: "⇈"
-        High: "↑"
-        Medium: "→"
-        Low: "↓"
-        Lowest: "⇊"
-
+    pullRequestListFields:   # default order; columns drop from the end on narrow lists
+        - repo
+        - id
+        - title
+        - approvals
+        - build
+        - author
+        - updated
 keybinding:
     universal:
         quit: q
@@ -83,10 +66,9 @@ keybinding:
         nextTab: ']'
         focusDetail: "0"
         focusStatus: "1"
-        focusIssues: "2"
-        focusInfo: "3"
-        focusProjects: "4"
-        jqlSearch: s
+        focusPullRequests: "2"
+        focusBuilds: "3"
+        focusRepos: "4"
     navigation:
         down: j
         up: k
@@ -94,108 +76,101 @@ keybinding:
         bottom: G
         halfPageDown: ctrl+d
         halfPageUp: ctrl+u
-    issues:
+    pullRequests:
         select: ' '
         open: enter
         focusRight: l
-        transition: t
         browser: o
         urlPicker: u
         copyURL: "y"
-        closeJQLTab: x
-        createBranch: b
-    projects:
-        select: ' '
-        open: enter
-        focusRight: l
+        checkout: c
+    # There is no `repos` group: the Repos and Builds panels reuse
+    # pullRequests.select, pullRequests.open and pullRequests.focusRight.
     detail:
         focusLeft: h
-        infoTab: i
+        back: backspace
         scrollDown: J
         scrollUp: K
         halfPageDown: ctrl+f
         halfPageUp: ctrl+b
-issueTabs:
-    - name: All
-      jql: project = {{.ProjectKey}} AND statusCategory != Done ORDER BY updated DESC
-    - name: Assigned
-      jql: project = {{.ProjectKey}} AND assignee=currentUser() AND statusCategory != Done ORDER BY priority DESC, updated DESC
-cache:
-    enabled: true
-    ttl: 5m
-refresh:
-    autoRefresh: true
-    interval: 30s
-fields: []
+pullRequestTabs:
+    - name: Open
+      filter: all
+    - name: Mine
+      filter: mine
+    - name: Reviewing
+      filter: reviewing
+# maxResults: 50        # unset by default; 50 is the built-in fallback
+refreshInterval: 120s   # "0" or "off" disables the background refresh
 git:
     closeOnCheckout: false
-    asciiOnly: false
-    branchFormat: []
+customCommands: []
+editor: ""              # "" → $VISUAL, then $EDITOR, then nvim
+rendererStyle: auto     # auto | dark | light | notty
 ```
 
-## Server type
-
-Set `serverType` to connect to Jira Server or Data Center (uses REST API v2 instead of v3).
+## Bitbucket
 
 ```yaml
-jira:
-  serverType: server
-```
-
-Values: `cloud` (default), `server`, `datacenter`.
-
-Cloud uses email + API token (Basic auth). Server/Data Center uses a Personal Access Token (Bearer auth), no email needed.
-
-## TLS
-
-For environments that require client certificates (mTLS) or a custom CA:
-
-```yaml
-jira:
-  tls:
-    certFile: /path/to/client.crt
-    keyFile:  /path/to/client.key
-    caFile:   /path/to/ca.pem
-    insecure: false
+bitbucket:
+  workspace: acme
+  repositories:
+    - api-gateway
+    - web-app
+    - infra
+  email: you@example.com   # only when you authenticate with Basic auth
 ```
 
 | Field | Description |
 |-------|-------------|
-| `certFile` | Client certificate PEM |
-| `keyFile` | Client private key PEM |
-| `caFile` | Custom CA bundle (optional) |
-| `insecure` | Skip TLS verification (not recommended) |
+| `workspace` | Workspace slug. Required. Also settable with `BITBUCKET_WORKSPACE` or `--workspace` |
+| `repositories` | Repository slugs to fetch pull requests from. When empty, the first 25 repositories you are a member of are discovered, most recently updated first; the status panel warns when that cap is hit, and says `no repositories visible to this token` when discovery comes back empty (which is what an access token sees) |
+| `email` | Atlassian account email. Present only for the Basic auth option; with a token and no email, the token is sent as `Authorization: Bearer` |
+| `baseUrl` | API base URL. Only useful for testing against a stand-in server |
 
-All fields are optional. You can use `caFile` alone for custom CA without client certs. Environment variables `JIRA_TLS_CERT`, `JIRA_TLS_KEY`, `JIRA_TLS_CA`, `JIRA_TLS_INSECURE` also work.
-
-If your certificate is in PKCS#12 format (`.p12`/`.pfx`, e.g. exported from Firefox), convert it to PEM first:
-
-```bash
-openssl pkcs12 -in cert.p12 -out client.crt -clcerts -nokeys
-openssl pkcs12 -in cert.p12 -out client.key -nocerts -nodes
-```
+There is no `token` key. App passwords no longer exist; use an API token with scopes and let the setup wizard store it in `auth.json`, or pass `BITBUCKET_TOKEN`. See the [Setup section of the README](../README.md#setup) for the scopes.
 
 ## GUI
 
 ```yaml
 gui:
   sidePanelWidth: 40
-  issueListFields:
-    - "key"
-    - "status"
-    - "summary"
+  collapsedPanelHeight: 5
+  pullRequestListFields:
+    - repo
+    - id
+    - title
+    - build
 ```
 
 `sidePanelWidth` controls the left panel width in columns. It automatically shrinks on narrow terminals.
 
 `collapsedPanelHeight` sets the height of non-focused left panels in lines (default 5, minimum 3).
 
-`theme` selects the color palette. Supported values: `default` (ANSI 16, original look), `auto`, [Catppuccin](https://github.com/catppuccin/catppuccin) presets (`catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha`). Omitting the `theme` key or setting it to `""` keeps the legacy `default` ANSI 16 palette for backward compatibility. Use `theme: auto` to opt into runtime detection: lazyjira inspects your terminal background and picks `catppuccin-mocha` (dark) or `catppuccin-latte` (light). An unknown theme name is an error. Hex-based themes require a terminal with truecolor support.
+`theme` selects the color palette. Supported values: `default` (ANSI 16, original look), `auto`, [Catppuccin](https://github.com/catppuccin/catppuccin) presets (`catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha`). Omitting the `theme` key or setting it to `""` keeps the `default` ANSI 16 palette. Use `theme: auto` to opt into runtime detection: lazybitbucket inspects your terminal background and picks `catppuccin-mocha` (dark) or `catppuccin-latte` (light). An unknown theme name is an error. Hex-based themes require a terminal with truecolor support.
 
 ```yaml
 gui:
   theme: catppuccin-mocha
 ```
+
+### Pull request list fields
+
+Controls which columns appear in the pull request list, in the order you list them. An unknown field name is an error at startup that names the offending field.
+
+| Field | Width | Description |
+|-------|-------|-------------|
+| `repo` | widest slug in view, capped at a quarter of the list width (minimum 8) | Repository slug |
+| `id` | widest id in view | Pull request id, like `#101` |
+| `title` | fills whatever is left, floor of 5 | Title, prefixed with `[draft]` for draft PRs |
+| `author` | 12 chars | Author display name |
+| `approvals` | 5 chars | `✓N` approved, `✗N` changes requested, `·` none, `?` review data not loaded yet |
+| `build` | 1 char | `✔` successful, `✘` failed, `●` in progress, `■` stopped, blank when unknown |
+| `updated` | 8 chars | Time since the last update |
+| `branch` | 20 chars | Source branch |
+| `state` | 8 chars | `OPEN`, `MERGED`, `DECLINED`, `SUPERSEDED` |
+
+`title` is the flexible column: it takes whatever width the fixed columns leave. When the list is too narrow, columns are dropped **from the end of your list** — never the title — until the title has at least 12 columns. Put the signals you care most about early in the list; the defaults order them `repo, id, title, approvals, build, author, updated` so approvals and the build glyph survive the side panel and author and updated go first.
 
 ### Themes
 
@@ -224,11 +199,11 @@ Supported keys:
 | Key         | Role                                                  |
 |-------------|-------------------------------------------------------|
 | `green`     | Primary accent — titles, active borders, success     |
-| `blue`      | Secondary accent                                      |
-| `red`       | Errors, high priority                                 |
-| `yellow`    | Warnings, in-progress, medium priority                |
+| `blue`      | Secondary accent, open pull requests                  |
+| `red`       | Errors, failed builds, changes requested              |
+| `yellow`    | Warnings, in-progress builds                          |
 | `cyan`      | Search mode indicators                                |
-| `magenta`   | JQL keywords                                          |
+| `magenta`   | Emphasis                                              |
 | `orange`    | Names, metadata                                       |
 | `white`     | Foreground text — use a **dark** color on light themes |
 | `gray`      | Subtitles, hint bars                                  |
@@ -283,94 +258,106 @@ gui:
     highlight: "#45475a"
 ```
 
-`selectCreatedIssue` controls whether the app auto-selects a newly created issue in the list. If the issue does not match the current tab, the app switches to the All tab. Enabled by default.
+## Pull request tabs
+
+Tabs are filters over the pull requests of the configured repositories. The defaults are Open / Mine / Reviewing:
 
 ```yaml
-gui:
-  selectCreatedIssue: true
+pullRequestTabs:
+  - name: Open
+    filter: all
+  - name: Mine
+    filter: mine
+  - name: Reviewing
+    filter: reviewing
 ```
 
-`typeIcons` will have issue `type` names replaced by the emojis you set. Mappings are case-sensitive, and support not only emojis but also plaintext. Enable the field `type` under `issueListFields` to profit from this option.
+Defining `pullRequestTabs` replaces the defaults entirely.
 
-```
-gui:
-    typeIcons:
-        Bug: "🐞"
-        Story: "📖"
-        Sub-task: "📎"
-```
+| Field | Description |
+|-------|-------------|
+| `name` | Tab label |
+| `state` | `OPEN` (default), `MERGED`, `DECLINED` or `SUPERSEDED`. Case-insensitive; an unknown value is an error at startup |
+| `filter` | `all` (default), `mine` (you are the author), `reviewing` (you are a reviewer) |
+| `query` | Optional raw Bitbucket `q=` expression, passed through to the API |
+| `maxResults` | Per-tab page size override |
 
-`statusIcons` will have issue `status` indicators replaced by the emojis you set. Default indicators may be shared for similar states (e.g. To do / Future), so one may get more granularity from this option. Mappings are case-sensitive, and support not only emojis but also plaintext. Enable the field `status` under `issueListFields` to profit from this option.
+`mine` and `reviewing` need to know who you are. A repository, project or workspace access token cannot read the current user, so those tabs stay empty and the status panel says `current user unknown — Mine/Reviewing tabs are empty`.
 
-```
-gui:
-    statusIcons:
-        To do: "📋"
-        On hold: "⏸️"
-        Future: "🔜"
-```
-
-`priorityIcons` will have issue `priority` names replaced by the emojis you set. Mappings are case-sensitive, and support not only emojis but also plaintext. Unmapped priorities fall back to the plain priority name. Enable the field `priority` under `issueListFields` to profit from this option.
-
-```
-gui:
-    priorityIcons:
-        Highest: "⇈"
-        High: "↑"
-        Medium: "→"
-        Low: "↓"
-        Lowest: "⇊"
-```
-
-### Issue list fields
-
-Controls which columns appear in the issue list. Available fields.
-
-| Field | Width | Description |
-|-------|-------|-------------|
-| `key` | auto | Issue key like PROJ-123 |
-| `status` | 1 char | Status indicator |
-| `summary` | fills remaining | Issue title |
-| `priority` | 8 chars | Priority name |
-| `assignee` | 12 chars | Assignee display name |
-| `type` | 10 chars | Issue type |
-| `updated` | 8 chars | Time since last update |
-
-## Issue tabs
-
-Define JQL-based tabs for the issue list. Template variables `{{.ProjectKey}}` and `{{.UserEmail}}` are expanded at runtime.
+A longer example:
 
 ```yaml
-issueTabs:
-  - name: "All"
-    jql: "project = {{.ProjectKey}} AND statusCategory != Done ORDER BY updated DESC"
-  - name: "Assigned"
-    jql: "project = {{.ProjectKey}} AND assignee=currentUser() ORDER BY priority DESC"
-  - name: "Recent"
-    jql: "project = {{.ProjectKey}} AND updated >= -7d ORDER BY updated DESC"
-    maxResults: 100
+pullRequestTabs:
+  - name: Open
+    filter: all
+  - name: Mine
+    filter: mine
+  - name: Reviewing
+    filter: reviewing
+    maxResults: 20
+  - name: To develop
+    state: OPEN
+    query: 'destination.branch.name = "develop"'
+  - name: Merged
+    state: MERGED
+    maxResults: 25
 ```
-
-You can also create temporary JQL tabs at runtime with the `s` key.
-
-Per-tab page size can be set via `maxResults` on the tab entry — see [Page size](#page-size-maxresults) below.
 
 ## Page size (`maxResults`)
 
-The number of issues fetched per query. Can be set globally and overridden per tab:
+The number of pull requests fetched per repository per tab. Can be set globally and overridden per tab:
 
 ```yaml
-maxResults: 75          # global default for all tabs and ad-hoc JQL searches
-issueTabs:
-  - name: "All"
-    jql: "project = {{.ProjectKey}} ORDER BY updated DESC"
-    maxResults: 200     # per-tab override
-  - name: "Assigned"
-    jql: "project = {{.ProjectKey}} AND assignee=currentUser()"
-                        # inherits global 75
+maxResults: 25
+pullRequestTabs:
+  - name: Open
+    filter: all
+    maxResults: 50   # per-tab override
+  - name: Merged
+    state: MERGED    # inherits the global 25
 ```
 
-Resolution order: per-tab `maxResults` → global `maxResults` → built-in default (50). Values `<= 0` are treated as unset. Note that the Jira server may enforce its own upper bound and silently return fewer issues than requested.
+Resolution order: per-tab `maxResults` → global `maxResults` → built-in default (50). Values `<= 0` are treated as unset. Bitbucket caps a single pull request page at 50 items, so larger values are served through several requests.
+
+## Auto refresh (`refreshInterval`)
+
+```yaml
+refreshInterval: 120s
+```
+
+A Go duration string. Unset means `120s`. `0` or `off` disables the background refresh; an unparseable value is an error at startup. The refresh re-fetches the active tab's lists — build statuses and review data are only re-fetched when a pull request's `updated_on` has changed, so a warm cache costs one request per repository.
+
+`r` refreshes the selected pull request (detail plus build statuses). `R` refreshes the whole tab.
+
+An interval short enough to spend more than about 600 of Bitbucket's ~1000 requests per hour on auto-refresh alone raises a `refresh interval too short for N repositories` warning on the status panel.
+
+## Markdown rendering (`rendererStyle`)
+
+Pull request descriptions are Markdown, rendered with [glamour](https://github.com/charmbracelet/glamour).
+
+```yaml
+rendererStyle: auto
+```
+
+| Value | Behavior |
+|-------|----------|
+| *(unset, default)* | Same as `auto` |
+| `auto` | Picks `dark` or `light` based on the detected terminal background. Detection can fail under `tmux` or `ssh`; set the value explicitly when it picks wrong |
+| `dark` | Forces the dark theme |
+| `light` | Forces the light theme |
+| `notty` | Plain output without ANSI styling |
+
+Any other value causes lazybitbucket to exit on startup with an error naming the invalid setting.
+
+## Editor
+
+```yaml
+editor: nvim
+```
+
+Resolution order: `editor` → `$VISUAL` → `$EDITOR` → `nvim`.
+
+Nothing in the current build opens an editor yet — the setting is read and validated, and is reserved for opening a file from the diff pane (roadmap step 2). Until then, use a custom command if you want to launch an editor from lazybitbucket.
 
 ## Keybindings
 
@@ -389,13 +376,18 @@ keybinding:
     bottom: "G"
     halfPageDown: "ctrl+d"
     halfPageUp: "ctrl+u"
-  issues:
-    transition: "t"
+  pullRequests:
     browser: "o"
-    createBranch: "b"
+    copyURL: "y"
+    checkout: "c"
+    focusRight: "l"
+  detail:
+    back: "backspace"
 ```
 
 Only include keys you want to change. Missing keys keep their defaults.
+
+There is deliberately **no `keybinding.repos` group**. The keymap is keyed by action, and the Repos and Builds panels reuse `pullRequests.select`, `pullRequests.open` and `pullRequests.focusRight`; a separate group would silently overwrite the pull request bindings. Remapping `pullRequests.select` remaps it on all three panels.
 
 The `navigation` section controls list navigation keys used across all panels. These default to vim-style keys (`j`/`k`/`g`/`G`/`ctrl+d`/`ctrl+u`).
 
@@ -403,128 +395,39 @@ The `detail` section includes keys for scrolling the detail panel from any left 
 
 Setting a navigation key replaces all defaults for that action. For example, `down: "n"` means only `n` navigates down, `j`, arrow down and `ctrl+j` will no longer work.
 
-## Info panel fields
-
-See [Custom Fields](Custom_Fields.md) for details on configuring the info panel.
-
-Without any `fields:` config, the info panel shows default fields: status, priority, assignee, reporter, issuetype, sprint (plus labels and components when set on the issue).
-
-To customize which fields appear and in what order, add a `fields:` section. This replaces the defaults entirely.
-
-```yaml
-fields:
-  - id: status
-  - id: priority
-  - id: assignee
-  - id: "customfield_10015"
-    name: "Story Points"
-    type: "text"
-```
-
 ## Git integration
-
-lazyjira can create branches from issues and detect the current issue from your branch name.
 
 ```yaml
 git:
   closeOnCheckout: false
-  asciiOnly: false
-  branchFormat:
-    - when:
-        type: "Bug"
-      template: "bugfix/{{.Key}}-{{.Summary | slugify}}"
-    - when:
-        type: "Sub-task"
-      template: "{{.ParentKey}}/{{.Key}}_{{.Summary | slugify}}"
-    - when:
-        type: "*"
-      template: "{{.Key}}-{{.Summary | slugify}}"
 ```
 
-### Branch format rules
+`c` on the selected pull request checks out its source branch in the repository lazybitbucket was started in — tracking the remote branch when it is not present locally. With `closeOnCheckout: true` lazybitbucket exits after a successful checkout, which is convenient when you launch it from a shell alias.
 
-Each rule has a `when` condition and a `template`. Rules are evaluated in order and the first match wins. Use `type: "*"` as a catch-all.
-
-Template variables.
-
-| Variable | Description |
-|----------|-------------|
-| `{{.Key}}` | Issue key like PROJ-123 |
-| `{{.ProjectKey}}` | Project prefix extracted from key (e.g. PROJ) |
-| `{{.Number}}` | Issue number extracted from key (e.g. 123) |
-| `{{.Summary}}` | Issue summary |
-| `{{.Summary \| slugify}}` | Summary as a slug, lowercase with dashes |
-| `{{.Type}}` | Issue type name (e.g. Bug, Story, Task) |
-| `{{.ParentKey}}` | Parent issue key (empty if no parent) |
-
-## Markdown conversion (`converter`)
-
-Controls how Jira's ADF (Atlassian Document Format) is converted to and from Markdown for the editor. Affects both issue descriptions and comments when you open them in your `$EDITOR`.
-
-```yaml
-converter: adf-converter
-```
-
-| Value | Behavior |
-|-------|----------|
-| *(unset, default)* | Built-in converter. Stateless. |
-| `builtin` | Same as the default; explicit form. |
-| `adf-converter` | External [adf-converter](https://github.com/seflue/adf-converter) library. Supports the common Jira ADF element set as editable Markdown. Inline media, internal attachments, and unknown node types fall back to placeholders so the roundtrip stays lossless. |
-
-Any other value causes lazyjira to exit on startup with an error naming the invalid setting.
-
-## ADF preview rendering (`renderer`)
-
-Controls how ADF documents are rendered to styled terminal lines in the description preview (create form and detail view).
-
-```yaml
-renderer: glamour
-```
-
-| Value | Behavior |
-|-------|----------|
-| *(unset, default)* | Built-in renderer. Hand-rolled ADF traversal with chroma syntax highlighting. |
-| `builtin` | Same as the default; explicit form. |
-| `glamour` | Routes ADF through [adf-converter](https://github.com/seflue/adf-converter)'s display module, which produces Markdown and renders it through Glamour. Richer styling for headings, lists, code blocks, and colored text spans. |
-
-Any other value causes lazyjira to exit on startup with an error naming the invalid setting.
-
-## ADF preview style (`rendererStyle`)
-
-Selects the Glamour theme used by the `glamour` renderer. Ignored when `renderer` is unset or `builtin`.
-
-```yaml
-rendererStyle: auto
-```
-
-| Value | Behavior |
-|-------|----------|
-| *(unset, default)* | Same as `auto`. |
-| `auto` | Picks `dark` or `light` based on `lipgloss.HasDarkBackground`. Terminal background detection can fail under `tmux` or `ssh`; set the value explicitly when autodetect picks wrong. |
-| `dark` | Forces the dark Glamour theme. |
-| `light` | Forces the light Glamour theme. |
-| `notty` | Plain output without ANSI styling. |
-
-Any other value causes lazyjira to exit on startup with an error naming the invalid setting.
+The current branch is also used at startup: if it matches the source branch of a pull request in the first tab, that pull request is selected automatically.
 
 ## Custom commands
 
-Bind shell commands to keys, with Go template access to the focused issue, project, or comment. Custom bindings take precedence over built-in keys, so they can be used to override any action.
+Bind shell commands to keys, with Go template access to the focused pull request, repository or build. Custom bindings take precedence over built-in keys, so they can be used to override any action.
 
 ```yaml
 customCommands:
   - key: "ctrl+y"
-    name: "Copy issue key"
-    command: "printf %s {{.Key}} | wl-copy"
+    name: "Copy branch name"
+    command: "printf %s {{.PR.SourceBranch | shellescape}} | pbcopy"
     suspend: false
-  - key: "ctrl+l"
-    name: "Copy comment link"
-    command: "printf '%s?focusedCommentId=%s' {{.URL}} {{.CommentID}} | wl-copy"
-    contexts: [detail.comments]
+  - key: "ctrl+o"
+    name: "Open build log"
+    command: "open {{.Build.URL | shellescape}}"
+    contexts: [builds]
     suspend: false
-  - key: "ctrl+w"
-    name: "Log work"
-    command: "jira issue worklog add {{.Key}}"
+  - key: "ctrl+s"
+    name: "Review session"
+    command: >-
+      tmux-pr-sessionizer {{.Repo.Slug | shellescape}}
+      {{.PR.SourceBranch | shellescape}}
+      pr-{{.PR.ID}}
+    contexts: [pullrequests, detail]
 ```
 
 Each command has:
@@ -534,78 +437,96 @@ Each command has:
 | `key` | Key binding. Supports single letters, modifiers (`ctrl+x`, `alt+x`), and special keys (`tab`, `enter`). |
 | `name` | Label shown in the help overlay and help bar. |
 | `command` | Shell command string. Rendered as a Go template before execution. |
-| `contexts` | Optional list of UI contexts the command fires in. Defaults to `[issues, info, detail]`. |
+| `contexts` | Optional list of UI contexts the command fires in. Defaults to `[pullrequests, detail]`. |
 | `suspend` | Optional. `true` (default) hands the terminal to the child process; set `false` for background commands like clipboard copies or notifications. |
+| `refresh` | Optional, default `false`. After the command exits successfully, refresh the selected pull request — the same work as `r` (detail plus build statuses). Only a command that asks for it costs the extra requests. |
+
+The command string is a Go template with `missingkey=error`, parsed at startup: a bad template, an unknown context, an empty `key`/`name`/`command`, or the same key twice in the same context is a startup error naming the offending entry.
+
+**Suspend semantics.** With `suspend: true` lazybitbucket hands over the terminal (stdin, stdout, stderr) and resumes when the child exits — the right mode for anything interactive (an editor, `tmux`, a pager). With `suspend: false` the command runs in the background, its output is captured, and the last non-empty line is shown in the help bar (or, on a non-zero exit, in the status panel). Background commands are killed with `SIGTERM` when lazybitbucket quits. Commands run through `$SHELL -c` (`sh` when `$SHELL` is unset).
 
 ### Contexts
 
-A command fires when one of its declared contexts matches the current UI state.
+A command fires when one of its declared contexts matches the current UI state. The contexts — not the template text — decide which scopes have to be filled: a command declared in `builds` always needs a selected pull request, repository **and** build. When one of them is missing the command does not run and the help bar says `<name>: no build selected` (or `no pull request` / `no repository`).
 
-| Context | Active when |
-|---------|-------------|
-| `issues` | Issues list panel is focused. |
-| `info` | Info panel is focused (any sub-tab). |
-| `projects` | Projects list panel is focused. |
-| `detail` | Right detail panel is showing an issue, on any tab. |
-| `detail.comments` | Right detail panel is on the Comments tab with a comment selected. |
+Custom commands are matched before built-in keys, so a binding can shadow any action. If every key bound to `quit` is shadowed in every context, lazybitbucket prints a warning on stderr and on the status panel at startup rather than leaving you with no way out.
 
-When more than one context matches at the same time (`detail` and `detail.comments` in the Comments tab), the more specific context wins.
+| Context | Active when | Scopes available |
+|---------|-------------|------------------|
+| `pullrequests` | The Pull Requests panel is focused | `PR`, `Repo` |
+| `builds` | The Builds panel is focused | `PR`, `Repo`, `Build` |
+| `repos` | The Repos panel is focused, or the detail panel is showing a repository | `Repo` |
+| `detail` | The right detail panel is showing a pull request, a pipeline run or a step log | `PR`, `Repo` |
 
 ### Template variables
 
-The fields available to the template depend on the command's contexts.
-
-**Issue scope** (`issues`, `info`, `detail`):
+**Pull request scope** (`pullrequests`, `builds`, `detail`):
 
 | Variable | Description |
 |----------|-------------|
-| `{{.Key}}` | Issue key like `PROJ-123`. |
-| `{{.ProjectKey}}` | Project prefix extracted from the key. |
-| `{{.ParentKey}}` | Parent issue key (empty if no parent). |
-| `{{.Summary}}` | Issue summary. |
-| `{{.Type}}` | Issue type name. |
-| `{{.Status}}` | Status name. |
-| `{{.Assignee}}` | Assignee display name. |
-| `{{.Priority}}` | Priority name. |
-| `{{.URL}}` | Fully qualified issue URL. |
+| `{{.PR.ID}}` | Pull request id, unique per repository |
+| `{{.PR.Title}}` | Title |
+| `{{.PR.Description}}` | Raw Markdown description |
+| `{{.PR.State}}` | `OPEN`, `MERGED`, `DECLINED` or `SUPERSEDED` |
+| `{{.PR.Draft}}` | `true` for a draft pull request |
+| `{{.PR.Author}}` | Author display name |
+| `{{.PR.AuthorNickname}}` | Author nickname |
+| `{{.PR.SourceBranch}}` | Source branch name |
+| `{{.PR.DestinationBranch}}` | Destination branch name |
+| `{{.PR.SourceCommit}}` | Source commit hash |
+| `{{.PR.DestinationCommit}}` | Destination commit hash |
+| `{{.PR.URL}}` | Fully qualified pull request URL |
+| `{{.PR.Repo}}` | Repository slug |
+| `{{.PR.RepoFullName}}` | `workspace/slug` |
+| `{{.PR.Workspace}}` | Workspace slug |
+| `{{.PR.CommentCount}}` | Number of comments |
+| `{{.PR.TaskCount}}` | Number of tasks |
+| `{{.PR.Reviewers}}` | Number of reviewers |
+| `{{.PR.Approvals}}` | Number of approvals |
+| `{{.PR.ChangesRequested}}` | Number of reviewers requesting changes |
 
-**Project scope** (`projects`):
+**Repository scope** (`pullrequests`, `builds`, `repos`, `detail`):
 
 | Variable | Description |
 |----------|-------------|
-| `{{.ProjectKey}}` | Project key. |
-| `{{.ProjectName}}` | Project name. |
+| `{{.Repo.Slug}}` | Repository slug |
+| `{{.Repo.Name}}` | Repository display name |
+| `{{.Repo.FullName}}` | `workspace/slug` |
+| `{{.Repo.Workspace}}` | Workspace slug |
+| `{{.Repo.URL}}` | Repository URL |
+| `{{.Repo.MainBranch}}` | Main branch name |
 
-**Comment scope** (`detail.comments`):
-
-Exposes the Issue scope fields above plus the focused comment:
+**Build scope** (`builds`):
 
 | Variable | Description |
 |----------|-------------|
-| `{{.CommentID}}` | Comment ID. |
-| `{{.CommentAuthor}}` | Comment author display name. |
-| `{{.CommentBody}}` | Comment body. |
+| `{{.Build.Name}}` | Build / status name |
+| `{{.Build.State}}` | `SUCCESSFUL`, `FAILED`, `INPROGRESS` or `STOPPED` |
+| `{{.Build.Key}}` | Status key reported by the build system |
+| `{{.Build.RefName}}` | Ref the build ran on |
+| `{{.Build.URL}}` | Build result URL |
+| `{{.Build.BuildNumber}}` | Pipeline build number, when the URL carries one |
 
 ### Shared fields
 
-Available in every scope:
+Available in every context:
 
 | Variable | Description |
 |----------|-------------|
-| `{{.JiraHost}}` | Jira host from the Jira config. |
-| `{{.GitBranch}}` | Current git branch, if lazyjira was started in a git repo. |
-| `{{.GitRepoPath}}` | Git repository path. |
+| `{{.Workspace}}` | Active workspace slug |
+| `{{.GitBranch}}` | Current git branch, if lazybitbucket was started in a git repo |
+| `{{.GitRepoPath}}` | Git repository path |
 
 ### Template helpers
 
 | Helper | Description |
 |--------|-------------|
 | `{{.X \| shellescape}}` | Wraps the value in single quotes with inner quotes escaped. Use for any template value that could contain shell metacharacters. |
+| `{{.X \| slugify}}` | Lowercases and dash-separates the value. Useful for branch and session names. |
 
 ## Files
 
 | File | Description |
 |------|-------------|
 | `config.yml` | Main configuration |
-| `auth.json` | Credentials, created automatically with restricted permissions |
-| `jql_history.txt` | JQL search history, up to 50 entries |
+| `auth.json` | Credentials, created automatically with `0600` permissions |

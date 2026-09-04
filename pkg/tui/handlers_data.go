@@ -1,800 +1,550 @@
 package tui
 
 import (
-	"fmt"
-	"maps"
-	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/lsst25/lazybitbucket/pkg/config"
-	"github.com/lsst25/lazybitbucket/pkg/jira"
-	"github.com/lsst25/lazybitbucket/pkg/tui/components"
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
+	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
-// handleIssuesLoaded processes newly fetched issues
-func (a *App) handleIssuesLoaded(msg issuesLoadedMsg) (tea.Model, tea.Cmd) {
-	a.statusPanel.SetError("")
-	*a.logFlag = false
-	a.statusPanel.SetOnline(true)
-	a.issuesList.SetIssuesForTab(msg.tab, msg.issues)
+// previewDebounce is how long the selection waits before it costs a request,
+// so holding j down does not walk the whole list over the network.
+const previewDebounce = 150 * time.Millisecond
 
-	var cmds []tea.Cmd
-	if msg.tab == a.issuesList.GetTabIndex() {
-		a.issuesList.SetIssues(msg.issues)
-		for _, issue := range msg.issues {
-			cmds = append(cmds, prefetchIssue(a.client, issue.Key))
+// prefetchLimit is how many pull requests one tab load warms. The budget is
+// roughly 1000 requests an hour, so the list is warmed from the top down.
+const prefetchLimit = 15
+
+// filterMine and filterReviewing are the client-side tab filters.
+const (
+	filterMine      = "mine"
+	filterReviewing = "reviewing"
+)
+
+// noCurrentUserWarning is shown when the token cannot name its own account, so
+// the Mine and Reviewing tabs cannot be evaluated.
+const noCurrentUserWarning = "current user unknown — Mine/Reviewing tabs are empty"
+
+// handleCurrentUserLoaded stores the account and re-evaluates every tab filter,
+// because the pull request list may well have arrived first.
+func (a *App) handleCurrentUserLoaded(msg currentUserLoadedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		// Repository, project and workspace access tokens are not users and
+		// cannot read /user. That is a limitation, not a failure.
+		if bitbucket.IsUnauthorized(msg.err) || bitbucket.IsForbidden(msg.err) {
+			a.setWarning(noCurrentUserWarning)
+		} else {
+			a.statusPanel.SetError(msg.err.Error())
+		}
+		return a, nil
+	}
+	a.currentUser = msg.user
+	if msg.user != nil {
+		a.splashInfo.User = msg.user.Name()
+		if a.detailView.Mode() == views.ModeSplash {
+			a.showSplash()
 		}
 	}
-	if msg.tab == a.issuesList.GetTabIndex() && a.side == sideLeft && a.leftFocus == focusIssues {
-		if cmd := a.previewSelectedIssue(); cmd != nil {
-			cmds = append(cmds, cmd)
+	a.refilterTabs("")
+	return a, a.previewSelected()
+}
+
+// handleReposLoaded records the repositories the list is drawn from and kicks
+// off the first pull request fetch.
+func (a *App) handleReposLoaded(msg reposLoadedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		a.repoDiscoveryFailed = true
+		a.statusPanel.SetOnline(false)
+		a.statusPanel.SetError(msg.err.Error())
+		return a, nil
+	}
+
+	a.repoDiscoveryFailed = false
+	a.repos = msg.repos
+	a.repoSlugs = make([]string, 0, len(msg.repos))
+	for _, repo := range msg.repos {
+		a.repoSlugs = append(a.repoSlugs, repo.Slug)
+	}
+	a.repoList.SetRepos(msg.repos)
+	a.splashInfo.RepoCount = len(msg.repos)
+	a.splashInfo.RepoNote = ""
+
+	if len(a.cfg.Bitbucket.Repositories) == 0 {
+		switch {
+		case len(msg.repos) == 0:
+			note := "no repositories visible to this token — set bitbucket.repositories in config.yml"
+			a.statusPanel.SetError(note)
+			a.splashInfo.RepoNote = note
+		case len(msg.repos) == repoDiscoveryLimit:
+			a.setWarning("showing the first 25 repositories — set bitbucket.repositories to choose")
 		}
 	}
-	if a.gitDetectedKey != "" {
-		detectedKey := a.gitDetectedKey
-		projectKey, _, _ := strings.Cut(detectedKey, "-")
-		if !strings.EqualFold(projectKey, a.projectKey) {
-			projects := a.projectList.AllProjects()
-			for _, p := range projects {
-				if strings.EqualFold(p.Key, projectKey) {
-					if cmd := a.selectProject(&p); cmd != nil {
-						cmds = append(cmds, cmd)
-					}
-					cmds = append(cmds, a.fetchActiveTab())
-					a.gitDetectedKey = ""
-					return a, tea.Batch(cmds...)
-				}
+	if warning := refreshRateWarning(len(a.repoSlugs), a.refreshEvery); warning != "" {
+		a.setWarning(warning)
+	}
+	if a.detailView.Mode() == views.ModeSplash {
+		a.showSplash()
+	}
+
+	return a, a.fetchActiveTab()
+}
+
+// handlePullRequestsLoaded stores one fetch key's result and re-filters every
+// tab that shares that key — the default Open/Mine/Reviewing tabs cost one
+// request per repository between them, not three.
+func (a *App) handlePullRequestsLoaded(msg pullRequestsLoadedMsg) (tea.Model, tea.Cmd) {
+	delete(a.inFlight, msg.fetchKey)
+	a.logFlag.Store(false)
+
+	failed, firstErr := 0, ""
+	for _, result := range msg.results {
+		if result.Err != nil {
+			failed++
+			if firstErr == "" {
+				firstErr = result.Err.Error()
 			}
 		}
-		switch {
-		case a.issuesList.SelectByKey(detectedKey):
-			cmds = append(cmds, fetchIssueDetail(a.client, detectedKey))
-			a.gitDetectedKey = ""
-		case a.issuesList.GetTabIndex() != 0:
-			a.issuesList.SetTabIndex(0)
-			cmds = append(cmds, a.fetchActiveTab())
-		default:
-			a.gitDetectedKey = ""
-		}
+	}
+	switch {
+	case len(msg.results) > 0 && failed == len(msg.results):
+		a.statusPanel.SetOnline(false)
+		a.statusPanel.SetError(firstErr)
+	case failed > 0:
+		a.statusPanel.SetOnline(true)
+		a.statusPanel.SetError(firstErr)
+	default:
+		a.statusPanel.SetOnline(true)
+		a.statusPanel.SetError("")
+	}
+
+	if a.merged == nil {
+		a.merged = make(map[string][]bitbucket.PullRequest)
+	}
+	a.merged[msg.fetchKey] = bitbucket.MergePullRequests(msg.results)
+	a.refilterTabs(msg.fetchKey)
+
+	if a.fetchKeyOf(a.prList.GetTabIndex()) != msg.fetchKey {
+		return a, nil
+	}
+
+	a.repoList.SetCounts(countsBySlug(a.merged[msg.fetchKey]))
+
+	var cmds []tea.Cmd
+	if cmd := a.autoSelectGitBranch(); cmd != nil {
+		cmds = append(cmds, cmd)
+	} else if cmd := a.previewSelected(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := a.startPrefetch(); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 	return a, tea.Batch(cmds...)
 }
 
-// handleIssueDetailLoaded applies a freshly fetched issue. DetailView follows
-// previewKey; InfoPanel follows the list selection so its tab and cursor are
-// preserved when a preview of another issue arrives.
-func (a *App) handleIssueDetailLoaded(msg issueDetailLoadedMsg) (tea.Model, tea.Cmd) {
-	a.statusPanel.SetError("")
-	*a.logFlag = false
+// autoSelectGitBranch moves the cursor to the pull request whose source branch
+// is the branch checked out here, once, on the first list load.
+func (a *App) autoSelectGitBranch() tea.Cmd {
+	if a.gitAutoSelect || a.gitBranch == "" {
+		return nil
+	}
+	a.gitAutoSelect = true
+	for _, pr := range a.prList.CurrentPullRequests() {
+		if pr.SourceBranch() != a.gitBranch {
+			continue
+		}
+		if a.prList.SelectByKey(pr.Key()) {
+			return a.previewSelected()
+		}
+	}
+	return nil
+}
+
+// handlePullRequestDetailLoaded applies a pull request fetched for its review
+// data. A response from a superseded selection is dropped.
+func (a *App) handlePullRequestDetailLoaded(msg pullRequestDetailLoadedMsg) (tea.Model, tea.Cmd) {
+	if msg.epoch != a.previewEpoch || msg.pr == nil {
+		return a, nil
+	}
+	a.logFlag.Store(false)
 	a.statusPanel.SetOnline(true)
-	a.issueCache[msg.issue.Key] = msg.issue
-	if a.previewKey == "" || a.previewKey == msg.issue.Key {
-		a.detailView.UpdateIssueData(msg.issue)
-	}
-	if sel := a.issuesList.SelectedIssue(); sel != nil && sel.Key == msg.issue.Key {
-		a.infoPanel.SetIssue(msg.issue)
-	}
-	a.issuesList.PatchIssue(msg.issue)
-
-	return a, a.prefetchRelated(msg.issue)
-}
-
-// handleIssuePrefetched caches prefetched issue data silently
-func (a *App) handleIssuePrefetched(msg issuePrefetchedMsg) (tea.Model, tea.Cmd) {
-	if msg.issue == nil {
-		return a, nil
-	}
-	a.issueCache[msg.issue.Key] = msg.issue
-	if sel := a.issuesList.SelectedIssue(); sel != nil && sel.Key == msg.issue.Key {
-		if a.detailView.IssueKey() == "" || a.detailView.IssueKey() == msg.issue.Key {
-			a.detailView.UpdateIssueData(msg.issue)
-		}
-		if a.infoPanel.IssueKey() == "" || a.infoPanel.IssueKey() == msg.issue.Key {
-			a.infoPanel.SetIssue(msg.issue)
-		}
-	}
+	a.prCache[msg.pr.Key()] = msg.pr
+	a.detailView.UpdatePullRequestData(msg.pr)
+	a.patchMerged(msg.pr)
+	a.prList.PatchPullRequest(msg.pr)
+	a.refilterTabs("")
 	return a, nil
 }
 
-// handleTransitionDone re-fetches data after a transition
-func (a *App) handleTransitionDone() (tea.Model, tea.Cmd) {
-	sel := a.issuesList.SelectedIssue()
-	if sel == nil {
-		return a, nil
-	}
-	return a, tea.Batch(
-		fetchIssueDetail(a.client, sel.Key),
-		a.fetchActiveTab(),
-	)
-}
-
-// handleTransitionsLoaded shows the transition picker modal
-func (a *App) handleTransitionsLoaded(msg transitionsLoadedMsg) (tea.Model, tea.Cmd) {
-	if len(msg.transitions) == 0 {
-		return a, nil
-	}
-	var items []components.ModalItem
-	for _, t := range msg.transitions {
-		label := t.Name
-		hint := ""
-		if t.To != nil {
-			label += " → " + t.To.Name
-			hint = t.To.Description
-		}
-		items = append(items, components.ModalItem{ID: t.ID, Label: label, Hint: hint})
-	}
-	issueKey := msg.issueKey
-	a.onSelect = func(item components.ModalItem) tea.Cmd {
-		return doTransition(a.client, issueKey, item.ID)
-	}
-	a.modal.Show("Transition: "+issueKey, items)
-	return a, nil
-}
-
-// handlePrioritiesLoaded shows the priority picker modal
-func (a *App) handlePrioritiesLoaded(msg prioritiesLoadedMsg) (tea.Model, tea.Cmd) {
-	if len(msg.priorities) == 0 {
-		return a, nil
-	}
-	var items []components.ModalItem
-	for _, p := range msg.priorities {
-		items = append(items, components.ModalItem{ID: p.ID, Label: p.Name})
-	}
-	if a.onSelect == nil {
-		a.onSelect = func(item components.ModalItem) tea.Cmd {
-			if sel := a.issuesList.SelectedIssue(); sel != nil {
-				a.optimisticFieldUpdate(sel.Key, fldPriority, &jira.Priority{ID: item.ID, Name: item.Label})
-				return updateIssueField(a.client, sel.Key, fldPriority, map[string]string{"id": item.ID})
-			}
-			return nil
-		}
-	}
-	a.modal.Show("Priority", items)
-	return a, nil
-}
-
-// handleUsersLoaded shows the assignee/reporter picker modal
-func (a *App) handleUsersLoaded(msg usersLoadedMsg) (tea.Model, tea.Cmd) {
-	if a.projectKey != "" && len(msg.users) > 0 {
-		a.usersCache[a.projectKey] = msg.users
-	}
-	if msg.issueKey == "" {
-		return a, nil
-	}
-	if msg.issueKey == createUsersSentinel {
-		if a.onChecklist != nil {
-			a.modal.ShowChecklist("Select users", a.buildUserItems(msg.users), nil)
-			return a, nil
-		}
-		return a.showCreateUserPicker(msg.users)
-	}
-	sel := a.issuesList.SelectedIssue()
-	if sel == nil {
-		return a, nil
-	}
-	currentAssigneeID := ""
-	if sel.Assignee != nil {
-		currentAssigneeID = sel.Assignee.AccountID
-	}
-
-	myAccountID := ""
-	if a.currentUser != nil {
-		myAccountID = a.currentUser.AccountID
-	}
-
-	var items []components.ModalItem
-
-	if a.currentUser != nil {
-		meLabel := a.currentUser.DisplayName + " (me)"
-		meFound := false
-		for _, u := range msg.users {
-			if u.AccountID == myAccountID {
-				items = append(items, components.ModalItem{ID: u.AccountID, Label: meLabel, Active: u.AccountID == currentAssigneeID})
-				meFound = true
-				break
-			}
-		}
-		if !meFound {
-			items = append(items, components.ModalItem{ID: a.currentUser.AccountID, Label: meLabel, Active: a.currentUser.AccountID == currentAssigneeID})
-		}
-	}
-
-	items = append(items, components.ModalItem{ID: "", Label: "None", Active: currentAssigneeID == ""})
-
-	for _, u := range msg.users {
-		if u.AccountID == myAccountID {
-			continue
-		}
-		items = append(items, components.ModalItem{ID: u.AccountID, Label: u.DisplayName, Active: u.AccountID == currentAssigneeID})
-	}
-
-	a.modal.Show("Assignee: "+sel.Key, items)
-	return a, nil
-}
-
-// handleBoardsLoaded caches boards and resolves the board for the current project
-func (a *App) handleBoardsLoaded(msg boardsLoadedMsg) (tea.Model, tea.Cmd) {
-	a.boards = msg.boards
-	a.resolveBoardID()
-	return a, nil
-}
-
-func (a *App) invalidateInFlight() {
-	a.parentEpoch++
-	a.childrenEpoch++
-	a.previewEpoch++
-	a.pendingWalk = pendingWalk{}
-}
-
-func (a *App) resolveBoardID() {
-	a.boardID = 0
-	for _, b := range a.boards {
-		if b.ProjectKey == a.projectKey {
-			a.boardID = b.ID
-			return
-		}
-	}
-}
-
-// handleSprintsLoaded shows the sprint picker modal
-func (a *App) handleSprintsLoaded(msg sprintsLoadedMsg) (tea.Model, tea.Cmd) {
-	sel := a.issuesList.SelectedIssue()
-	if sel == nil {
-		return a, nil
-	}
-	currentSprintID := 0
-	if sel.Sprint != nil {
-		currentSprintID = sel.Sprint.ID
-	}
-	var items []components.ModalItem
-	items = append(items, components.ModalItem{ID: "0", Label: "None", Active: currentSprintID == 0})
-	for _, s := range msg.sprints {
-		if s.State == "closed" {
-			continue
-		}
-		label := s.Name
-		if s.State == "active" {
-			label += " (active)"
-		}
-		items = append(items, components.ModalItem{
-			ID:     strconv.Itoa(s.ID),
-			Label:  label,
-			Active: s.ID == currentSprintID,
-		})
-	}
-	if a.onSelect == nil {
-		issueKey := sel.Key
-		a.onSelect = func(item components.ModalItem) tea.Cmd {
-			sprintID, _ := strconv.Atoi(item.ID)
-			if sprintID == 0 {
-				a.optimisticFieldUpdate(issueKey, fldSprint, nil)
-				return updateIssueField(a.client, issueKey, "sprint", nil)
-			}
-			a.optimisticFieldUpdate(issueKey, fldSprint, &jira.Sprint{ID: sprintID, Name: item.Label})
-			return moveToSprint(a.client, sprintID, issueKey)
-		}
-	}
-	a.modal.Show("Sprint: "+sel.Key, items)
-	return a, nil
-}
-
-// handleLabelsLoaded shows the labels checklist modal
-func (a *App) handleLabelsLoaded(msg labelsLoadedMsg) (tea.Model, tea.Cmd) {
-	sel := a.issuesList.SelectedIssue()
-	if sel == nil {
-		return a, nil
-	}
-	cached := sel
-	if c, ok := a.issueCache[sel.Key]; ok {
-		cached = c
-	}
-	selected := make(map[string]bool)
-	for _, l := range cached.Labels {
-		selected[l] = true
-	}
-	var items []components.ModalItem
-	for _, l := range msg.labels {
-		items = append(items, components.ModalItem{ID: l, Label: l})
-	}
-	a.modal.ShowChecklist("Labels: "+sel.Key, items, selected)
-	return a, nil
-}
-
-// handleComponentsLoaded shows the components checklist modal
-func (a *App) handleComponentsLoaded(msg componentsLoadedMsg) (tea.Model, tea.Cmd) {
-	sel := a.issuesList.SelectedIssue()
-	if sel == nil {
-		return a, nil
-	}
-	cached := sel
-	if c, ok := a.issueCache[sel.Key]; ok {
-		cached = c
-	}
-	selected := make(map[string]bool)
-	for _, c := range cached.Components {
-		selected[c.ID] = true
-	}
-	var items []components.ModalItem
-	for _, c := range msg.components {
-		items = append(items, components.ModalItem{ID: c.ID, Label: c.Name})
-	}
-	a.modal.ShowChecklist("Components: "+sel.Key, items, selected)
-	return a, nil
-}
-
-// handleIssueTypesLoaded shows the issue type picker modal or create form type picker
-func (a *App) handleIssueTypesLoaded(msg issueTypesLoadedMsg) (tea.Model, tea.Cmd) {
-	if a.createCtx.intent {
-		a.createCtx.intent = false
-		subtaskOnly := a.createCtx.parentKey != ""
-		items := make([]components.ModalItem, 0, len(msg.issueTypes))
-		for _, t := range msg.issueTypes {
-			if t.Subtask == subtaskOnly {
-				items = append(items, components.ModalItem{ID: t.ID, Label: t.Name})
-			}
-		}
-		a.onSelect = func(item components.ModalItem) tea.Cmd {
-			return func() tea.Msg {
-				return components.CreateFormTypeSelectedMsg{TypeID: item.ID, TypeName: item.Label}
-			}
-		}
-		title := "Select issue type"
-		if subtaskOnly {
-			title = "Select subtask type"
-		}
-		a.modal.Show(title, items)
-		return a, nil
-	}
-	items := make([]components.ModalItem, 0, len(msg.issueTypes))
-	for _, t := range msg.issueTypes {
-		items = append(items, components.ModalItem{ID: t.ID, Label: t.Name})
-	}
-	a.modal.Show("Issue Type", items)
-	return a, nil
-}
-
-// handleProjectsLoaded processes the project list from API
-func (a *App) handleProjectsLoaded(msg projectsLoadedMsg) (tea.Model, tea.Cmd) {
-	projects := msg.projects
-	if !a.demoMode {
-		if creds, err := config.LoadCredentials(); err == nil && creds != nil && creds.LastProject != "" {
-			for i, p := range projects {
-				if p.Key == creds.LastProject {
-					projects[0], projects[i] = projects[i], projects[0]
-					break
-				}
+// patchMerged replaces a pull request wherever a fetch result holds it, so the
+// tab filters re-evaluate against the review data that just arrived rather
+// than against the list row it was missing from.
+func (a *App) patchMerged(pr *bitbucket.PullRequest) {
+	key := pr.Key()
+	for _, prs := range a.merged {
+		for index := range prs {
+			if prs[index].Key() == key {
+				prs[index] = *pr
 			}
 		}
 	}
-	a.projectList.SetProjects(projects)
-	if a.projectKey == "" && len(projects) > 0 {
-		a.projectKey = projects[0].Key
-		a.projectID = projects[0].ID
-		a.statusPanel.SetProject(a.projectKey)
-		a.projectList.SetActiveKey(a.projectKey)
-		a.resolveBoardID()
-		return a, a.fetchActiveTab()
+}
+
+// handleStatusesLoaded applies the previewed pull request's build statuses.
+func (a *App) handleStatusesLoaded(msg statusesLoadedMsg) (tea.Model, tea.Cmd) {
+	if msg.epoch != a.previewEpoch || msg.key != a.previewKey {
+		return a, nil
 	}
+	a.logFlag.Store(false)
+	if msg.err != nil {
+		a.buildsPanel.SetError(msg.key, msg.err.Error())
+		a.statusPanel.SetError(msg.err.Error())
+		return a, nil
+	}
+	a.statusPanel.SetOnline(true)
+	a.cacheStatuses(msg.key, msg.statuses, msg.updatedOn)
+	a.buildsPanel.SetStatuses(msg.key, msg.statuses)
+	a.detailView.SetStatuses(msg.key, msg.statuses)
 	return a, nil
 }
 
-// prefetchRelated batches a single JQL search for all linked issues and subtasks not yet in cache
-func (a *App) prefetchRelated(issue *jira.Issue) tea.Cmd {
-	if issue == nil {
-		return nil
+// handlePreviewDebounce fires the fetches a selection deferred, unless the user
+// has moved on.
+func (a *App) handlePreviewDebounce(msg previewDebounceMsg) (tea.Model, tea.Cmd) {
+	if msg.epoch != a.previewEpoch || msg.key != a.previewKey {
+		return a, nil
 	}
-	seen := make(map[string]bool)
-	var keys []string
-
-	collect := func(key string) {
-		if key == "" || seen[key] {
-			return
-		}
-		seen[key] = true
-		if _, ok := a.issueCache[key]; !ok {
-			keys = append(keys, key)
-		}
+	pr := a.pullRequestByKey(msg.key)
+	if pr == nil {
+		return a, nil
 	}
-
-	for _, sub := range issue.Subtasks {
-		collect(sub.Key)
-	}
-	for _, link := range issue.IssueLinks {
-		if link.OutwardIssue != nil {
-			collect(link.OutwardIssue.Key)
-		}
-		if link.InwardIssue != nil {
-			collect(link.InwardIssue.Key)
-		}
-	}
-	if issue.Parent != nil {
-		collect(issue.Parent.Key)
-	}
-	if len(keys) == 0 {
-		return nil
-	}
-	return batchPrefetch(a.client, keys)
-}
-
-// prefetchChildrenDetails warms issueCache for the given children so that
-// drilling into one from the Sub tab doesn't require a per-key fetch. Skips
-// keys that are already cached.
-func (a *App) prefetchChildrenDetails(children []jira.Issue) tea.Cmd {
-	var keys []string
-	for _, c := range children {
-		if c.Key == "" {
-			continue
-		}
-		if _, ok := a.issueCache[c.Key]; ok {
-			continue
-		}
-		keys = append(keys, c.Key)
-	}
-	if len(keys) == 0 {
-		return nil
-	}
-	return batchPrefetch(a.client, keys)
-}
-
-// handleBatchPrefetched caches all issues from a batch prefetch
-func (a *App) handleBatchPrefetched(msg batchPrefetchedMsg) (tea.Model, tea.Cmd) {
-	for i := range msg.issues {
-		a.issueCache[msg.issues[i].Key] = &msg.issues[i]
-	}
-	return a, nil
-}
-
-// handleCreateFormTypeSelected fetches create metadata for selected type
-func (a *App) handleCreateFormTypeSelected(msg components.CreateFormTypeSelectedMsg) (tea.Model, tea.Cmd) {
-	a.createCtx.issueTypeID = msg.TypeID
-	a.createCtx.issueTypeName = msg.TypeName
-	cacheKey := a.createCtx.projectKey + ":" + msg.TypeID
-	if cached, ok := a.createMetaCache[cacheKey]; ok {
-		return a.handleCreateMetaLoaded(createMetaLoadedMsg{fields: cached})
-	}
-	a.createForm.SetLoading(true)
-	*a.logFlag = true
-	return a, fetchCreateMeta(a.client, a.createCtx.projectKey, msg.TypeID)
-}
-
-// handleCreatePreFormError aborts a create flow that failed before the form was
-// populated. The form is hidden (never resumed empty) and the failure is shown
-// as a readable status message carrying Jira's own wording.
-func (a *App) handleCreatePreFormError(msg createPreFormErrorMsg) (tea.Model, tea.Cmd) {
-	subtask := a.createCtx.parentKey != ""
-	text := formatCreateError(msg.err, a.createCtx.projectKey, subtask)
-	a.createForm.Hide()
-	a.createCtx = createCtx{}
-	a.statusPanel.SetError(text)
-	a.modal.ShowError("Error", []components.ModalItem{{Label: text}})
-	return a, nil
-}
-
-// handleCreateMetaLoaded builds form fields from metadata
-func (a *App) handleCreateMetaLoaded(msg createMetaLoadedMsg) (tea.Model, tea.Cmd) {
-	cacheKey := a.createCtx.projectKey + ":" + a.createCtx.issueTypeID
-	if _, ok := a.createMetaCache[cacheKey]; !ok {
-		a.createMetaCache[cacheKey] = msg.fields
-	}
-	fields := a.buildCreateFields(msg.fields)
-
-	if a.cfg.GUI.ShouldPrefillFromTab() {
-		tab := a.issuesList.ActiveTab()
-		if tab.JQL != "" {
-			jql := resolveTabJQL(tab, a.projectKey, a.cfg.Jira.Email)
-			prefill := ParseJQLPrefill(jql)
-			ApplyPrefill(fields, prefill, a.currentUser, a.isCloud)
-		}
-	}
-
-	if src := a.createCtx.duplicateFrom; src != nil {
-		applyDuplicatePrefill(fields, src, a.isCloud)
-	}
-
-	a.createForm.ShowForm(fields, a.createCtx.issueTypeName, a.createCtx.projectKey)
-
 	var cmds []tea.Cmd
-	if _, ok := a.usersCache[a.projectKey]; !ok {
-		cmds = append(cmds, fetchUsers(a.client, a.projectKey, ""))
+	if _, ok := a.statusCache[msg.key]; !ok {
+		cmds = append(cmds, a.fetchStatuses(pr, a.previewEpoch))
 	}
-	if len(cmds) > 0 {
-		return a, tea.Batch(cmds...)
+	if !pr.HasReviewData() {
+		cmds = append(cmds, a.fetchPullRequestDetail(pr, a.previewEpoch))
 	}
+	if len(cmds) == 0 {
+		return a, nil
+	}
+	a.logFlag.Store(true)
+	return a, tea.Batch(cmds...)
+}
+
+// handlePrefetched fills the caches from a warmed pull request and chains the
+// next one, so exactly one prefetch request is ever in flight. Failures are
+// silent: a warm-up must never interrupt the user.
+func (a *App) handlePrefetched(msg prefetchedMsg) (tea.Model, tea.Cmd) {
+	if msg.epoch != a.prefetchEpoch {
+		return a, nil
+	}
+	if msg.err == nil {
+		a.cacheStatuses(msg.key, msg.statuses, msg.updatedOn)
+		a.buildsPanel.SetStatuses(msg.key, msg.statuses)
+		a.detailView.SetStatuses(msg.key, msg.statuses)
+	}
+	if msg.pr != nil {
+		a.prCache[msg.key] = msg.pr
+		a.patchMerged(msg.pr)
+		a.prList.PatchPullRequest(msg.pr)
+		a.refilterTabs("")
+	}
+	return a, a.prefetchNext()
+}
+
+// handlePipelineLoaded shows a pipeline run and its steps.
+func (a *App) handlePipelineLoaded(msg pipelineLoadedMsg) (tea.Model, tea.Cmd) {
+	a.logFlag.Store(false)
+	if msg.err != nil {
+		a.detailView.SetPipelineError(msg.key, msg.err.Error())
+		a.statusPanel.SetError(msg.err.Error())
+		return a, nil
+	}
+	a.statusPanel.SetOnline(true)
+	a.pipelineCache[pipelineCacheKey(msg.key, msg.build)] = &pipelineEntry{pipeline: msg.pipeline, steps: msg.steps}
+	a.detailView.SetPipeline(msg.key, msg.pipeline, msg.steps)
 	return a, nil
 }
 
-// applyDuplicatePrefill copies field values from a source issue to form fields
-func applyDuplicatePrefill(fields []components.CreateFormField, src *jira.Issue, isCloud bool) {
-	for i := range fields {
-		switch fields[i].FieldID {
-		case "summary":
-			fields[i].DisplayValue = "Copy of " + src.Summary
-			fields[i].Value = "Copy of " + src.Summary
-		case "description":
-			fields[i].DisplayValue = src.Description
-			if src.DescriptionADF != nil {
-				fields[i].Value = stripADFMedia(src.DescriptionADF)
-			} else {
-				fields[i].Value = src.Description
-			}
-		case fldPriority:
-			if src.Priority != nil {
-				fields[i].DisplayValue = src.Priority.Name
-				fields[i].Value = map[string]string{"id": src.Priority.ID}
-			}
-		case fldAssignee:
-			if src.Assignee != nil {
-				fields[i].DisplayValue = src.Assignee.DisplayName
-				key := fldName
-				if isCloud {
-					key = fldAccountID
-				}
-				fields[i].Value = map[string]string{key: src.Assignee.AccountID}
-			}
-		case fldLabels:
-			if len(src.Labels) > 0 {
-				fields[i].DisplayValue = strings.Join(src.Labels, ", ")
-				fields[i].Value = src.Labels
-			}
-		case fldComponents:
-			if len(src.Components) > 0 {
-				comps := make([]map[string]string, 0, len(src.Components))
-				names := make([]string, 0, len(src.Components))
-				for _, c := range src.Components {
-					comps = append(comps, map[string]string{"id": c.ID})
-					names = append(names, c.Name)
-				}
-				fields[i].DisplayValue = strings.Join(names, ", ")
-				fields[i].Value = comps
-			}
-		case fldSprint:
-			if src.Sprint != nil {
-				fields[i].DisplayValue = src.Sprint.Name
-				fields[i].Value = map[string]string{"id": strconv.Itoa(src.Sprint.ID)}
-			}
-		default:
-			if strings.HasPrefix(fields[i].FieldID, "customfield_") {
-				if val, ok := src.CustomFields[fields[i].FieldID]; ok {
-					display := formatCustomVal(val)
-					if display == "" {
-						continue
-					}
-					fields[i].Value = val
-					fields[i].DisplayValue = display
-				}
-			}
-		}
+// handleStepSelected fetches the log of the step the user activated.
+func (a *App) handleStepSelected(msg views.StepSelectedMsg) (tea.Model, tea.Cmd) {
+	pr := a.currentPullRequest()
+	if pr == nil || msg.StepUUID == "" {
+		return a, nil
 	}
+	a.detailView.SetStepLogLoading(msg.PipelineUUID, msg.StepUUID)
+	return a, a.fetchStepLog(pr, msg.PipelineUUID, msg.StepUUID)
 }
 
-// stripADFMedia removes media nodes from ADF that reference source issue attachments
-func stripADFMedia(adf any) any {
-	doc, ok := adf.(map[string]any)
-	if !ok {
-		return adf
+// handleStepLogLoaded shows a step's log tail.
+func (a *App) handleStepLogLoaded(msg stepLogLoadedMsg) (tea.Model, tea.Cmd) {
+	a.logFlag.Store(false)
+	if msg.err != nil {
+		a.detailView.SetStepLogError(msg.pipelineUUID, msg.stepUUID, msg.err.Error())
+		a.statusPanel.SetError(msg.err.Error())
+		return a, nil
 	}
-	content, ok := doc["content"].([]any)
-	if !ok {
-		return adf
-	}
-	var filtered []any
-	for _, node := range content {
-		n, ok := node.(map[string]any)
-		if !ok {
-			filtered = append(filtered, node)
-			continue
-		}
-		nodeType, _ := n["type"].(string)
-		if nodeType == "mediaSingle" || nodeType == "mediaGroup" || nodeType == "media" {
-			continue
-		}
-		filtered = append(filtered, node)
-	}
-	result := make(map[string]any, len(doc))
-	maps.Copy(result, doc)
-	result["content"] = filtered
-	return result
+	a.statusPanel.SetOnline(true)
+	a.detailView.SetStepLog(msg.pipelineUUID, msg.stepUUID, msg.text)
+	return a, nil
 }
 
-// formatCustomVal converts a custom field value to display string
-func formatCustomVal(v any) string {
-	if v == nil {
-		return ""
+// handlePullRequestSelected drives the whole right-hand side from the list
+// cursor: detail, builds panel, and the debounced fetches behind them.
+func (a *App) handlePullRequestSelected(msg views.PullRequestSelectedMsg) (tea.Model, tea.Cmd) {
+	if msg.PullRequest == nil {
+		return a, nil
 	}
-	switch val := v.(type) {
-	case string:
-		return val
-	case float64:
-		return fmt.Sprintf("%g", val)
-	case map[string]any:
-		if name, ok := val["displayName"].(string); ok {
-			return name
-		}
-		if name, ok := val["value"].(string); ok {
-			return name
-		}
-		if name, ok := val["name"].(string); ok {
-			return name
-		}
-		return ""
-	case []any:
-		var parts []string
-		for _, item := range val {
-			parts = append(parts, formatCustomVal(item))
-		}
-		return strings.Join(parts, ", ")
-	}
-	return ""
-}
-
-var skipCreateFields = map[string]bool{
-	"project":    true,
-	"issuetype":  true,
-	"attachment": true,
-	"issuelinks": true,
-	"parent":     true,
-}
-
-var supportedSchemaTypes = map[string]bool{
-	"string":       true,
-	"array":        true,
-	"priority":     true,
-	schemaUser:     true,
-	"option":       true,
-	"number":       true,
-	"date":         true,
-	"datetime":     true,
-	"timetracking": true,
-}
-
-func (a *App) buildCreateFields(meta []jira.CreateMetaField) []components.CreateFormField {
-	knownOrder := []string{"summary", "description", fldPriority, fldAssignee, fldLabels, fldComponents, fldSprint}
-	metaMap := make(map[string]jira.CreateMetaField)
-	for _, f := range meta {
-		metaMap[f.FieldID] = f
+	key := msg.PullRequest.Key()
+	pr := msg.PullRequest
+	if cached, ok := a.prCache[key]; ok && cached != nil {
+		pr = cached
 	}
 
-	added := make(map[string]bool)
-	var fields []components.CreateFormField
+	a.previewKey = key
+	a.previewEpoch++
+	// Only re-point the panel when it is not already on this pull request:
+	// a background refresh must not throw the user out of a pipeline or a
+	// step log they are reading. PullRequestKey is "" on the splash and repo
+	// screens, so those still fall through to SetPullRequest.
+	if a.detailView.PullRequestKey() != key {
+		a.detailView.SetPullRequest(pr)
+	} else {
+		a.detailView.UpdatePullRequestData(pr)
+	}
+	a.buildsPanel.SetPullRequest(key)
 
-	for _, fid := range knownOrder {
-		mf, ok := metaMap[fid]
-		if !ok {
-			switch fid {
-			case "summary":
-				mf = jira.CreateMetaField{FieldID: "summary", Name: "Summary", Required: true, Schema: jira.CreateMetaSchema{Type: "string", System: "summary"}}
-			case "description":
-				mf = jira.CreateMetaField{FieldID: "description", Name: "Description", Required: false, Schema: jira.CreateMetaSchema{Type: "string", System: "description"}}
-			default:
-				continue
-			}
-		}
-		fields = append(fields, a.metaToFormField(mf))
-		added[fid] = true
+	entry, cached := a.statusCache[key]
+	if cached {
+		a.buildsPanel.SetStatuses(key, entry.statuses)
+		a.detailView.SetStatuses(key, entry.statuses)
+	}
+	if cached && pr.HasReviewData() {
+		return a, nil
+	}
+	if !cached {
+		a.buildsPanel.SetLoading(key)
 	}
 
-	cfgNames := make(map[string]string)
-	for _, cf := range a.cfg.Fields {
-		cfgNames[cf.ID] = cf.Name
-	}
-
-	var remaining []jira.CreateMetaField
-	for _, mf := range meta {
-		if added[mf.FieldID] || skipCreateFields[mf.FieldID] {
-			continue
-		}
-		if !supportedSchemaTypes[mf.Schema.Type] {
-			continue
-		}
-		remaining = append(remaining, mf)
-	}
-	sort.SliceStable(remaining, func(i, j int) bool {
-		if remaining[i].Required != remaining[j].Required {
-			return remaining[i].Required
-		}
-		return false
+	epoch := a.previewEpoch
+	return a, tea.Tick(a.previewDelay(), func(time.Time) tea.Msg {
+		return previewDebounceMsg{key: key, epoch: epoch}
 	})
-	for _, mf := range remaining {
-		ff := a.metaToFormField(mf)
-		if name, ok := cfgNames[mf.FieldID]; ok {
-			ff.Name = name
-		}
-		fields = append(fields, ff)
-	}
-
-	return fields
 }
 
-const (
-	schemaArray = "array"
-	schemaUser  = "user"
-)
+// previewDelay is the debounce window, shortened by tests that drive the whole
+// message chain synchronously.
+func (a *App) previewDelay() time.Duration {
+	if a.debounce > 0 {
+		return a.debounce
+	}
+	return previewDebounce
+}
 
-// metaToFormField converts one CreateMetaField to CreateFormField
-func (a *App) metaToFormField(mf jira.CreateMetaField) components.CreateFormField {
-	ft := components.CFFieldSingleText
+// previewSelected re-runs the selection flow for whatever the cursor is on.
+func (a *App) previewSelected() tea.Cmd {
+	sel := a.prList.SelectedPullRequest()
+	if sel == nil {
+		return nil
+	}
+	_, cmd := a.handlePullRequestSelected(views.PullRequestSelectedMsg{PullRequest: sel})
+	return cmd
+}
+
+// selectRepo narrows the list to one repository (or clears the filter for the
+// synthetic All row) and moves focus to the pull requests.
+func (a *App) selectRepo(item *views.RepoItem) tea.Cmd {
+	if item == nil {
+		return nil
+	}
+	a.repoFilter = item.Slug
+	a.prList.SetRepoFilter(item.Slug)
+	a.repoList.SetActiveSlug(item.Slug)
+	a.statusPanel.SetScope(scopeLabel(item.Slug))
+	a.side = sideLeft
+	a.leftFocus = focusPullRequests
+	a.updateFocusState()
+	return tea.Batch(a.previewSelected(), a.startPrefetch())
+}
+
+// openBuild drills into a build status: its pipeline run when the status names
+// one, the browser otherwise.
+func (a *App) openBuild(status *bitbucket.CommitStatus) (tea.Model, tea.Cmd) {
+	if status == nil {
+		return a, nil
+	}
+	pr := a.currentPullRequest()
+	build, ok := status.BuildNumber()
+	if !ok || pr == nil {
+		if status.URL != "" {
+			a.openBrowser(status.URL)
+		}
+		return a, nil
+	}
+
+	key := pr.Key()
+	a.detailView.SetPipelineLoading(key, build)
+	a.side = sideRight
+	a.updateFocusState()
+
+	if entry, hit := a.pipelineCache[pipelineCacheKey(key, build)]; hit && entry != nil {
+		a.detailView.SetPipeline(key, entry.pipeline, entry.steps)
+		return a, nil
+	}
+	return a, a.fetchPipeline(pr, build)
+}
+
+// startPrefetch refills the prefetch queue for the tab in view and starts the
+// chain. Bumping the epoch drops results from the previous queue.
+func (a *App) startPrefetch() tea.Cmd {
+	a.prefetchEpoch++
+	a.prefetchQueue = nil
+	prs := a.prList.CurrentPullRequests()
+	for index := range prs {
+		if len(a.prefetchQueue) >= prefetchLimit {
+			break
+		}
+		if a.statusesStale(&prs[index]) {
+			a.prefetchQueue = append(a.prefetchQueue, prs[index].Key())
+		}
+	}
+	return a.prefetchNext()
+}
+
+// statusesStale decides whether a pull request's cached statuses are worth a
+// request. Four ways to be stale: never fetched; the pull request has changed
+// since; a build was still running (a finishing build does not touch the pull
+// request's updated_on); or the build has not been reported at all and a
+// refresh period has passed.
+func (a *App) statusesStale(pr *bitbucket.PullRequest) bool {
+	entry, ok := a.statusCache[pr.Key()]
 	switch {
-	case mf.Schema.System == "description":
-		ft = components.CFFieldMultiText
-	case mf.Schema.System == fldPriority || mf.Schema.System == "issuetype" || mf.Schema.System == fldSprint:
-		ft = components.CFFieldSingleSelect
-	case mf.Schema.System == fldAssignee || mf.Schema.System == "reporter":
-		ft = components.CFFieldPerson
-	case mf.Schema.System == fldLabels:
-		ft = components.CFFieldMultiSelect
-	case mf.Schema.System == fldComponents:
-		ft = components.CFFieldMultiSelect
-	case mf.Schema.Type == "option":
-		ft = components.CFFieldSingleSelect
-	case mf.Schema.Type == schemaArray && mf.Schema.Items == "option":
-		ft = components.CFFieldMultiSelect
-	case mf.Schema.Type == schemaArray && mf.Schema.Items == schemaUser:
-		ft = components.CFFieldMultiSelect
-	case mf.Schema.Type == schemaArray && mf.Schema.Items == "string":
-		ft = components.CFFieldMultiSelect
-	case mf.Schema.Type == schemaArray:
-		ft = components.CFFieldMultiSelect
-	case mf.Schema.Type == schemaUser:
-		ft = components.CFFieldPerson
-	case len(mf.AllowedValues) > 0:
-		ft = components.CFFieldSingleSelect
+	case !ok:
+		return true
+	case !entry.updatedOn.Equal(pr.UpdatedOn):
+		return true
+	case bitbucket.RollupStatuses(entry.statuses) == bitbucket.StatusInProgress:
+		return true
+	case len(entry.statuses) == 0 && a.refreshEvery > 0 && a.nowFn().Sub(entry.fetchedAt) >= a.refreshEvery:
+		return true
+	default:
+		return false
 	}
-
-	allowed := make([]components.ModalItem, 0, len(mf.AllowedValues))
-	for _, v := range mf.AllowedValues {
-		allowed = append(allowed, components.ModalItem{ID: v.ID, Label: v.Name})
-	}
-
-	ff := components.CreateFormField{
-		Name:          mf.Name,
-		FieldID:       mf.FieldID,
-		Type:          ft,
-		Required:      mf.Required,
-		AllowedValues: allowed,
-		SchemaItems:   mf.Schema.Items,
-	}
-
-	// Default the reporter to the current user, matching Jira's own behaviour
-	// (reporter = creator). The user can still change or clear it.
-	if mf.Schema.System == "reporter" && a.currentUser != nil {
-		key := fldName
-		if a.isCloud {
-			key = fldAccountID
-		}
-		ff.Value = map[string]string{key: a.currentUser.AccountID}
-		ff.DisplayValue = a.currentUser.DisplayName
-	}
-
-	if !mf.Required && ff.DisplayValue == "" && ft != components.CFFieldMultiText {
-		ff.DisplayValue = "None"
-	}
-
-	return ff
 }
 
-// handleIssueCreated closes form and refreshes issue list
-func (a *App) handleIssueCreated(msg issueCreatedMsg) (tea.Model, tea.Cmd) {
-	a.createForm.Hide()
-	a.createCtx = createCtx{}
-	if msg.issue != nil {
-		a.helpBar.SetStatusMsg("Created " + msg.issue.Key)
-		if a.cfg.GUI.ShouldSelectCreatedIssue() {
-			a.gitDetectedKey = msg.issue.Key
-			a.detailView.SetIssue(nil)
-		}
-		return a, tea.Batch(a.fetchActiveTab(), fetchIssueDetail(a.client, msg.issue.Key))
+func (a *App) cacheStatuses(key string, statuses []bitbucket.CommitStatus, updatedOn time.Time) {
+	if a.statusCache == nil {
+		a.statusCache = make(map[string]statusEntry)
 	}
-	return a, a.fetchActiveTab()
+	a.statusCache[key] = statusEntry{statuses: statuses, updatedOn: updatedOn, fetchedAt: a.nowFn()}
+	a.prList.SetBuildState(key, bitbucket.RollupStatuses(statuses))
 }
 
-// handleIssueUpdated re-fetches issue data after an update. Parent changes also
-// drop the hierarchy tab cache so the next switch shows the new parent/children.
-func (a *App) handleIssueUpdated(msg issueUpdatedMsg) (tea.Model, tea.Cmd) {
-	if msg.field == "parent" {
-		a.issuesList.InvalidateTabCache()
+// refilterTabs re-applies the client-side filter of every tab whose data is
+// already in hand. An empty fetchKey means every tab. Tabs whose fetch has not
+// landed are left untouched so they still count as uncached.
+func (a *App) refilterTabs(fetchKey string) {
+	current := a.prList.GetTabIndex()
+	for tab := range a.tabConfigs() {
+		key := a.fetchKeyOf(tab)
+		if fetchKey != "" && key != fetchKey {
+			continue
+		}
+		if _, ok := a.merged[key]; !ok {
+			continue
+		}
+		filtered := a.applyTabFilter(tab)
+		if tab == current {
+			a.prList.SetPullRequests(filtered)
+		} else {
+			a.prList.SetPullRequestsForTab(tab, filtered)
+		}
 	}
-	return a, fetchIssueDetail(a.client, msg.issueKey)
+}
+
+// applyTabFilter narrows a fetch key's merged result to one tab's audience.
+// Without a current user the Mine and Reviewing tabs are empty rather than
+// wrong.
+func (a *App) applyTabFilter(tab int) []bitbucket.PullRequest {
+	source := a.merged[a.fetchKeyOf(tab)]
+	tabs := a.tabConfigs()
+	if tab < 0 || tab >= len(tabs) {
+		return source
+	}
+	filter := strings.ToLower(strings.TrimSpace(tabs[tab].Filter))
+	if filter != filterMine && filter != filterReviewing {
+		return source
+	}
+
+	uuid := ""
+	if a.currentUser != nil {
+		uuid = a.currentUser.UUID
+	}
+	if uuid == "" {
+		a.setWarning(noCurrentUserWarning)
+		return nil
+	}
+
+	out := make([]bitbucket.PullRequest, 0, len(source))
+	for index := range source {
+		pr := &source[index]
+		if (filter == filterMine && pr.IsAuthor(uuid)) ||
+			(filter == filterReviewing && pr.IsReviewer(uuid)) {
+			out = append(out, *pr)
+		}
+	}
+	return out
+}
+
+// currentPullRequest is the pull request the right-hand side is showing, which
+// is not always the list selection while a preview is in flight.
+func (a *App) currentPullRequest() *bitbucket.PullRequest {
+	if a.previewKey != "" {
+		if pr := a.pullRequestByKey(a.previewKey); pr != nil {
+			return pr
+		}
+	}
+	return a.prList.SelectedPullRequest()
+}
+
+// pullRequestByKey resolves a key against the detail cache first, then the rows
+// on screen, then every fetched list.
+func (a *App) pullRequestByKey(key string) *bitbucket.PullRequest {
+	if cached, ok := a.prCache[key]; ok && cached != nil {
+		return cached
+	}
+	current := a.prList.CurrentPullRequests()
+	for index := range current {
+		if current[index].Key() == key {
+			return &current[index]
+		}
+	}
+	for _, prs := range a.merged {
+		for index := range prs {
+			if prs[index].Key() == key {
+				return &prs[index]
+			}
+		}
+	}
+	return nil
+}
+
+// pipelineCacheKey addresses a run by repository and build number, which is
+// what the status URL carries.
+func pipelineCacheKey(prKey string, build int) string {
+	repo, _, _ := strings.Cut(prKey, "#")
+	return repo + "#" + strconv.Itoa(build)
+}
+
+// countsBySlug counts pull requests per repository for the Repos panel.
+func countsBySlug(prs []bitbucket.PullRequest) map[string]int {
+	counts := make(map[string]int)
+	for index := range prs {
+		counts[prs[index].RepoSlug()]++
+	}
+	return counts
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
@@ -10,13 +11,13 @@ import (
 
 func TestAuthPath_JoinsConfigDir(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("LAZYJIRA_CONFIG_DIR", dir)
+	t.Setenv(envConfigDir, dir)
 
 	testkit.AssertEqual(t, "AuthPath", AuthPath(), filepath.Join(dir, "auth.json"))
 }
 
 func TestLoadCredentials_MissingReturnsNilWithoutError(t *testing.T) {
-	t.Setenv("LAZYJIRA_CONFIG_DIR", t.TempDir())
+	t.Setenv(envConfigDir, t.TempDir())
 
 	creds, err := LoadCredentials()
 	if err != nil {
@@ -27,15 +28,13 @@ func TestLoadCredentials_MissingReturnsNilWithoutError(t *testing.T) {
 	}
 }
 
-func TestSaveCredentials_RoundTripsAndIsPrivate(t *testing.T) {
-	t.Setenv("LAZYJIRA_CONFIG_DIR", t.TempDir())
+func TestSaveCredentials_RoundTripsBearerAndIsPrivate(t *testing.T) {
+	t.Setenv(envConfigDir, t.TempDir())
 
 	want := &Credentials{
-		Host:        "https://test.atlassian.net",
-		Email:       "user@test.com",
-		Token:       "secret",
-		ServerType:  "cloud",
-		LastProject: "PLAT",
+		AuthMethod: authBearer,
+		Token:      testToken,
+		Workspace:  testWorkspace,
 	}
 	if err := SaveCredentials(want); err != nil {
 		t.Fatalf("SaveCredentials: %v", err)
@@ -57,8 +56,60 @@ func TestSaveCredentials_RoundTripsAndIsPrivate(t *testing.T) {
 	testkit.AssertEqual(t, "round-tripped credentials", *got, *want)
 }
 
+func TestSaveCredentials_RoundTripsBasicWithEmail(t *testing.T) {
+	t.Setenv(envConfigDir, t.TempDir())
+
+	want := &Credentials{
+		AuthMethod: authBasic,
+		Email:      testEmail,
+		Token:      testToken,
+		Workspace:  testWorkspace,
+	}
+	if err := SaveCredentials(want); err != nil {
+		t.Fatalf("SaveCredentials: %v", err)
+	}
+
+	raw, err := os.ReadFile(AuthPath())
+	if err != nil {
+		t.Fatalf("read auth.json: %v", err)
+	}
+	for _, key := range []string{`"auth_method"`, `"email"`, `"token"`, `"workspace"`} {
+		if !strings.Contains(string(raw), key) {
+			t.Errorf("auth.json = %s, want it to contain %s", raw, key)
+		}
+	}
+
+	got, err := LoadCredentials()
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+	if got == nil {
+		t.Fatal("LoadCredentials returned nil after save")
+	}
+	testkit.AssertEqual(t, "round-tripped credentials", *got, *want)
+}
+
+func TestSaveCredentials_OmitsEmptyOptionalFields(t *testing.T) {
+	t.Setenv(envConfigDir, t.TempDir())
+
+	if err := SaveCredentials(&Credentials{AuthMethod: authBearer, Token: testToken}); err != nil {
+		t.Fatalf("SaveCredentials: %v", err)
+	}
+
+	raw, err := os.ReadFile(AuthPath())
+	if err != nil {
+		t.Fatalf("read auth.json: %v", err)
+	}
+	if strings.Contains(string(raw), `"email"`) {
+		t.Errorf("auth.json = %s, want the empty email omitted", raw)
+	}
+	if strings.Contains(string(raw), `"workspace"`) {
+		t.Errorf("auth.json = %s, want the empty workspace omitted", raw)
+	}
+}
+
 func TestLoadCredentials_InvalidJSONReturnsError(t *testing.T) {
-	t.Setenv("LAZYJIRA_CONFIG_DIR", t.TempDir())
+	t.Setenv(envConfigDir, t.TempDir())
 	if err := os.WriteFile(AuthPath(), []byte("{not valid"), 0o600); err != nil {
 		t.Fatalf("write auth.json: %v", err)
 	}
@@ -69,8 +120,8 @@ func TestLoadCredentials_InvalidJSONReturnsError(t *testing.T) {
 }
 
 func TestClearCredentials_RemovesFile(t *testing.T) {
-	t.Setenv("LAZYJIRA_CONFIG_DIR", t.TempDir())
-	if err := SaveCredentials(&Credentials{Host: "h"}); err != nil {
+	t.Setenv(envConfigDir, t.TempDir())
+	if err := SaveCredentials(&Credentials{AuthMethod: authBearer, Token: testToken}); err != nil {
 		t.Fatalf("SaveCredentials: %v", err)
 	}
 
@@ -83,7 +134,7 @@ func TestClearCredentials_RemovesFile(t *testing.T) {
 }
 
 func TestClearCredentials_MissingIsNotAnError(t *testing.T) {
-	t.Setenv("LAZYJIRA_CONFIG_DIR", t.TempDir())
+	t.Setenv(envConfigDir, t.TempDir())
 
 	if err := ClearCredentials(); err != nil {
 		t.Errorf("ClearCredentials on missing file = %v, want nil", err)
@@ -91,8 +142,7 @@ func TestClearCredentials_MissingIsNotAnError(t *testing.T) {
 }
 
 func TestLoadCredentials_ReadErrorWhenAuthPathIsDirectory(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("LAZYJIRA_CONFIG_DIR", dir)
+	t.Setenv(envConfigDir, t.TempDir())
 
 	if err := os.Mkdir(AuthPath(), 0o755); err != nil {
 		t.Fatal(err)
@@ -112,9 +162,9 @@ func TestSaveCredentials_FailsWhenConfigDirIsFile(t *testing.T) {
 	if err := os.WriteFile(blockingFile, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("LAZYJIRA_CONFIG_DIR", blockingFile)
+	t.Setenv(envConfigDir, blockingFile)
 
-	if err := SaveCredentials(&Credentials{Host: "https://example.atlassian.net"}); err == nil {
+	if err := SaveCredentials(&Credentials{AuthMethod: authBearer, Token: testToken}); err == nil {
 		t.Fatal("SaveCredentials() into a file path should error")
 	}
 }

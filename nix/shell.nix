@@ -4,7 +4,7 @@
   gomod2nix,
 }:
 mkShell {
-  name = "lazyjira-dev";
+  name = "lazybitbucket-dev";
   packages = [
     go
     gomod2nix

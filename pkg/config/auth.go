@@ -6,13 +6,14 @@ import (
 	"path/filepath"
 )
 
-// Credentials stores Jira connection info
+// Credentials stores the Bitbucket connection secret and the workspace it was
+// verified against. AuthMethod is "bearer" (API token or access token sent as
+// a Bearer header) or "basic" (Atlassian account email + API token).
 type Credentials struct {
-	Host        string `json:"host"`
-	Email       string `json:"email"`
-	Token       string `json:"token"`
-	ServerType  string `json:"server_type,omitempty"`
-	LastProject string `json:"last_project,omitempty"`
+	AuthMethod string `json:"auth_method"`
+	Email      string `json:"email,omitempty"`
+	Token      string `json:"token"`
+	Workspace  string `json:"workspace,omitempty"`
 }
 
 // AuthPath returns the path to auth.json in the config directory

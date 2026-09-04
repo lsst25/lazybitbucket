@@ -3,168 +3,105 @@ package tui
 import (
 	"context"
 	"testing"
+	"time"
 
-	"github.com/lsst25/lazybitbucket/pkg/config"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
 	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
-	"github.com/lsst25/lazybitbucket/pkg/jira"
-	"github.com/lsst25/lazybitbucket/pkg/jira/jiratest"
-	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
-func TestNewApp_ReturnsApp(t *testing.T) {
+func TestInit_LoadsUserAndReposWithoutATick(t *testing.T) {
 	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.SetOnRequestFunc = func(_ func(jira.RequestLog)) {}
-	fake.DiscoverFieldsFunc = func(_ context.Context) error { return nil }
-	cfg := &config.Config{
-		Jira: config.JiraConfig{
-			Host:  "example.atlassian.net",
-			Email: "test@example.com",
-		},
+	fake, _ := constructionFake(t)
+	app := NewAppWithAuth(testConfig(), fake, AuthEnv)
+	t.Cleanup(app.Shutdown)
+	fake.GetCurrentUserFunc = func(context.Context) (*bitbucket.Account, error) {
+		return &bitbucket.Account{UUID: testUserUUID, DisplayName: "Demo User"}, nil
 	}
 
-	app := NewApp(cfg, fake)
+	msgs := collectMsgs(app.Init())
 
-	if app == nil {
-		t.Fatal("expected non-nil App")
+	var sawUser, sawRepos bool
+	for _, msg := range msgs {
+		switch msg.(type) {
+		case currentUserLoadedMsg:
+			sawUser = true
+		case reposLoadedMsg:
+			sawRepos = true
+		case autoFetchTickMsg:
+			t.Error("refreshInterval is off: Init must not arm a tick")
+		}
 	}
-	testkit.AssertEqual(t, "default side", app.side, sideLeft)
-	testkit.AssertEqual(t, "default leftFocus", app.leftFocus, focusIssues)
-}
-
-func TestNewAppWithAuth_SetsAuthMethod(t *testing.T) {
-	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.SetOnRequestFunc = func(_ func(jira.RequestLog)) {}
-	fake.DiscoverFieldsFunc = func(_ context.Context) error { return nil }
-	cfg := &config.Config{
-		Jira: config.JiraConfig{
-			Host:  "example.atlassian.net",
-			Email: "test@example.com",
-		},
-	}
-
-	app := NewAppWithAuth(cfg, fake, AuthWizard)
-
-	if app == nil {
-		t.Fatal("expected non-nil App")
-	}
-	if app.splashInfo.AuthMethod != string(AuthWizard) {
-		t.Errorf("authMethod = %q, want %q", app.splashInfo.AuthMethod, string(AuthWizard))
+	if !sawUser || !sawRepos {
+		t.Errorf("Init produced %d messages, want the user and the repositories", len(msgs))
 	}
 }
 
-func TestNewADFRenderer_BuiltinByDefault(t *testing.T) {
+func TestInit_ArmsTheTickWhenRefreshIsEnabled(t *testing.T) {
 	t.Parallel()
-	cfg := &config.Config{}
-
-	renderer := newADFRenderer(cfg)
-
-	if renderer == nil {
-		t.Fatal("expected non-nil renderer")
+	fake, _ := constructionFake(t)
+	cfg := testConfig()
+	cfg.RefreshInterval = "1ms"
+	app := NewAppWithAuth(cfg, fake, AuthEnv)
+	t.Cleanup(app.Shutdown)
+	fake.GetCurrentUserFunc = func(context.Context) (*bitbucket.Account, error) {
+		return &bitbucket.Account{UUID: testUserUUID}, nil
 	}
-	if _, ok := renderer.(views.BuiltinRenderer); !ok {
-		t.Errorf("expected BuiltinRenderer, got %T", renderer)
+
+	testkit.AssertEqual(t, "refresh interval", app.refreshEvery, time.Millisecond)
+
+	var sawTick bool
+	for _, msg := range collectMsgs(app.Init()) {
+		if _, ok := msg.(autoFetchTickMsg); ok {
+			sawTick = true
+		}
+	}
+	if !sawTick {
+		t.Error("an enabled refreshInterval must arm the auto-fetch tick")
 	}
 }
 
-func TestNewADFRenderer_GlamourWhenConfigured(t *testing.T) {
+func TestShutdown_IsIdempotent(t *testing.T) {
 	t.Parallel()
-	cfg := &config.Config{
-		Renderer: config.RendererGlamour,
-	}
-
-	renderer := newADFRenderer(cfg)
-
-	if renderer == nil {
-		t.Fatal("expected non-nil renderer")
-	}
-	if _, ok := renderer.(views.GlamourRenderer); !ok {
-		t.Errorf("expected GlamourRenderer, got %T", renderer)
-	}
-}
-
-func TestShutdown_DoesNotBlock(t *testing.T) {
-	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.SetOnRequestFunc = func(_ func(jira.RequestLog)) {}
-	fake.DiscoverFieldsFunc = func(_ context.Context) error { return nil }
-	cfg := &config.Config{
-		Jira: config.JiraConfig{
-			Host:  "example.atlassian.net",
-			Email: "test@example.com",
-		},
-	}
-	app := NewApp(cfg, fake)
+	fake, _ := constructionFake(t)
+	app := NewAppWithAuth(testConfig(), fake, AuthEnv)
 
 	app.Shutdown()
 	app.Shutdown()
 }
 
-func TestInit_ReturnsBatchCmd(t *testing.T) {
+func TestShutdown_ToleratesAHandBuiltApp(t *testing.T) {
 	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.SetOnRequestFunc = func(_ func(jira.RequestLog)) {}
-	fake.DiscoverFieldsFunc = func(_ context.Context) error { return nil }
-	cfg := &config.Config{
-		Jira: config.JiraConfig{
-			Host:  "example.atlassian.net",
-			Email: "test@example.com",
-		},
-		IssueTabs: []config.IssueTabConfig{
-			{Name: "All", JQL: "project = {{.ProjectKey}} ORDER BY updated DESC"},
-		},
+	app := newTestApp()
+
+	app.Shutdown()
+}
+
+func TestContextAndNow_FallBackForHandBuiltApps(t *testing.T) {
+	t.Parallel()
+	app := newTestApp()
+
+	if app.context() == nil {
+		t.Error("context() must never return nil")
 	}
-	app := NewApp(cfg, fake)
-	app.projectKey = testProject
-
-	cmd := app.Init()
-
-	if cmd == nil {
-		t.Error("Init() should return a non-nil batch cmd")
+	if app.nowFn().IsZero() {
+		t.Error("nowFn() must return a real time when no clock is injected")
 	}
 }
 
-func TestOpenLinkedIssueDetail_NavigatesToLinkedIssue(t *testing.T) {
+func TestUpdate_ResizeLaysOutThePanels(t *testing.T) {
 	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	stubFullIssueFetch(fake, &jira.Issue{Key: mainKey, Summary: "linked issue"})
-	app := newAppWithFake(t, fake)
-	app.keymap = DefaultKeymap()
-	app.width = 120
-	app.height = 40
-	app.layoutPanels()
-	app.infoPanel.SetIssue(&jira.Issue{
-		Key:     testKey,
-		Summary: testSummary,
-		IssueLinks: []jira.IssueLink{
-			{
-				Type:         &jira.IssueLinkType{Name: "relates to"},
-				OutwardIssue: &jira.Issue{Key: mainKey},
-			},
-		},
-	})
-	app.infoPanel.SetActiveTab(views.InfoTabLinks)
+	app := newAppWithFake(t, &bitbuckettest.FakeClient{T: t})
 
-	_, cmd := app.openLinkedIssueDetail()
-
-	if cmd == nil {
-		t.Error("expected fetch cmd for linked issue detail")
-	}
-	testkit.AssertEqual(t, "side after open", app.side, sideRight)
-}
-
-func TestOpenLinkedIssueDetail_NoopWithNoSelection(t *testing.T) {
-	t.Parallel()
-	app := newAppWithFake(t, &jiratest.FakeClient{T: t})
-	app.keymap = DefaultKeymap()
-	app.width = 120
-	app.height = 40
-	app.layoutPanels()
-
-	_, cmd := app.openLinkedIssueDetail()
+	_, cmd := app.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	if cmd != nil {
-		t.Error("expected nil cmd with no link selected")
+		t.Error("a resize should produce no command")
+	}
+	testkit.AssertEqual(t, "width", app.width, 120)
+	if app.panelSideW == 0 {
+		t.Error("resize should have laid out the panels")
 	}
 }

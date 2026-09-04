@@ -6,29 +6,30 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/config"
 	"github.com/lsst25/lazybitbucket/pkg/git"
-	"github.com/lsst25/lazybitbucket/pkg/jira"
 	"github.com/lsst25/lazybitbucket/pkg/tui/components"
-	"github.com/lsst25/lazybitbucket/pkg/tui/navstack"
 	"github.com/lsst25/lazybitbucket/pkg/tui/theme"
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
+// Version is stamped by cmd/lazybitbucket at build time.
 var Version = "dev"
 
 type focusPanel int
 
 const (
 	focusStatus focusPanel = iota
-	focusIssues
-	focusInfo
-	focusProjects
+	focusPullRequests
+	focusBuilds
+	focusRepos
 )
 
 type focusSide int
@@ -38,199 +39,138 @@ const (
 	sideRight
 )
 
-const (
-	fldPriority    = "priority"
-	fldSprint      = "sprint"
-	fldLabels      = "labels"
-	fldComponents  = "components"
-	fldAssignee    = "assignee"
-	fldAccountID   = "accountId"
-	fldName        = "name"
-	fldDescription = "description"
-)
-
-type editKind int
-
-const (
-	editNone editKind = iota
-	editDesc
-	editCommentNew
-	editCommentMod
-	editSummary
-	editField
-	editFieldText
-	editBranch
-	editCreateField
-	editCreateDesc
-)
-
-type editCtx struct {
-	kind           editKind
-	issueKey       string
-	commentID      string
-	fieldID        string
-	fieldIndex     int
-	converterState any
-}
-
-type createCtx struct {
-	intent        bool
-	projectKey    string
-	projectID     string
-	issueTypeID   string
-	issueTypeName string
-	parentKey     string
-	duplicateFrom *jira.Issue
-}
-
+// onSelectFunc is the callback the modal fires when the user picks an item.
+// Only the URL picker uses it now that every write flow is gone.
 type onSelectFunc func(components.ModalItem) tea.Cmd
-type onChecklistFunc func([]components.ModalItem) tea.Cmd
 
-type issuesLoadedMsg struct {
-	issues []jira.Issue
-	tab    int
-}
-type issueDetailLoadedMsg struct{ issue *jira.Issue }
-
-// previewDetailLoadedMsg carries the response of a preview-triggered fetch.
-// See App.previewEpoch.
-type previewDetailLoadedMsg struct {
-	issue *jira.Issue
-	epoch int
+// statusEntry is one pull request's cached build statuses plus the two
+// timestamps the staleness rule reads: the pull request's UpdatedOn as it was
+// when the statuses were fetched, and when that fetch happened.
+type statusEntry struct {
+	statuses  []bitbucket.CommitStatus
+	updatedOn time.Time
+	fetchedAt time.Time
 }
 
-// previewDebounceMsg is delivered when a PreviewRequestMsg's debounce tick
-// expires. See App.previewEpoch.
-type previewDebounceMsg struct {
-	key   string
-	epoch int
+// pipelineEntry is a pipeline run and its steps, cached by "ws/slug#build".
+type pipelineEntry struct {
+	pipeline *bitbucket.Pipeline
+	steps    []bitbucket.PipelineStep
 }
 
-// childrenLoadedMsg carries the response of a Cloud GetChildren fetch.
-// See App.childrenEpoch.
-type childrenLoadedMsg struct {
-	key    string
-	issues []jira.Issue
-	err    error
-	epoch  int
-}
-
-type transitionDoneMsg struct{}
-type errorMsg struct{ err error }
-type projectsLoadedMsg struct{ projects []jira.Project }
-type issuePrefetchedMsg struct {
-	issue *jira.Issue
-}
-type batchPrefetchedMsg struct {
-	issues []jira.Issue
-}
-type autoFetchTickMsg struct{}
-type boardsLoadedMsg struct{ boards []jira.Board }
-type sprintsLoadedMsg struct{ sprints []jira.Sprint }
-type transitionsLoadedMsg struct {
-	issueKey    string
-	transitions []jira.Transition
-}
-
+// App is the bubbletea model: five panels, an overlay stack and the Bitbucket
+// domain state feeding them.
 type App struct {
 	cfg        *config.Config
-	client     jira.ClientInterface
+	client     bitbucket.ClientInterface
 	splashInfo views.SplashInfo
 
 	statusPanel *views.StatusPanel
-	issuesList  *views.IssuesList
-	infoPanel   *views.InfoPanel
-	projectList *views.ProjectList
+	prList      *views.PullRequestList
+	buildsPanel *views.BuildsPanel
+	repoList    *views.RepoList
 	detailView  *views.DetailView
 	logPanel    *views.LogPanel
 
-	keymap     Keymap
-	helpBar    components.HelpBar
-	searchBar  components.SearchBar
-	modal      components.Modal
-	jqlModal   components.JQLModal
-	diffView   components.DiffView
-	inputModal components.InputModal
-	createForm components.CreateForm
-	overlays   components.OverlayStack
+	keymap    Keymap
+	helpBar   components.HelpBar
+	searchBar components.SearchBar
+	modal     components.Modal
+	overlays  components.OverlayStack
 
-	jqlFields []jira.AutocompleteField
+	onSelect onSelectFunc
 
-	editTempPath string
-	editContext  editCtx
+	side      focusSide
+	leftFocus focusPanel
 
-	// pendingMention holds a write deferred until the user cache is loaded.
-	pendingMention *pendingMention
-	converter      ADFConverter
+	showHelp      bool
+	helpCursor    int
+	helpSearching bool
+	helpSearch    components.TextInput
+	helpFilter    string
 
-	onSelect    onSelectFunc
-	onChecklist onChecklistFunc
+	logFlag  *atomic.Bool
+	demoMode bool
 
-	side            focusSide
-	leftFocus       focusPanel
-	projectKey      string
-	projectID       string
-	boardID         int
-	boards          []jira.Board
-	showHelp        bool
-	helpCursor      int
-	helpSearching   bool
-	helpSearch      components.TextInput
-	helpFilter      string
-	logFlag         *bool
-	isCloud         bool
-	demoMode        bool
-	currentUser     *jira.User
-	usersCache      map[string][]jira.User
-	issueCache      map[string]*jira.Issue
-	childrenCache   map[string][]jira.Issue
-	createMetaCache map[string][]jira.CreateMetaField
-	// previewKey identifies the issue displayed in the right-side views.
-	// Empty means nothing is displayed.
-	previewKey string
-	// previewEpoch is bumped on every PreviewRequestMsg. Debounce ticks
-	// and fetch responses carry the epoch of the intent that spawned
-	// them; handlers drop anything whose epoch no longer matches. This
-	// is how we simulate "cancel the previous intent", which bubbletea
-	// does not provide natively for tea.Cmd.
+	// exec is the external-process seam (browser, clipboard); tests replace it.
+	exec externalRunner
+
+	// statusWarning mirrors the last StatusPanel.SetWarning so the layout can
+	// reserve a row for it; the panel exposes its error but not its warning.
+	statusWarning string
+
+	// Domain state.
+	workspace   string
+	repoSlugs   []string
+	repos       []bitbucket.Repository
+	currentUser *bitbucket.Account
+
+	// repoDiscoveryFailed records that repository discovery errored, so the
+	// refresh paths re-run it — without it every later fetch is a no-op,
+	// because repoSlugs was never populated.
+	repoDiscoveryFailed bool
+
+	// merged holds the unfiltered MergePullRequests result per fetch key
+	// ("<state>|<query>"). Every tab sharing a key re-filters from here rather
+	// than costing another request.
+	merged   map[string][]bitbucket.PullRequest
+	inFlight map[string]bool
+
+	prCache       map[string]*bitbucket.PullRequest
+	statusCache   map[string]statusEntry
+	pipelineCache map[string]*pipelineEntry
+
+	// prefetchQueue is the remaining pull request keys to warm, head first.
+	// prefetchEpoch is bumped whenever the queue is refilled so that in-flight
+	// results from a superseded tab or repository filter are dropped.
+	prefetchQueue []string
+	prefetchEpoch int
+
+	// previewKey is the pull request shown on the right; previewEpoch is bumped
+	// on every selection so debounce ticks and responses from a superseded
+	// selection can be dropped.
+	previewKey   string
 	previewEpoch int
-	// parentEpoch is bumped on every showParent invocation. fetchParent
-	// responses carry the epoch of the intent that spawned them; the
-	// parentLoadedMsg handler drops anything whose epoch no longer
-	// matches. Same staleness-cancellation pattern as previewEpoch.
-	parentEpoch int
-	// childrenEpoch is the analogous counter for Cloud Sub-tab GetChildren
-	// fetches. Bumped on every ChildrenRequestMsg; responses with stale
-	// epoch are dropped.
-	childrenEpoch int
-	pendingWalk   pendingWalk
-	createCtx     createCtx
 
-	gitRepoPath    string
-	gitBranch      string
-	gitDetectedKey string
+	repoFilter   string
+	refreshEvery time.Duration
+
+	// rateLimit stores remaining+1 so the zero value reads as "unknown". It is
+	// written from the client's request callback, which runs on whatever
+	// goroutine executes the command, and read in View.
+	rateLimit atomic.Int64
+
+	gitRepoPath   string
+	gitBranch     string
+	gitAutoSelect bool
+
+	renderer views.MarkdownRenderer
+	// now is the clock and debounce the selection debounce window. Both are
+	// zero in production and only set by tests that need a fixed clock or a
+	// synchronously drainable message chain.
+	now      func() time.Time
+	debounce time.Duration
 
 	customCmds []config.ResolvedCustomCommand
 
-	panelSideW     int
-	panelStatusH   int
-	panelIssuesH   int
-	panelInfoH     int
-	panelProjectsH int
-	panelDetailH   int
-	panelLogH      int
+	panelSideW    int
+	panelStatusH  int
+	panelPRH      int
+	panelBuildsH  int
+	panelReposH   int
+	panelDetailH  int
+	panelLogH     int
+	width, height int
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	cmdWg  sync.WaitGroup
-
-	width  int
-	height int
 }
 
-// AuthMethod describes how the user authenticated
+// AuthMethod describes how the user authenticated.
 type AuthMethod string
 
+// The credential sources cmd/lazybitbucket reports on the splash screen.
 const (
 	AuthSaved  AuthMethod = "Saved credentials (auth.json)"
 	AuthEnv    AuthMethod = "Environment variables"
@@ -238,63 +178,66 @@ const (
 	AuthDemo   AuthMethod = "Demo mode"
 )
 
-// newADFRenderer selects the ADF renderer impl based on cfg.Renderer.
-// cfg.Renderer is validated at load time; "" and "builtin" both map to
-// BuiltinRenderer. cfg.RendererStyle is resolved to a concrete Glamour
-// style name here so terminal background detection happens once.
-func newADFRenderer(cfg *config.Config) views.ADFRenderer {
-	if cfg.Renderer == config.RendererGlamour {
-		return views.GlamourRenderer{Style: views.ResolveGlamourStyle(cfg.RendererStyle)}
-	}
-	return views.BuiltinRenderer{}
-}
-
-func NewApp(cfg *config.Config, client jira.ClientInterface) *App {
+// NewApp builds the app with the environment-credentials label.
+func NewApp(cfg *config.Config, client bitbucket.ClientInterface) *App {
 	return NewAppWithAuth(cfg, client, AuthEnv)
 }
 
-func NewAppWithAuth(cfg *config.Config, client jira.ClientInterface, authMethod AuthMethod) *App {
-	projectKey := ""
-	if len(cfg.Projects) > 0 {
-		projectKey = cfg.Projects[0].Key
-	}
+// NewAppWithAuth builds the app and records how the user authenticated.
+// theme.Init must already have run: the views capture theme.Default when they
+// are constructed.
+func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMethod AuthMethod) *App {
+	workspace := cfg.Bitbucket.Workspace
 
-	statusPanel := views.NewStatusPanel(projectKey, cfg.Jira.Email, cfg.Jira.Host)
-	issuesList := views.NewIssuesList()
-	if len(cfg.GUI.IssueListFields) > 0 {
-		issuesList.SetFields(cfg.GUI.IssueListFields)
+	statusPanel := views.NewStatusPanel(scopeLabel(""), cfg.Bitbucket.Email, workspace)
+	prList := views.NewPullRequestList()
+	if len(cfg.GUI.PullRequestListFields) > 0 {
+		prList.SetFields(cfg.GUI.PullRequestListFields)
 	}
-	if len(cfg.GUI.TypeIcons) > 0 {
-		issuesList.SetTypeIcons(cfg.GUI.TypeIcons)
-	}
-	if len(cfg.GUI.StatusIcons) > 0 {
-		issuesList.SetStatusIcons(cfg.GUI.StatusIcons)
-	}
-	if len(cfg.GUI.PriorityIcons) > 0 {
-		issuesList.SetPriorityIcons(cfg.GUI.PriorityIcons)
-	}
-	issuesList.SetTabs(cfg.IssueTabs)
-	issuesList.SetFocused(true)
-	issuesList.SetUserEmail(cfg.Jira.Email)
-	infoPanel := views.NewInfoPanel()
-	if len(cfg.GUI.TypeIcons) > 0 {
-		infoPanel.SetTypeIcons(cfg.GUI.TypeIcons)
-	}
-	projectList := views.NewProjectList()
-	adfRenderer := newADFRenderer(cfg)
-	detailView := views.NewDetailView(adfRenderer)
+	prList.SetTabs(cfg.PullRequestTabs)
+	prList.SetFocused(true)
+
+	renderer := views.MarkdownRenderer(views.GlamourRenderer{Style: views.ResolveGlamourStyle(cfg.RendererStyle)})
+
 	logPanel := views.NewLogPanel()
-	helpBar := components.NewHelpBar(nil)
-	searchBar := components.NewSearchBar()
-	modal := components.NewModal()
-	diffView := components.NewDiffView()
-	inputModal := components.NewInputModal()
-	jqlModal := components.NewJQLModal()
-	createForm := components.NewCreateForm(adfRenderer.Render)
+	logFlag := new(atomic.Bool)
 
-	logFlag := new(bool)
-	client.SetOnRequest(func(rl jira.RequestLog) {
-		if *logFlag {
+	app := &App{
+		cfg:           cfg,
+		client:        client,
+		keymap:        KeymapFromConfig(cfg.Keybinding),
+		statusPanel:   statusPanel,
+		prList:        prList,
+		buildsPanel:   views.NewBuildsPanel(),
+		repoList:      views.NewRepoList(),
+		detailView:    views.NewDetailView(renderer),
+		logPanel:      logPanel,
+		helpBar:       components.NewHelpBar(nil),
+		searchBar:     components.NewSearchBar(),
+		modal:         components.NewModal(),
+		side:          sideLeft,
+		leftFocus:     focusPullRequests,
+		logFlag:       logFlag,
+		demoMode:      authMethod == AuthDemo,
+		exec:          execExternal,
+		workspace:     workspace,
+		repoSlugs:     append([]string(nil), cfg.Bitbucket.Repositories...),
+		merged:        make(map[string][]bitbucket.PullRequest),
+		inFlight:      make(map[string]bool),
+		prCache:       make(map[string]*bitbucket.PullRequest),
+		statusCache:   make(map[string]statusEntry),
+		pipelineCache: make(map[string]*pipelineEntry),
+		renderer:      renderer,
+	}
+	// The callback runs on whatever goroutine executes the command, and several
+	// request goroutines may run it at once, so it may only touch the log panel
+	// (which locks internally), the log-flag atomic and the rate-limit atomic.
+	rateTarget := &app.rateLimit
+	client.SetOnRequest(func(rl bitbucket.RequestLog) {
+		if rl.RateLimitRemaining >= 0 {
+			rateTarget.Store(int64(rl.RateLimitRemaining) + 1)
+		}
+		if logFlag.Load() {
 			logPanel.AddEntry(views.LogEntry{
 				Time:    time.Now(),
 				Method:  rl.Method,
@@ -305,88 +248,38 @@ func NewAppWithAuth(cfg *config.Config, client jira.ClientInterface, authMethod 
 		}
 	})
 
-	splash := views.SplashInfo{
+	app.splashInfo = views.SplashInfo{
 		Version:    Version,
 		AuthMethod: string(authMethod),
-		Host:       cfg.Jira.Host,
-		Email:      cfg.Jira.Email,
-		Project:    projectKey,
+		Workspace:  workspace,
+		User:       cfg.Bitbucket.Email,
+		RepoCount:  len(app.repoSlugs),
+		RepoNote:   "",
 	}
 
-	if len(cfg.Fields) > 0 {
-		var customIDs []string
-		for _, f := range cfg.Fields {
-			if isCustomField(f.ID) {
-				customIDs = append(customIDs, f.ID)
-			}
-		}
-		if len(customIDs) > 0 {
-			client.SetCustomFields(customIDs)
-		}
-		infoPanel.SetFields(cfg.Fields)
-	}
-
-	app := &App{
-		cfg:             cfg,
-		client:          client,
-		keymap:          KeymapFromConfig(cfg.Keybinding),
-		splashInfo:      splash,
-		statusPanel:     statusPanel,
-		issuesList:      issuesList,
-		infoPanel:       infoPanel,
-		projectList:     projectList,
-		detailView:      detailView,
-		logPanel:        logPanel,
-		helpBar:         helpBar,
-		searchBar:       searchBar,
-		modal:           modal,
-		jqlModal:        jqlModal,
-		diffView:        diffView,
-		inputModal:      inputModal,
-		createForm:      createForm,
-		side:            sideLeft,
-		leftFocus:       focusIssues,
-		projectKey:      projectKey,
-		isCloud:         cfg.Jira.IsCloud(),
-		demoMode:        authMethod == AuthDemo,
-		logFlag:         logFlag,
-		usersCache:      make(map[string][]jira.User),
-		issueCache:      make(map[string]*jira.Issue),
-		childrenCache:   make(map[string][]jira.Issue),
-		createMetaCache: make(map[string][]jira.CreateMetaField),
-		converter:       BuiltinConverter{},
-	}
-	// cfg.Converter is validated at config-load time; "" and "builtin"
-	// both fall through to the BuiltinConverter set above.
-	if cfg.Converter == config.ConverterAdfConverter {
-		app.converter = AdfConvConverter{}
-	}
 	app.ctx, app.cancel = context.WithCancel(context.Background()) //nolint:gosec // cancel is called in Shutdown()
+
 	navResolver := app.keymap.MatchNav
-	app.issuesList.ResolveNav = navResolver
-	app.infoPanel.ResolveNav = navResolver
-	app.infoPanel.SetCloud(app.isCloud)
-	app.projectList.ResolveNav = navResolver
+	app.prList.ResolveNav = navResolver
+	app.buildsPanel.ResolveNav = navResolver
+	app.repoList.ResolveNav = navResolver
 	app.detailView.ResolveNav = navResolver
 
 	app.initCustomCommands()
-
 	if warning := quitReachableWarning(app.keymap, app.customCmds); warning != "" {
-		fmt.Fprintln(os.Stderr, "lazyjira:", warning)
+		fmt.Fprintln(os.Stderr, "lazybitbucket:", warning)
 		app.statusPanel.SetError(warning)
 	}
 
-	isCloud := cfg.Jira.IsCloud()
-	app.createForm.SetDescRenderer(func(text string, width int) []string {
-		return views.RenderDescriptionPreview(text, width, isCloud, adfRenderer)
-	})
+	app.overlays = components.OverlayStack{&app.modal}
 
-	app.overlays = components.OverlayStack{
-		&app.createForm,
-		&app.jqlModal,
-		&app.inputModal,
-		&app.diffView,
-		&app.modal,
+	if interval, err := cfg.ResolveRefreshInterval(); err == nil {
+		app.refreshEvery = interval
+	} else {
+		app.setWarning("refresh interval: " + err.Error())
+	}
+	if warning := refreshRateWarning(len(app.repoSlugs), app.refreshEvery); warning != "" {
+		app.setWarning(warning)
 	}
 
 	if git.GitAvailable() {
@@ -395,26 +288,87 @@ func NewAppWithAuth(cfg *config.Config, client jira.ClientInterface, authMethod 
 			app.gitRepoPath = cwd
 			if branch, err := git.CurrentBranch(cwd); err == nil && branch != "" {
 				app.gitBranch = branch
-				app.gitDetectedKey = git.ExtractIssueKey(branch)
-
 			}
 		}
 	}
 
+	app.detailView.SetSplash(app.splashInfo)
 	app.helpBar.SetItems(app.helpBarItems())
 	return app
 }
 
-// Shutdown cancels the app-lifetime context, signalling any background
-// processes spawned with a.ctx to terminate, and waits for them to exit.
-// Safe to call multiple times.
+// refreshRateWarning warns when auto-refresh alone would spend more than about
+// 600 of the ~1000 requests Bitbucket allows per hour.
+func refreshRateWarning(repos int, every time.Duration) string {
+	if repos == 0 || every <= 0 {
+		return ""
+	}
+	if float64(repos)*3600/every.Seconds() > 600 {
+		return fmt.Sprintf("refresh interval too short for %d repositories", repos)
+	}
+	return ""
+}
+
+// rateLimitNoteBelow mirrors the threshold views.StatusPanel renders its
+// rate-limit note under. Keep the two in sync: the app reserves the row.
+const rateLimitNoteBelow = 200
+
+// setWarning records a non-error hint and shows it on the status panel.
+func (a *App) setWarning(text string) {
+	a.statusWarning = text
+	a.statusPanel.SetWarning(text)
+}
+
+// rateLimitLeft is the remaining request budget, or -1 when unknown. The
+// atomic stores remaining+1 so a zero value reads as unknown.
+func (a *App) rateLimitLeft() int {
+	return int(a.rateLimit.Load()) - 1
+}
+
+// statusPanelHeight is three rows plus one for every extra line the status
+// panel has to show.
+func (a *App) statusPanelHeight() int {
+	extra := 0
+	if a.statusPanel.ErrorMessage() != "" || a.statusWarning != "" {
+		extra++
+	}
+	if left := a.rateLimitLeft(); left >= 0 && left < rateLimitNoteBelow {
+		extra++
+	}
+	return 3 + extra
+}
+
+// scopeLabel is what the status panel shows as the list scope.
+func scopeLabel(slug string) string {
+	if slug == "" {
+		return "all repos"
+	}
+	return slug
+}
+
+// nowFn is the clock: time.Now unless a test injected one.
+func (a *App) nowFn() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
+}
+
+// context is the app-lifetime context, or a background one for the hand-built
+// App values tests use.
+func (a *App) context() context.Context {
+	if a.ctx != nil {
+		return a.ctx
+	}
+	return context.Background()
+}
+
+// Shutdown cancels the app-lifetime context, signalling background processes
+// to terminate, and waits up to three seconds for them. Safe to call twice.
 func (a *App) Shutdown() {
 	if a.cancel != nil {
 		a.cancel()
 	}
-	// Wait for background custom commands to finish (they receive the
-	// cancel signal via exec.CommandContext). Give up after 3 seconds
-	// so we never hang on exit.
 	done := make(chan struct{})
 	go func() { a.cmdWg.Wait(); close(done) }()
 	select {
@@ -423,25 +377,24 @@ func (a *App) Shutdown() {
 	}
 }
 
+// Init loads the current user and the repository list; the repository response
+// is what triggers the first pull request fetch. The auto-refresh tick is only
+// armed when refreshInterval is enabled.
 func (a *App) Init() tea.Cmd {
-	cmds := []tea.Cmd{
-		fetchMyself(a.client),
-		fetchFieldDiscovery(a.client),
-		fetchProjects(a.client),
-		fetchBoards(a.client),
-		tea.Tick(30*time.Second, func(t time.Time) tea.Msg {
-			return autoFetchTickMsg{}
-		}),
-	}
-	if cmd := a.fetchActiveTab(); cmd != nil {
-		cmds = append(cmds, cmd)
+	cmds := []tea.Cmd{a.fetchCurrentUser(), a.fetchRepos()}
+	if a.refreshEvery > 0 {
+		cmds = append(cmds, autoFetchTick(a.refreshEvery))
 	}
 	return tea.Batch(cmds...)
 }
 
+// Update routes a message to the search bar, the overlays, a handler, or the
+// focused panel, in that order.
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if a.searchBar.IsActive() {
-		if km, ok := msg.(tea.KeyMsg); ok && km.Type != tea.KeyUp && km.Type != tea.KeyDown && km.Type != tea.KeyCtrlJ && km.Type != tea.KeyCtrlK {
+		if km, ok := msg.(tea.KeyMsg); ok &&
+			km.Type != tea.KeyUp && km.Type != tea.KeyDown &&
+			km.Type != tea.KeyCtrlJ && km.Type != tea.KeyCtrlK {
 			updated, cmd := a.searchBar.Update(msg)
 			a.searchBar = updated
 			return a, cmd
@@ -471,270 +424,93 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case autoFetchTickMsg:
 		return a.handleAutoFetch()
-	case issuesLoadedMsg:
-		return a.handleIssuesLoaded(msg)
-	case issueDetailLoadedMsg:
-		return a.handleIssueDetailLoaded(msg)
-	case issuePrefetchedMsg:
-		return a.handleIssuePrefetched(msg)
-	case batchPrefetchedMsg:
-		return a.handleBatchPrefetched(msg)
-	case projectsLoadedMsg:
-		return a.handleProjectsLoaded(msg)
+	case currentUserLoadedMsg:
+		return a.handleCurrentUserLoaded(msg)
+	case reposLoadedMsg:
+		return a.handleReposLoaded(msg)
+	case pullRequestsLoadedMsg:
+		return a.handlePullRequestsLoaded(msg)
+	case pullRequestDetailLoadedMsg:
+		return a.handlePullRequestDetailLoaded(msg)
+	case statusesLoadedMsg:
+		return a.handleStatusesLoaded(msg)
+	case previewDebounceMsg:
+		return a.handlePreviewDebounce(msg)
+	case prefetchedMsg:
+		return a.handlePrefetched(msg)
+	case pipelineLoadedMsg:
+		return a.handlePipelineLoaded(msg)
+	case stepLogLoadedMsg:
+		return a.handleStepLogLoaded(msg)
 
-	case transitionDoneMsg:
-		return a.handleTransitionDone()
-	case transitionsLoadedMsg:
-		return a.handleTransitionsLoaded(msg)
-	case prioritiesLoadedMsg:
-		return a.handlePrioritiesLoaded(msg)
-	case myselfLoadedMsg:
-		a.currentUser = msg.user
-		return a, nil
-	case fieldsDiscoveredMsg:
-		if msg.err != nil {
-			a.statusPanel.SetError(msg.err.Error())
+	case views.PullRequestSelectedMsg:
+		return a.handlePullRequestSelected(msg)
+	case views.RepoHoveredMsg:
+		if msg.Repo != nil && a.side == sideLeft && a.leftFocus == focusRepos {
+			a.detailView.SetRepo(msg.Repo)
 		}
 		return a, nil
-	case boardsLoadedMsg:
-		return a.handleBoardsLoaded(msg)
-	case sprintsLoadedMsg:
-		return a.handleSprintsLoaded(msg)
-	case prefetchUsersMsg:
-		if msg.projectKey == a.projectKey {
-			if _, ok := a.usersCache[msg.projectKey]; !ok {
-				return a, fetchUsers(a.client, msg.projectKey, "")
-			}
-		}
-		return a, nil
-	case usersLoadedMsg:
-		return a.handleUsersLoaded(msg)
-	case mentionUsersLoadedMsg:
-		return a.handleMentionUsersLoaded(msg)
-	case labelsLoadedMsg:
-		return a.handleLabelsLoaded(msg)
-	case componentsLoadedMsg:
-		return a.handleComponentsLoaded(msg)
-	case issueTypesLoadedMsg:
-		return a.handleIssueTypesLoaded(msg)
-	case customFieldOptionsMsg:
-		return a.handleCustomFieldOptions(msg)
-	case createMetaLoadedMsg:
-		return a.handleCreateMetaLoaded(msg)
-	case issueCreatedMsg:
-		return a.handleIssueCreated(msg)
-	case createErrorMsg:
-		a.createForm.Resume()
-		a.createForm.SetError(msg.err.Error())
-		return a, nil
-	case createPreFormErrorMsg:
-		return a.handleCreatePreFormError(msg)
-	case issueUpdatedMsg:
-		return a.handleIssueUpdated(msg)
-	case commentAddedMsg:
-		return a, fetchIssueDetail(a.client, msg.issueKey)
-	case commentUpdatedMsg:
-		return a, fetchIssueDetail(a.client, msg.issueKey)
-
-	case components.CreateFormTypeSelectedMsg:
-		return a.handleCreateFormTypeSelected(msg)
-	case components.CreateFormEditTextMsg:
-		return a.handleCreateFormEditText(msg)
-	case components.CreateFormEditExternalMsg:
-		return a.handleCreateFormEditExternal(msg)
-	case components.CreateFormPickerMsg:
-		return a.handleCreateFormPicker(msg)
-	case components.CreateFormChecklistMsg:
-		return a.handleCreateFormChecklist(msg)
-	case components.CreateFormSubmitMsg:
-		return a.handleCreateFormSubmit(msg)
-	case components.CreateFormCancelMsg:
-		a.createCtx = createCtx{}
-		return a, nil
-
-	case components.ModalSelectedMsg:
-		return a.handleModalSelected(msg)
-	case components.ChecklistConfirmedMsg:
-		return a.handleChecklistConfirmed(msg)
-	case components.ModalCancelledMsg:
-		return a.handleModalCancelled()
-
-	case editorFinishedMsg:
-		return a.handleEditorFinished(msg)
-	case customCommandFinishedMsg:
-		return a.handleCustomCommandFinished(msg)
-	case components.DiffConfirmedMsg:
-		return a.handleDiffConfirmed(msg)
-	case components.DiffCancelledMsg:
-		return a.handleDiffCancelled()
-	case components.InputConfirmedMsg:
-		return a.handleInputConfirmed(msg)
-	case components.InputCancelledMsg:
-		return a.handleInputCancelled()
-
-	case components.JQLSubmitMsg:
-		return a.handleJQLSubmit(msg)
-	case jqlSearchResultMsg:
-		return a.handleJQLSearchResult(msg)
-	case jqlSearchErrorMsg:
-		return a.handleJQLSearchError(msg)
-	case components.JQLCancelMsg:
-		return a, nil
-	case components.JQLInputChangedMsg:
-		return a.handleJQLInputChanged(msg)
-	case jqlFieldsLoadedMsg:
-		return a.handleJQLFieldsLoaded(msg)
-	case jqlSuggestionsMsg:
-		return a.handleJQLSuggestions(msg)
-
-	case views.NavigateIssueMsg:
-		a.navigateToIssue(msg.Key)
-		return a, nil
+	case views.StepSelectedMsg:
+		return a.handleStepSelected(msg)
 	case views.ExpandBlockMsg:
 		return a.handleExpandBlock(msg)
 
-	case gitBranchCreatedMsg:
-		return a.handleGitBranchSwitch(msg.name)
+	case components.ModalSelectedMsg:
+		return a.handleModalSelected(msg)
+	case components.ModalCancelledMsg:
+		return a.handleModalCancelled()
+
+	case customCommandFinishedMsg:
+		return a.handleCustomCommandFinished(msg)
+
 	case gitCheckoutDoneMsg:
 		return a.handleGitBranchSwitch(msg.name)
 	case gitErrorMsg:
 		a.statusPanel.SetError(msg.err.Error())
 		return a, nil
 	case errorMsg:
-		a.createForm.Resume()
 		errText := msg.err.Error()
+		a.statusPanel.SetOnline(false)
 		a.statusPanel.SetError(errText)
-		a.modal.ShowError("Error", []components.ModalItem{
-			{Label: errText},
-		})
-		return a, nil
-
-	case views.IssueSelectedMsg:
-		if msg.Issue == nil {
-			return a, nil
-		}
-		if cached, ok := a.issueCache[msg.Issue.Key]; ok {
-			a.infoPanel.SetIssue(cached)
-		} else {
-			a.infoPanel.SetIssue(msg.Issue)
-		}
-		_, previewCmd := a.Update(views.PreviewRequestMsg{Key: msg.Issue.Key})
-		return a, tea.Batch(previewCmd, a.prefetchRelated(msg.Issue), a.infoPanel.MaybeChildrenRequest())
-
-	case views.PreviewRequestMsg:
-		a.previewKey = msg.Key
-		a.previewEpoch++
-		sel := a.issuesList.SelectedIssue()
-		mainListMatches := sel != nil && sel.Key == msg.Key
-		if cached, ok := a.issueCache[msg.Key]; ok && cached != nil {
-			a.detailView.UpdateIssueData(cached)
-			if mainListMatches {
-				a.infoPanel.SetIssue(cached)
-			}
-			return a, nil
-		}
-		if mainListMatches {
-			a.detailView.SetIssue(sel)
-			a.infoPanel.SetIssue(sel)
-		}
-		epoch := a.previewEpoch
-		key := msg.Key
-		return a, tea.Tick(150*time.Millisecond, func(_ time.Time) tea.Msg {
-			return previewDebounceMsg{key: key, epoch: epoch}
-		})
-
-	case previewDebounceMsg:
-		if msg.epoch != a.previewEpoch {
-			return a, nil
-		}
-		return a, fetchPreviewDetail(a.client, msg.key, a.previewEpoch)
-
-	case views.ChildrenRequestMsg:
-		if !a.isCloud || msg.Key == "" {
-			return a, nil
-		}
-		if cached, ok := a.childrenCache[msg.Key]; ok {
-			a.infoPanel.SetChildren(msg.Key, cached)
-			return a, nil
-		}
-		a.childrenEpoch++
-		return a, fetchChildren(a.client, msg.Key, a.childrenEpoch)
-
-	case childrenWalkRequestMsg:
-		if !a.isCloud || msg.key == "" {
-			return a, nil
-		}
-		a.childrenEpoch++
-		a.pendingWalk = pendingWalk{key: msg.key, epoch: a.childrenEpoch}
-		return a, fetchChildren(a.client, msg.key, a.childrenEpoch)
-
-	case childrenLoadedMsg:
-		return a.handleChildrenLoaded(msg)
-
-	case parentLoadedMsg:
-		if msg.epoch != a.parentEpoch {
-			return a, nil
-		}
-		if msg.err != nil || msg.parent == nil {
-			return a, nil
-		}
-		a.pushNav("Parent", msg.parent.Key, navstack.SourceParent, []jira.Issue{*msg.parent})
-		return a, a.previewAfterNav()
-
-	case previewDetailLoadedMsg:
-		if msg.epoch != a.previewEpoch {
-			return a, nil
-		}
-		if msg.issue == nil {
-			return a, nil
-		}
-		a.statusPanel.SetError("")
-		*a.logFlag = false
-		a.statusPanel.SetOnline(true)
-		a.issueCache[msg.issue.Key] = msg.issue
-		// DetailView only: InfoPanel belongs to the main list issue.
-		a.detailView.UpdateIssueData(msg.issue)
-		a.issuesList.PatchIssue(msg.issue)
-		return a, nil
-	case views.ProjectHoveredMsg:
-		if msg.Project != nil {
-			a.detailView.SetProject(msg.Project)
-		}
+		a.modal.ShowError("Error", []components.ModalItem{{Label: errText}})
 		return a, nil
 	}
 
 	return a, a.routeToPanel(msg)
 }
 
+// View renders the whole screen.
 func (a *App) View() string {
 	if a.width == 0 {
 		return "Loading..."
 	}
 
-	var content string
+	a.statusPanel.SetRateLimit(a.rateLimitLeft())
+	// The status panel grows with its content, so re-layout before rendering:
+	// a warning or the rate-limit note must never be clipped.
+	a.layoutPanels()
 
+	var content string
 	if a.isVerticalLayout() {
 		content = lipgloss.JoinVertical(lipgloss.Left,
 			a.statusPanel.View(),
-			a.issuesList.View(),
-			a.infoPanel.View(),
-			a.projectList.View(),
+			a.prList.View(),
+			a.buildsPanel.View(),
+			a.repoList.View(),
 			a.detailView.View(),
 			a.logPanel.View(),
 		)
 	} else {
 		leftCol := lipgloss.JoinVertical(lipgloss.Left,
 			a.statusPanel.View(),
-			a.issuesList.View(),
-			a.infoPanel.View(),
-			a.projectList.View(),
+			a.prList.View(),
+			a.buildsPanel.View(),
+			a.repoList.View(),
 		)
-
 		rightCol := lipgloss.JoinVertical(lipgloss.Left,
 			a.detailView.View(),
 			a.logPanel.View(),
 		)
-
 		content = lipgloss.JoinHorizontal(lipgloss.Top, leftCol, rightCol)
 	}
 
@@ -744,10 +520,6 @@ func (a *App) View() string {
 	switch {
 	case a.searchBar.IsActive():
 		bottomBar = a.searchBar.View()
-	case a.createForm.IsVisible() && a.createForm.IsFiltering():
-		bottomBar = a.createForm.FilterBarView()
-	case a.jqlModal.IsVisible():
-		bottomBar = a.helpBar.View()
 	case a.modal.IsVisible() && a.modal.IsSearching():
 		bottomBar = a.modal.SearchView(a.width)
 	case a.showHelp && a.helpSearching:
@@ -757,330 +529,11 @@ func (a *App) View() string {
 	}
 
 	full := lipgloss.JoinVertical(lipgloss.Left, content, bottomBar)
-
 	full = a.overlays.Render(full, a.width, a.height)
 	if a.showHelp {
 		full = a.renderHelpOverlay(full)
 	}
 	return full
-}
-
-func (a *App) editInfoField(sel *jira.Issue) (tea.Model, tea.Cmd) {
-	field := a.infoPanel.SelectedInfoField()
-	if field == nil {
-		return a, nil
-	}
-	*a.logFlag = true
-	switch field.Type {
-	case views.FieldSingleSelect:
-		switch field.FieldID {
-		case "status":
-			return a, fetchTransitions(a.client, sel.Key)
-		case fldPriority:
-			return a, fetchPriorities(a.client)
-		case "issuetype":
-			if a.projectID != "" {
-				a.onSelect = a.makeFieldSelectCallback(sel.Key, "issuetype")
-				return a, fetchIssueTypes(a.client, a.projectID)
-			}
-		case fldSprint:
-			if a.boardID != 0 {
-				return a, fetchSprints(a.client, a.boardID)
-			}
-			a.statusPanel.SetError("no agile board found for this project")
-			return a, nil
-		default:
-			if isCustomField(field.FieldID) {
-				return a.fetchCustomFieldOptionsForEdit(sel, field)
-			}
-		}
-	case views.FieldPerson:
-		a.onSelect = a.makePersonSelectCallback(sel.Key, field.FieldID)
-		if cached, ok := a.usersCache[a.projectKey]; ok {
-			return a.handleUsersLoaded(usersLoadedMsg{users: cached, issueKey: sel.Key})
-		}
-		return a, fetchUsers(a.client, a.projectKey, sel.Key)
-	case views.FieldMultiSelect:
-		issueKey := sel.Key
-		switch field.FieldID {
-		case fldLabels:
-			a.onChecklist = func(selected []components.ModalItem) tea.Cmd {
-				labels := make([]string, 0, len(selected))
-				for _, item := range selected {
-					labels = append(labels, item.ID)
-				}
-				a.optimisticFieldUpdate(issueKey, fldLabels, labels)
-				return updateIssueField(a.client, issueKey, fldLabels, labels)
-			}
-			return a, fetchLabels(a.client)
-		case fldComponents:
-			a.onChecklist = func(selected []components.ModalItem) tea.Cmd {
-				comps := make([]map[string]string, 0, len(selected))
-				for _, item := range selected {
-					comps = append(comps, map[string]string{"id": item.ID})
-				}
-				a.optimisticFieldUpdate(issueKey, fldComponents, comps)
-				return updateIssueField(a.client, issueKey, fldComponents, comps)
-			}
-			return a, fetchComponents(a.client, a.projectKey)
-		default:
-			if isCustomField(field.FieldID) {
-				return a.fetchCustomFieldOptionsForEdit(sel, field)
-			}
-		}
-	case views.FieldSingleText:
-		if isCustomField(field.FieldID) {
-			return a.fetchCustomFieldOptionsForEdit(sel, field)
-		}
-		a.inputModal.Show("Edit "+field.Name, views.EditValueForField(sel, field.FieldID, field.Value))
-		a.editContext = editCtx{kind: editField, issueKey: sel.Key, fieldID: field.FieldID}
-		return a, nil
-	case views.FieldMultiText:
-		a.editContext = editCtx{kind: editFieldText, issueKey: sel.Key, fieldID: field.FieldID}
-		return a, launchEditor(views.EditValueForField(sel, field.FieldID, field.Value), ".md")
-	}
-	return a, nil
-}
-
-func (a *App) optimisticFieldUpdate(issueKey, fieldID string, value any) {
-	cached, ok := a.issueCache[issueKey]
-	if !ok {
-		return
-	}
-	switch fieldID {
-	case "summary":
-		if s, ok := value.(string); ok {
-			cached.Summary = s
-		}
-	case fldDescription:
-		if s, ok := value.(string); ok {
-			cached.Description = s
-		}
-	default:
-		if views.SetBuiltinFieldValue(cached, fieldID, value) {
-			break
-		}
-		if strings.HasPrefix(fieldID, "customfield_") {
-			if cached.CustomFields == nil {
-				cached.CustomFields = make(map[string]any)
-			}
-			cached.CustomFields[fieldID] = value
-		}
-	}
-	a.issueCache[issueKey] = cached
-	if sel := a.issuesList.SelectedIssue(); sel != nil && sel.Key == issueKey {
-		a.infoPanel.SetIssue(cached)
-	}
-	a.issuesList.PatchIssue(cached)
-}
-
-func (a *App) applyEdit(mdContent string) tea.Cmd {
-	ctx := a.editContext
-	a.editContext = editCtx{}
-
-	if a.isCloud && mentionsApply(ctx.kind) && hasMentionCandidate(mdContent) {
-		pk := projectKeyFromIssueKey(ctx.issueKey)
-		if pk == "" {
-			pk = a.projectKey
-		}
-		if users, ok := a.projectUsers(pk); ok {
-			return a.completeApplyEdit(pendingMention{content: mdContent, editContext: ctx, projectKey: pk}, users)
-		}
-		a.pendingMention = &pendingMention{content: mdContent, editContext: ctx, projectKey: pk}
-		return fetchUsersForMention(a.client, pk)
-	}
-	return a.convertAndSubmit(ctx, mdContent)
-}
-
-// convertAndSubmit converts mdContent to ADF on cloud (no mention resolution)
-// and submits the edit. Used for non-cloud edits and cloud edits without any
-// @-mention to resolve.
-func (a *App) convertAndSubmit(ctx editCtx, mdContent string) tea.Cmd {
-	body := any(mdContent)
-	if a.isCloud {
-		adf, err := a.converter.FromMarkdown(mdContent, ctx.converterState)
-		if err != nil {
-			a.statusPanel.SetError("convert markdown: " + err.Error())
-			return nil
-		}
-		body = adf
-	}
-	return a.submitEdit(ctx, body, mdContent)
-}
-
-// submitEdit dispatches a converted edit to the right write command. body is the
-// payload sent to the API (ADF on cloud, markdown otherwise); md is the raw
-// markdown used for optimistic local updates.
-func (a *App) submitEdit(ctx editCtx, body any, md string) tea.Cmd {
-	switch ctx.kind { //nolint:exhaustive
-	case editDesc:
-		a.optimisticFieldUpdate(ctx.issueKey, fldDescription, md)
-		return updateIssueField(a.client, ctx.issueKey, fldDescription, body)
-	case editCommentNew:
-		return addComment(a.client, ctx.issueKey, body)
-	case editCommentMod:
-		return updateComment(a.client, ctx.issueKey, ctx.commentID, body)
-	case editFieldText:
-		a.optimisticFieldUpdate(ctx.issueKey, ctx.fieldID, md)
-		return updateIssueField(a.client, ctx.issueKey, ctx.fieldID, md)
-	}
-	return nil
-}
-
-func (a *App) makePersonSelectCallback(issueKey, fieldID string) onSelectFunc {
-	return func(item components.ModalItem) tea.Cmd {
-		if item.ID == "" {
-			a.optimisticFieldUpdate(issueKey, fieldID, nil)
-			return updateIssueField(a.client, issueKey, fieldID, nil)
-		}
-		key := fldName
-		if a.isCloud {
-			key = fldAccountID
-		}
-		a.optimisticFieldUpdate(issueKey, fieldID, &jira.User{DisplayName: item.Label})
-		return updateIssueField(a.client, issueKey, fieldID, map[string]string{key: item.ID})
-	}
-}
-
-func (a *App) makeFieldSelectCallback(issueKey, fieldID string) onSelectFunc {
-	return func(item components.ModalItem) tea.Cmd {
-		a.optimisticFieldUpdate(issueKey, fieldID, map[string]any{"id": item.ID, "value": item.Label, "name": item.Label})
-		return updateIssueField(a.client, issueKey, fieldID, map[string]string{"id": item.ID})
-	}
-}
-
-func isCustomField(fieldID string) bool {
-	return strings.HasPrefix(fieldID, "customfield_")
-}
-
-func (a *App) fieldMultilineEnabled(fieldID string) bool {
-	for _, f := range a.cfg.Fields {
-		if f.ID == fieldID {
-			return f.Multiline
-		}
-	}
-	return false
-}
-
-func (a *App) configuredFieldType(fieldID string) string {
-	for _, f := range a.cfg.Fields {
-		if f.ID == fieldID {
-			return f.Type
-		}
-	}
-	return ""
-}
-
-func (a *App) fetchCustomFieldOptionsForEdit(sel *jira.Issue, field *views.InfoField) (tea.Model, tea.Cmd) {
-	if sel.IssueType == nil {
-		a.statusPanel.SetError("issue type unknown")
-		return a, nil
-	}
-	multiline := a.fieldMultilineEnabled(field.FieldID)
-	cfgType := a.configuredFieldType(field.FieldID)
-	if cfgType == "text" || cfgType == "textarea" {
-		if multiline || cfgType == "textarea" {
-			a.editContext = editCtx{kind: editFieldText, issueKey: sel.Key, fieldID: field.FieldID}
-			return a, launchEditor(views.EditValueForInput(field.Value), ".md")
-		}
-		a.inputModal.Show("Edit "+field.Name, views.EditValueForInput(field.Value))
-		a.editContext = editCtx{kind: editField, issueKey: sel.Key, fieldID: field.FieldID}
-		return a, nil
-	}
-	info := customFieldOptionsMsg{
-		issueKey:     sel.Key,
-		fieldID:      field.FieldID,
-		fieldName:    field.Name,
-		fieldType:    field.Type,
-		currentValue: field.Value,
-		useEditor:    multiline,
-	}
-	cacheKey := a.projectKey + ":" + sel.IssueType.ID
-	if cached, ok := a.createMetaCache[cacheKey]; ok {
-		found := false
-		for _, f := range cached {
-			if f.FieldID == field.FieldID {
-				info.options = f.AllowedValues
-				info.schemaType = f.Schema.Type
-				info.schemaItems = f.Schema.Items
-				found = true
-				break
-			}
-		}
-		info.fieldNotFound = !found
-		return a.handleCustomFieldOptions(info)
-	}
-	return a, fetchCustomFieldOptions(a.client, a.projectKey, sel.IssueType.ID, info)
-}
-
-func (a *App) handleCustomFieldOptions(msg customFieldOptionsMsg) (tea.Model, tea.Cmd) {
-	if len(msg.allFields) > 0 && msg.issueTypeID != "" && msg.projectKey != "" {
-		a.createMetaCache[msg.projectKey+":"+msg.issueTypeID] = msg.allFields
-	}
-	if msg.fieldNotFound {
-		if msg.useEditor {
-			a.editContext = editCtx{kind: editFieldText, issueKey: msg.issueKey, fieldID: msg.fieldID}
-			return a, launchEditor(views.EditValueForInput(msg.currentValue), ".md")
-		}
-		a.inputModal.Show("Edit "+msg.fieldName, views.EditValueForInput(msg.currentValue))
-		a.editContext = editCtx{kind: editField, issueKey: msg.issueKey, fieldID: msg.fieldID}
-		return a, nil
-	}
-	if a.isPersonSchema(msg.schemaType, msg.schemaItems) {
-		a.onSelect = a.makePersonSelectCallback(msg.issueKey, msg.fieldID)
-		if cached, ok := a.usersCache[a.projectKey]; ok {
-			return a.handleUsersLoaded(usersLoadedMsg{users: cached, issueKey: msg.issueKey})
-		}
-		return a, fetchUsers(a.client, a.projectKey, msg.issueKey)
-	}
-
-	items := make([]components.ModalItem, 0, len(msg.options))
-	for _, v := range msg.options {
-		items = append(items, components.ModalItem{ID: v.ID, Label: v.Name})
-	}
-
-	if len(items) == 0 {
-		if msg.useEditor {
-			a.editContext = editCtx{kind: editFieldText, issueKey: msg.issueKey, fieldID: msg.fieldID}
-			return a, launchEditor(views.EditValueForInput(msg.currentValue), ".md")
-		}
-		a.inputModal.Show("Edit "+msg.fieldName, views.EditValueForInput(msg.currentValue))
-		a.editContext = editCtx{kind: editField, issueKey: msg.issueKey, fieldID: msg.fieldID}
-		return a, nil
-	}
-
-	switch msg.fieldType {
-	case views.FieldMultiSelect:
-		a.onChecklist = func(selected []components.ModalItem) tea.Cmd {
-			vals := make([]map[string]string, 0, len(selected))
-			for _, item := range selected {
-				vals = append(vals, map[string]string{"id": item.ID})
-			}
-			a.optimisticFieldUpdate(msg.issueKey, msg.fieldID, vals)
-			return updateIssueField(a.client, msg.issueKey, msg.fieldID, vals)
-		}
-		preselected := make(map[string]bool)
-		if raw, ok := a.issueCache[msg.issueKey]; ok {
-			if arr, ok := raw.CustomFields[msg.fieldID].([]any); ok {
-				for _, item := range arr {
-					if m, ok := item.(map[string]any); ok {
-						if id, ok := m["id"].(string); ok {
-							preselected[id] = true
-						}
-					}
-				}
-			}
-		}
-		a.modal.ShowChecklist(msg.fieldName, items, preselected)
-	default:
-		a.onSelect = a.makeFieldSelectCallback(msg.issueKey, msg.fieldID)
-		a.modal.Show(msg.fieldName, items)
-	}
-	return a, nil
-}
-
-func (a *App) isPersonSchema(schemaType, schemaItems string) bool {
-	return schemaType == schemaUser || (schemaType == schemaArray && schemaItems == schemaUser)
 }
 
 func (a *App) renderHelpOverlay(base string) string {
@@ -1128,7 +581,7 @@ func (a *App) renderHelpOverlay(base string) string {
 	}
 	lines = append(lines, "")
 
-	popupH := min(len(lines), a.height-4)
+	popupH := max(min(len(lines), a.height-4), 1)
 	footer := fmt.Sprintf("%d of %d", a.helpCursor+1, len(bindings))
 
 	popupContent := strings.Join(lines, "\n")
@@ -1139,53 +592,80 @@ func (a *App) renderHelpOverlay(base string) string {
 
 func (a *App) handleGitBranchSwitch(name string) (tea.Model, tea.Cmd) {
 	a.gitBranch = name
-	a.helpBar.SetStatusMsg(name)
+	a.helpBar.SetStatusMsg("checked out " + name)
 	if a.cfg.Git.CloseOnCheckout {
 		return a, tea.Quit
 	}
 	return a, nil
 }
 
+// tabConfigs is the configured tab list, with a single implicit Open tab when
+// none are configured so the list is never tabless.
+func (a *App) tabConfigs() []config.PullRequestTabConfig {
+	if a.cfg != nil && len(a.cfg.PullRequestTabs) > 0 {
+		return a.cfg.PullRequestTabs
+	}
+	return []config.PullRequestTabConfig{{Name: "Open", State: "", Filter: "", Query: "", MaxResults: nil}}
+}
+
+// fetchKeyOf is the request identity of a tab: tabs that agree on state and
+// query share one fetch and re-filter its result client side.
+func (a *App) fetchKeyOf(tab int) string {
+	tabs := a.tabConfigs()
+	if tab < 0 || tab >= len(tabs) {
+		return "OPEN|"
+	}
+	return tabs[tab].ResolveState() + "|" + tabs[tab].Query
+}
+
+// fetchActiveTab requests the pull requests behind the tab in view.
 func (a *App) fetchActiveTab() tea.Cmd {
-	if a.issuesList.IsJQLTab() {
-		jql := a.issuesList.JQLQuery()
-		if jql == "" {
-			return nil
-		}
-		tabIdx := a.issuesList.GetTabIndex()
-		*a.logFlag = true
-		return fetchIssuesByJQL(a.client, jql, tabIdx, a.cfg.ResolveGlobalMaxResults())
+	return a.fetchPullRequests(a.fetchKeyOf(a.prList.GetTabIndex()))
+}
+
+// needsRepoDiscovery reports whether repository discovery has to be re-run
+// before a pull request fetch can do anything. Discovery either failed, or it
+// came back empty while nothing was configured — either way repoSlugs is
+// empty, so every pull request fetch is a silent no-op and the session is
+// inert until discovery lands.
+//
+// It is deliberately consulted only from the user-driven refresh paths and not
+// from handleReposLoaded, which would otherwise re-issue discovery on every
+// empty response and spin.
+func (a *App) needsRepoDiscovery() bool {
+	if a.repoDiscoveryFailed {
+		return true
 	}
-	if a.projectKey == "" {
-		return nil
+	return len(a.repoSlugs) == 0 && len(a.cfg.Bitbucket.Repositories) == 0
+}
+
+// refreshCmd is what the refresh paths issue. Repository discovery is retried
+// first when it is what is missing, because without it repoSlugs is empty and
+// every pull request fetch is a silent no-op.
+func (a *App) refreshCmd() tea.Cmd {
+	if a.needsRepoDiscovery() {
+		return a.fetchRepos()
 	}
-	tab := a.issuesList.ActiveTab()
-	if tab.JQL == "" {
-		return nil
-	}
-	tabIdx := a.issuesList.GetTabIndex()
-	jql := resolveTabJQL(tab, a.projectKey, a.cfg.Jira.Email)
-	*a.logFlag = true
-	return fetchIssuesByJQL(a.client, jql, tabIdx, a.cfg.ResolveMaxResults(tab))
+	return a.fetchActiveTab()
 }
 
 func (a *App) updateFocusState() {
 	a.statusPanel.SetFocused(false)
-	a.issuesList.SetFocused(false)
-	a.infoPanel.SetFocused(false)
-	a.projectList.SetFocused(false)
+	a.prList.SetFocused(false)
+	a.buildsPanel.SetFocused(false)
+	a.repoList.SetFocused(false)
 	a.detailView.SetFocused(false)
 
 	if a.side == sideLeft {
 		switch a.leftFocus {
 		case focusStatus:
 			a.statusPanel.SetFocused(true)
-		case focusIssues:
-			a.issuesList.SetFocused(true)
-		case focusInfo:
-			a.infoPanel.SetFocused(true)
-		case focusProjects:
-			a.projectList.SetFocused(true)
+		case focusPullRequests:
+			a.prList.SetFocused(true)
+		case focusBuilds:
+			a.buildsPanel.SetFocused(true)
+		case focusRepos:
+			a.repoList.SetFocused(true)
 		}
 	} else {
 		a.detailView.SetFocused(true)
@@ -1193,4 +673,14 @@ func (a *App) updateFocusState() {
 
 	a.helpBar.SetItems(a.helpBarItems())
 	a.layoutPanels()
+}
+
+// showSplash points the detail panel at the startup screen with fresh counts.
+func (a *App) showSplash() {
+	a.splashInfo.Workspace = a.workspace
+	if a.currentUser != nil {
+		a.splashInfo.User = a.currentUser.Name()
+	}
+	a.splashInfo.RepoCount = len(a.repoSlugs)
+	a.detailView.SetSplash(a.splashInfo)
 }

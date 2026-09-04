@@ -29,11 +29,11 @@ jobs:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
 
-      - name: Publish lazyjira-git to AUR
+      - name: Publish lazybitbucket-git to AUR
         uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
         with:
-          pkgname: lazyjira-git
-          pkgbuild: aur/lazyjira-git/PKGBUILD
+          pkgname: lazybitbucket-git
+          pkgbuild: aur/lazybitbucket-git/PKGBUILD
           commit_username: goreleaserbot
           commit_email: bot@goreleaser.com
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

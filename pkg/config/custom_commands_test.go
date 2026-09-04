@@ -4,79 +4,66 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
 )
 
-func TestResolveCustomCommands_Defaults(t *testing.T) {
-	t.Parallel()
-	cfg := &Config{
-		CustomCommands: []CustomCommandConfig{
-			{Key: "y", Name: "Copy", Command: "echo {{.Key}}"},
-		},
-	}
+const echoCommand = "echo x"
+
+func resolveOne(t *testing.T, command CustomCommandConfig) ResolvedCustomCommand {
+	t.Helper()
+	cfg := &Config{CustomCommands: []CustomCommandConfig{command}}
 	resolved, err := cfg.ResolveCustomCommands()
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("ResolveCustomCommands: %v", err)
 	}
 	if len(resolved) != 1 {
-		t.Fatalf("len = %d, want 1", len(resolved))
+		t.Fatalf("len(resolved) = %d, want 1", len(resolved))
 	}
-	got := resolved[0]
-	if len(got.Contexts) != len(DefaultCommandContexts) {
-		t.Errorf("Contexts = %v, want %v", got.Contexts, DefaultCommandContexts)
+	return resolved[0]
+}
+
+func TestResolveCustomCommands_DefaultContexts(t *testing.T) {
+	t.Parallel()
+	got := resolveOne(t, CustomCommandConfig{Key: "y", Name: "Copy", Command: "echo {{.ID}}"})
+
+	testkit.AssertSliceEqual(t, "Contexts", got.Contexts, DefaultCommandContexts)
+	testkit.AssertSliceEqual(t, "DefaultCommandContexts", DefaultCommandContexts,
+		[]Context{CtxPullRequests, CtxDetail})
+	testkit.AssertEqual(t, "Scopes", got.Scopes, ScopePullRequest|ScopeRepo)
+}
+
+func TestResolveCustomCommands_ContextScopes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		contexts []string
+		want     ScopeMask
+	}{
+		{"pullrequests", []string{"pullrequests"}, ScopePullRequest | ScopeRepo},
+		{"builds", []string{"builds"}, ScopePullRequest | ScopeRepo | ScopeBuild},
+		{"repos", []string{"repos"}, ScopeRepo},
+		{"detail", []string{"detail"}, ScopePullRequest | ScopeRepo},
+		{"repos and builds union", []string{"repos", "builds"}, ScopePullRequest | ScopeRepo | ScopeBuild},
+		{"every context", []string{"pullrequests", "builds", "repos", "detail"}, ScopePullRequest | ScopeRepo | ScopeBuild},
 	}
-	if got.Scopes != ScopeIssue {
-		t.Errorf("Scopes = %d, want %d", got.Scopes, ScopeIssue)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveOne(t, CustomCommandConfig{
+				Key: "a", Name: "cmd", Command: echoCommand, Contexts: tc.contexts,
+			})
+			testkit.AssertEqual(t, "Scopes", got.Scopes, tc.want)
+			testkit.AssertEqual(t, "len(Contexts)", len(got.Contexts), len(tc.contexts))
+		})
 	}
 }
 
-func TestResolveCustomCommands_SingleContextProjects(t *testing.T) {
+func TestScopeMask_BitsAreDistinct(t *testing.T) {
 	t.Parallel()
-	cfg := &Config{
-		CustomCommands: []CustomCommandConfig{
-			{Key: "n", Name: "Notes", Command: "echo {{.ProjectKey}}", Contexts: []string{"projects"}},
-		},
-	}
-	resolved, err := cfg.ResolveCustomCommands()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	got := resolved[0]
-	if got.Scopes != ScopeProject {
-		t.Errorf("Scopes = %d, want %d", got.Scopes, ScopeProject)
-	}
-}
-
-func TestResolveCustomCommands_DetailComments(t *testing.T) {
-	t.Parallel()
-	cfg := &Config{
-		CustomCommands: []CustomCommandConfig{
-			{Key: "c", Name: "Comment", Command: "echo {{.Key}}-{{.CommentID}}", Contexts: []string{"detail.comments"}},
-		},
-	}
-	resolved, err := cfg.ResolveCustomCommands()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	got := resolved[0]
-	if got.Scopes != ScopeIssue|ScopeComment {
-		t.Errorf("Scopes = %d, want %d", got.Scopes, ScopeIssue|ScopeComment)
-	}
-}
-
-func TestResolveCustomCommands_MixedScopes(t *testing.T) {
-	t.Parallel()
-	cfg := &Config{
-		CustomCommands: []CustomCommandConfig{
-			{Key: "x", Name: "Mixed", Command: "echo x", Contexts: []string{"issues", "detail.comments"}},
-		},
-	}
-	resolved, err := cfg.ResolveCustomCommands()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resolved[0].Scopes != ScopeIssue|ScopeComment {
-		t.Errorf("Scopes = %d, want %d", resolved[0].Scopes, ScopeIssue|ScopeComment)
-	}
+	testkit.AssertEqual(t, "ScopePullRequest", ScopePullRequest, ScopeMask(1))
+	testkit.AssertEqual(t, "ScopeRepo", ScopeRepo, ScopeMask(2))
+	testkit.AssertEqual(t, "ScopeBuild", ScopeBuild, ScopeMask(4))
 }
 
 func TestResolveCustomCommands_EmptyFieldsError(t *testing.T) {
@@ -85,8 +72,8 @@ func TestResolveCustomCommands_EmptyFieldsError(t *testing.T) {
 		name string
 		cmd  CustomCommandConfig
 	}{
-		{"empty key", CustomCommandConfig{Name: "x", Command: "echo"}},
-		{"empty name", CustomCommandConfig{Key: "a", Command: "echo"}},
+		{"empty key", CustomCommandConfig{Name: "x", Command: echoCommand}},
+		{"empty name", CustomCommandConfig{Key: "a", Command: echoCommand}},
 		{"empty command", CustomCommandConfig{Key: "a", Name: "x"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,7 +90,7 @@ func TestResolveCustomCommands_UnknownContextError(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{
 		CustomCommands: []CustomCommandConfig{
-			{Key: "a", Name: "x", Command: "echo", Contexts: []string{"bogus"}},
+			{Key: "a", Name: "x", Command: echoCommand, Contexts: []string{"bogus"}},
 		},
 	}
 	_, err := cfg.ResolveCustomCommands()
@@ -112,12 +99,26 @@ func TestResolveCustomCommands_UnknownContextError(t *testing.T) {
 	}
 }
 
+func TestResolveCustomCommands_LegacyJiraContextsRejected(t *testing.T) {
+	t.Parallel()
+	for _, legacy := range []string{"issues", "info", "projects", "detail.comments"} {
+		cfg := &Config{
+			CustomCommands: []CustomCommandConfig{
+				{Key: "a", Name: "x", Command: echoCommand, Contexts: []string{legacy}},
+			},
+		}
+		if _, err := cfg.ResolveCustomCommands(); err == nil {
+			t.Errorf("context %q should no longer be accepted", legacy)
+		}
+	}
+}
+
 func TestResolveCustomCommands_DuplicateKeySameContextError(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{
 		CustomCommands: []CustomCommandConfig{
-			{Key: "a", Name: "first", Command: "echo 1", Contexts: []string{"issues"}},
-			{Key: "a", Name: "second", Command: "echo 2", Contexts: []string{"issues"}},
+			{Key: "a", Name: "first", Command: "echo 1", Contexts: []string{"pullrequests"}},
+			{Key: "a", Name: "second", Command: "echo 2", Contexts: []string{"pullrequests"}},
 		},
 	}
 	if _, err := cfg.ResolveCustomCommands(); err == nil {
@@ -129,8 +130,8 @@ func TestResolveCustomCommands_DuplicateKeyDisjointContextsAllowed(t *testing.T)
 	t.Parallel()
 	cfg := &Config{
 		CustomCommands: []CustomCommandConfig{
-			{Key: "a", Name: "first", Command: "echo 1", Contexts: []string{"issues"}},
-			{Key: "a", Name: "second", Command: "echo 2", Contexts: []string{"projects"}},
+			{Key: "a", Name: "first", Command: "echo 1", Contexts: []string{"pullrequests"}},
+			{Key: "a", Name: "second", Command: "echo 2", Contexts: []string{"repos"}},
 		},
 	}
 	if _, err := cfg.ResolveCustomCommands(); err != nil {
@@ -138,35 +139,24 @@ func TestResolveCustomCommands_DuplicateKeyDisjointContextsAllowed(t *testing.T)
 	}
 }
 
-func TestResolveCustomCommands_RefreshDefault(t *testing.T) {
+func TestResolveCustomCommands_RefreshAndSuspendPassThrough(t *testing.T) {
 	t.Parallel()
-	cfg := &Config{
-		CustomCommands: []CustomCommandConfig{
-			{Key: "y", Name: "Copy", Command: "echo {{.Key}}"},
-		},
-	}
-	resolved, err := cfg.ResolveCustomCommands()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resolved[0].Refresh {
+	plain := resolveOne(t, CustomCommandConfig{Key: "y", Name: "Copy", Command: echoCommand})
+	if plain.Refresh {
 		t.Error("Refresh should default to false")
 	}
-}
+	if !plain.ShouldSuspend() {
+		t.Error("ShouldSuspend should default to true")
+	}
 
-func TestResolveCustomCommands_RefreshTrue(t *testing.T) {
-	t.Parallel()
-	cfg := &Config{
-		CustomCommands: []CustomCommandConfig{
-			{Key: "w", Name: "Log work", Command: "echo {{.Key}}", Refresh: true},
-		},
-	}
-	resolved, err := cfg.ResolveCustomCommands()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !resolved[0].Refresh {
+	explicit := resolveOne(t, CustomCommandConfig{
+		Key: "w", Name: "Checkout", Command: echoCommand, Refresh: true, Suspend: pointerTo(false),
+	})
+	if !explicit.Refresh {
 		t.Error("Refresh should be true when set")
+	}
+	if explicit.ShouldSuspend() {
+		t.Error("ShouldSuspend should be false when suspend: false")
 	}
 }
 
@@ -184,26 +174,50 @@ func TestResolveCustomCommands_InvalidTemplateError(t *testing.T) {
 
 func TestResolveCustomCommands_ShellescapeFunc(t *testing.T) {
 	t.Parallel()
-	cfg := &Config{
-		CustomCommands: []CustomCommandConfig{
-			{Key: "s", Name: "Shellescape", Command: "echo {{.Key | shellescape}}"},
-		},
-	}
-	resolved, err := cfg.ResolveCustomCommands()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	resolved := resolveOne(t, CustomCommandConfig{
+		Key: "s", Name: "Shellescape", Command: "echo {{.Title | shellescape}}",
+	})
 
 	var buf bytes.Buffer
-	data := struct{ Key string }{Key: "what's up"}
-	if err := resolved[0].Template.Execute(&buf, data); err != nil {
+	data := struct{ Title string }{Title: "what's up"}
+	if err := resolved.Template.Execute(&buf, data); err != nil {
 		t.Fatalf("template execute error: %v", err)
 	}
+	testkit.AssertEqual(t, "output", buf.String(), `echo 'what'\''s up'`)
+}
 
-	want := `echo 'what'\''s up'`
-	if got := buf.String(); got != want {
-		t.Errorf("output = %q, want %q", got, want)
+func TestResolveCustomCommands_SlugifyFunc(t *testing.T) {
+	t.Parallel()
+	resolved := resolveOne(t, CustomCommandConfig{
+		Key: "b", Name: "Branch", Command: "git checkout -b {{.Title | slugify}}",
+	})
+
+	var buf bytes.Buffer
+	data := struct{ Title string }{Title: "Fix Login Bug #42!"}
+	if err := resolved.Template.Execute(&buf, data); err != nil {
+		t.Fatalf("template execute error: %v", err)
 	}
+	testkit.AssertEqual(t, "output", buf.String(), "git checkout -b fix-login-bug-42")
+}
+
+func TestResolveCustomCommands_MissingKeyIsAnExecutionError(t *testing.T) {
+	t.Parallel()
+	resolved := resolveOne(t, CustomCommandConfig{Key: "m", Name: "Missing", Command: "echo {{.Nope}}"})
+
+	var buf bytes.Buffer
+	if err := resolved.Template.Execute(&buf, map[string]string{"ID": "1"}); err == nil {
+		t.Error("expected missingkey=error to reject an unknown field")
+	}
+}
+
+func TestResolveCustomCommands_EmptyListYieldsEmptySlice(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{}
+	resolved, err := cfg.ResolveCustomCommands()
+	if err != nil {
+		t.Fatalf("ResolveCustomCommands: %v", err)
+	}
+	testkit.AssertEqual(t, "len(resolved)", len(resolved), 0)
 }
 
 func TestSlugify(t *testing.T) {
@@ -238,30 +252,6 @@ func TestSlugify(t *testing.T) {
 	}
 }
 
-func TestResolveCustomCommands_SlugifyFunc(t *testing.T) {
-	t.Parallel()
-	cfg := &Config{
-		CustomCommands: []CustomCommandConfig{
-			{Key: "b", Name: "Branch", Command: "git checkout -b {{.Summary | slugify}}"},
-		},
-	}
-	resolved, err := cfg.ResolveCustomCommands()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var buf bytes.Buffer
-	data := struct{ Summary string }{Summary: "Fix Login Bug #42!"}
-	if err := resolved[0].Template.Execute(&buf, data); err != nil {
-		t.Fatalf("template execute error: %v", err)
-	}
-
-	want := "git checkout -b fix-login-bug-42"
-	if got := buf.String(); got != want {
-		t.Errorf("output = %q, want %q", got, want)
-	}
-}
-
 func TestResolvedCustomCommand_ShouldSuspend(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -277,31 +267,28 @@ func TestResolvedCustomCommand_ShouldSuspend(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			resolved := ResolvedCustomCommand{Suspend: tc.suspend}
-			if got := resolved.ShouldSuspend(); got != tc.want {
-				t.Errorf("ShouldSuspend() = %v, want %v", got, tc.want)
-			}
+			testkit.AssertEqual(t, "ShouldSuspend", resolved.ShouldSuspend(), tc.want)
 		})
 	}
 }
 
 func TestResolvedCustomCommand_HasContext(t *testing.T) {
 	t.Parallel()
-	resolved := ResolvedCustomCommand{Contexts: []Context{CtxIssues, CtxDetail}}
+	resolved := ResolvedCustomCommand{Contexts: []Context{CtxPullRequests, CtxDetail}}
 	tests := []struct {
 		name    string
 		context Context
 		want    bool
 	}{
-		{"bound context", CtxIssues, true},
+		{"bound context", CtxPullRequests, true},
 		{"other bound context", CtxDetail, true},
-		{"unbound context", CtxProjects, false},
+		{"unbound repos", CtxRepos, false},
+		{"unbound builds", CtxBuilds, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := resolved.HasContext(tc.context); got != tc.want {
-				t.Errorf("HasContext(%q) = %v, want %v", tc.context, got, tc.want)
-			}
+			testkit.AssertEqual(t, "HasContext("+string(tc.context)+")", resolved.HasContext(tc.context), tc.want)
 		})
 	}
 }

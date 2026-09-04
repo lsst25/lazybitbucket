@@ -8,14 +8,14 @@ import (
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
-// Binding represents a single keybinding with context
+// Binding is one keybinding row in the help overlay.
 type Binding struct {
 	Key         string
 	Description string
 }
 
 func (a *App) bind(action Action, desc string) Binding {
-	return Binding{a.keymap.Keys(action), desc}
+	return Binding{Key: a.keymap.Keys(action), Description: desc}
 }
 
 func (a *App) navBindings() []Binding {
@@ -38,156 +38,99 @@ func (a *App) detailScrollBindings() []Binding {
 	}
 }
 
-// ContextBindings returns keybindings for the current focus context
+func (a *App) globalBindings() []Binding {
+	return []Binding{
+		a.bind(ActQuit, "quit"),
+		a.bind(ActSwitchPanel, "switch left/right panels"),
+		a.bind(ActFocusStatus, "focus status panel"),
+		a.bind(ActFocusPullRequests, "focus pull requests panel"),
+		a.bind(ActFocusBuilds, "focus builds panel"),
+		a.bind(ActFocusRepos, "focus repos panel"),
+		a.bind(ActSearch, "search / filter current list"),
+		a.bind(ActRefresh, "refresh the selected pull request"),
+		a.bind(ActRefreshAll, "refresh the pull request list"),
+		a.bind(ActHelp, "show all keybindings"),
+	}
+}
+
+// ContextBindings returns the keybindings that apply to the current focus.
 func (a *App) ContextBindings() []Binding {
-	km := a.keymap
-	global := []Binding{
-		{km.Keys(ActQuit), "quit"},
-		{km.Keys(ActSwitchPanel), "switch left/right panels"},
-		{km.Keys(ActFocusStatus), "focus status panel"},
-		{km.Keys(ActFocusIssues), "focus issues panel"},
-		{km.Keys(ActFocusInfo), "focus info panel"},
-		{km.Keys(ActFocusProj), "focus projects panel"},
-		{km.Keys(ActSearch), "search / filter current list"},
-		{km.Keys(ActRefresh), "refresh data from Jira"},
-		a.bind(ActJQLSearch, "JQL search"),
-		{km.Keys(ActHelp), "show all keybindings"},
+	global := a.globalBindings()
+
+	if a.side == sideRight {
+		bindings := slices.Concat(global, a.navBindings())
+		switch a.detailView.Mode() {
+		case views.ModePipeline, views.ModeStepLog:
+			bindings = append(bindings,
+				a.bind(ActBack, "back to the pull request"),
+				a.bind(ActOpen, "open the step log"),
+				a.bind(ActBrowser, "open the pipeline in a browser"),
+			)
+		case views.ModePullRequest, views.ModeRepo, views.ModeSplash:
+			bindings = append(bindings,
+				a.bind(ActBrowser, "open in browser"),
+				a.bind(ActURLPicker, "open URL picker"),
+				a.bind(ActCopyURL, "copy the pull request URL"),
+			)
+		}
+		bindings = append(bindings, a.bind(ActFocusLeft, "back to the left panels"))
+		bindings = append(bindings, a.customCommandBindings(config.CtxDetail)...)
+		return bindings
 	}
 
-	switch {
-	case a.side == sideLeft && a.leftFocus == focusIssues:
+	switch a.leftFocus {
+	case focusPullRequests:
 		bindings := slices.Concat(global, a.navBindings(), a.detailScrollBindings())
 		bindings = append(bindings,
-			a.bind(ActOpen, "open issue detail"),
-			a.bind(ActFocusRight, "open issue detail"),
-			a.bind(ActTransition, "transition issue status"),
-			a.bind(ActEdit, "edit summary"),
-			a.bind(ActComments, "go to comments"),
-			a.bind(ActPriority, "change priority"),
-			a.bind(ActAssignee, "change assignee"),
-			a.bind(ActBrowser, "open issue in browser"),
+			a.bind(ActOpen, "open the pull request detail"),
+			a.bind(ActFocusRight, "next panel"),
+			a.bind(ActBrowser, "open the pull request in a browser"),
 			a.bind(ActURLPicker, "open URL picker"),
-			a.bind(ActCreateBranch, "create branch"),
-			a.bind(ActNew, "create issue"),
-			a.bind(ActDuplicateIssue, "duplicate issue"),
-			a.bind(ActCloseJQLTab, "close JQL tab"),
-			Binding{"[]", "switch tab"},
+			a.bind(ActCopyURL, "copy the pull request URL"),
+			a.bind(ActCheckout, "check out the source branch"),
+			Binding{Key: "[]", Description: "switch tab"},
 		)
-		bindings = append(bindings, a.customCommandBindings(config.CtxIssues)...)
+		bindings = append(bindings, a.customCommandBindings(config.CtxPullRequests)...)
 		return bindings
 
-	case a.side == sideLeft && a.leftFocus == focusInfo:
+	case focusBuilds:
 		bindings := slices.Concat(global, a.navBindings(), a.detailScrollBindings())
 		bindings = append(bindings,
-			Binding{"[]", "switch tab (Info/Lnk/Sub)"},
-			a.bind(ActEdit, "edit field"),
-			a.bind(ActTransition, "transition issue status"),
-			a.bind(ActPriority, "change priority"),
-			a.bind(ActAssignee, "change assignee"),
-			a.bind(ActBrowser, "open issue in browser"),
-			a.bind(ActURLPicker, "open URL picker"),
+			a.bind(ActOpen, "open the pipeline run"),
+			a.bind(ActBrowser, "open the build in a browser"),
 			a.bind(ActFocusRight, "next panel"),
 			a.bind(ActFocusLeft, "previous panel"),
 		)
-		bindings = append(bindings, a.customCommandBindings(config.CtxInfo)...)
+		bindings = append(bindings, a.customCommandBindings(config.CtxBuilds)...)
 		return bindings
 
-	case a.side == sideLeft && a.leftFocus == focusProjects:
+	case focusRepos:
 		bindings := slices.Concat(global, a.navBindings())
 		bindings = append(bindings,
-			a.bind(ActSelect, "select project and load issues"),
+			a.bind(ActSelect, "filter the list by this repository"),
+			a.bind(ActBrowser, "open the repository in a browser"),
 			a.bind(ActFocusRight, "next panel"),
 			a.bind(ActFocusLeft, "previous panel"),
 		)
-		bindings = append(bindings, a.customCommandBindings(config.CtxProjects)...)
+		bindings = append(bindings, a.customCommandBindings(config.CtxRepos)...)
 		return bindings
 
-	case a.side == sideLeft && a.leftFocus == focusStatus:
-		return append(global,
-			a.bind(ActFocusRight, "switch to detail panel"),
-		)
-
-	case a.side == sideRight:
-		bindings := slices.Concat(global, a.navBindings())
-		bindings = append(bindings,
-			Binding{"[]", "previous/next tab"},
-			a.bind(ActFocusLeft, "back to left panel"),
-			a.bind(ActInfoTab, "focus info panel"),
-			a.bind(ActPriority, "change priority"),
-			a.bind(ActAssignee, "change assignee"),
-			a.bind(ActBrowser, "open in browser"),
-			a.bind(ActURLPicker, "open URL picker"),
-		)
-		if a.detailView.ActiveTab() == views.TabComments {
-			bindings = append(bindings,
-				a.bind(ActEdit, "edit comment"),
-				a.bind(ActNew, "new comment"),
-			)
-		} else {
-			bindings = append(bindings,
-				a.bind(ActEdit, "edit description"),
-			)
-		}
-		bindings = append(bindings, a.customCommandBindings(config.CtxDetail)...)
-		if a.detailView.ActiveTab() == views.TabComments {
-			bindings = append(bindings, a.customCommandBindings(config.CtxDetailComments)...)
-		}
-		return bindings
+	case focusStatus:
+		return append(global, a.bind(ActFocusRight, "switch to the pull requests panel"))
 	}
 
 	return global
 }
 
+// helpBarItems is the one-line hint strip under the panels.
 func (a *App) helpBarItems() []components.HelpItem {
-	// Overlay-specific hints take priority over panel hints
+	km := a.keymap
+
 	switch {
-	case a.createForm.IsVisible():
-		items := []components.HelpItem{
-			{Key: "tab", Description: "next panel"},
-			{Key: "enter", Description: "submit"},
-			{Key: "esc", Description: "cancel"},
-		}
-		switch a.createForm.FocusedPanel() { //nolint:exhaustive
-		case components.CreatePanelFields:
-			items = append(items,
-				components.HelpItem{Key: "e", Description: "edit"},
-				components.HelpItem{Key: "/", Description: "filter"},
-			)
-		case components.CreatePanelDescription:
-			items = append(items, components.HelpItem{Key: "e", Description: "edit in $EDITOR"})
-		}
-		return items
-	case a.jqlModal.IsVisible():
-		return []components.HelpItem{
-			{Key: "enter", Description: "search"},
-			{Key: "tab", Description: "switch focus"},
-			{Key: "esc", Description: "cancel"},
-		}
 	case a.showHelp:
 		return []components.HelpItem{
 			{Key: "/", Description: "filter"},
 			{Key: "esc", Description: "close"},
-		}
-	case a.diffView.IsVisible():
-		return []components.HelpItem{
-			{Key: "enter", Description: "confirm"},
-			{Key: "esc", Description: "cancel"},
-		}
-	case a.inputModal.IsVisible():
-		items := []components.HelpItem{
-			{Key: "enter", Description: "confirm"},
-			{Key: "esc", Description: "cancel"},
-		}
-		if a.inputModal.HasHints() {
-			items = append(items, components.HelpItem{Key: "tab", Description: "existing branches"})
-		}
-		return items
-	case a.modal.IsVisible() && a.modal.IsChecklist():
-		return []components.HelpItem{
-			{Key: "space", Description: "toggle"},
-			{Key: "/", Description: "search"},
-			{Key: "enter", Description: "confirm"},
-			{Key: "esc", Description: "cancel"},
 		}
 	case a.modal.IsVisible():
 		return []components.HelpItem{
@@ -197,90 +140,58 @@ func (a *App) helpBarItems() []components.HelpItem {
 		}
 	}
 
-	km := a.keymap
-	switch {
-	case a.side == sideLeft && a.leftFocus == focusIssues:
-		var items []components.HelpItem
-		if a.issuesList.IsJQLTab() {
-			items = append(items, components.HelpItem{Key: km.Keys(ActCloseJQLTab), Description: "close JQL"})
+	if a.side == sideRight {
+		head := make([]components.HelpItem, 0, 3)
+		switch a.detailView.Mode() {
+		case views.ModePipeline, views.ModeStepLog:
+			head = append(head,
+				components.HelpItem{Key: km.Keys(ActOpen), Description: "step log"},
+				components.HelpItem{Key: km.Keys(ActBack), Description: "back"},
+			)
+		case views.ModePullRequest, views.ModeRepo, views.ModeSplash:
+			head = append(head,
+				components.HelpItem{Key: km.Keys(ActBrowser), Description: "browser"},
+				components.HelpItem{Key: km.Keys(ActURLPicker), Description: "urls"},
+			)
 		}
-		cur := a.currentIssue()
-		enterDesc := "detail"
-		if cur != nil {
-			children, resolved := a.childrenForList(cur)
-			if resolved && len(children) > 0 {
-				enterDesc = "children"
-			}
-		}
-		items = append(items, components.HelpItem{Key: km.Keys(ActSelect), Description: enterDesc})
-		if cur != nil && cur.Parent != nil && cur.Parent.Key != "" {
-			items = append(items, components.HelpItem{Key: km.Keys(ActShowParent), Description: "parent"})
-		}
-		items = append(items,
-			components.HelpItem{Key: km.Keys(ActEdit), Description: "edit"},
-			components.HelpItem{Key: km.Keys(ActTransition), Description: "transition"},
-			components.HelpItem{Key: km.Keys(ActPriority), Description: "priority"},
-			components.HelpItem{Key: km.Keys(ActCreateBranch), Description: "branch"},
-			components.HelpItem{Key: km.Keys(ActNew), Description: "create"},
-			components.HelpItem{Key: km.Keys(ActJQLSearch), Description: "JQL search"},
+		head = append(head, components.HelpItem{Key: km.Keys(ActFocusLeft), Description: "back"})
+		return a.panelHelpItems(config.CtxDetail, head...)
+	}
+
+	switch a.leftFocus {
+	case focusPullRequests:
+		return a.panelHelpItems(config.CtxPullRequests,
+			components.HelpItem{Key: km.Keys(ActOpen), Description: "detail"},
+			components.HelpItem{Key: km.Keys(ActBrowser), Description: "browser"},
+			components.HelpItem{Key: km.Keys(ActCopyURL), Description: "copy url"},
+			components.HelpItem{Key: km.Keys(ActCheckout), Description: "checkout"},
+			components.HelpItem{Key: "[]", Description: "tabs"},
 		)
-		if a.canCreateSubtask() {
-			items = append(items, components.HelpItem{Key: km.Keys(ActCreateSubtask), Description: "subtask"})
-		}
-		items = append(items, a.customCommandHelpItems(config.CtxIssues)...)
-		items = append(items, components.HelpItem{Key: km.Keys(ActHelp), Description: "help"})
-		return items
-	case a.side == sideLeft && a.leftFocus == focusInfo:
-		items := make([]components.HelpItem, 0, 6)
-		items = append(items,
-			components.HelpItem{Key: km.Keys(ActEdit), Description: "edit"},
-			components.HelpItem{Key: km.Keys(ActTransition), Description: "transition"},
-			components.HelpItem{Key: km.Keys(ActPriority), Description: "priority"},
-			components.HelpItem{Key: km.Keys(ActAssignee), Description: "assignee"},
+	case focusBuilds:
+		return a.panelHelpItems(config.CtxBuilds,
+			components.HelpItem{Key: km.Keys(ActOpen), Description: "pipeline"},
+			components.HelpItem{Key: km.Keys(ActBrowser), Description: "browser"},
 		)
-		items = append(items, a.customCommandHelpItems(config.CtxInfo)...)
-		items = append(items, components.HelpItem{Key: km.Keys(ActHelp), Description: "help"})
-		return items
-	case a.side == sideLeft && a.leftFocus == focusProjects:
-		items := make([]components.HelpItem, 0, 4)
-		items = append(items,
-			components.HelpItem{Key: km.Keys(ActSelect), Description: "select"},
-			components.HelpItem{Key: km.Keys(ActOpen), Description: "preview"},
+	case focusRepos:
+		return a.panelHelpItems(config.CtxRepos,
+			components.HelpItem{Key: km.Keys(ActSelect), Description: "filter"},
+			components.HelpItem{Key: km.Keys(ActBrowser), Description: "browser"},
 		)
-		items = append(items, a.customCommandHelpItems(config.CtxProjects)...)
-		items = append(items, components.HelpItem{Key: km.Keys(ActHelp), Description: "help"})
-		return items
-	case a.side == sideLeft && a.leftFocus == focusStatus:
+	case focusStatus:
 		return []components.HelpItem{
 			{Key: km.Keys(ActSwitchPanel) + "/" + km.Keys(ActFocusRight), Description: "detail"},
 			{Key: km.Keys(ActHelp), Description: "help"},
 		}
-	case a.side == sideRight:
-		items := []components.HelpItem{
-			{Key: "[]", Description: "tabs"},
-		}
-		switch a.detailView.ActiveTab() {
-		case views.TabComments:
-			items = append(items,
-				components.HelpItem{Key: km.Keys(ActEdit), Description: "edit comment"},
-				components.HelpItem{Key: km.Keys(ActNew), Description: "new comment"},
-			)
-		default:
-			items = append(items,
-				components.HelpItem{Key: km.Keys(ActEdit), Description: "edit"},
-			)
-		}
-		items = append(items,
-			components.HelpItem{Key: km.Keys(ActPriority), Description: "priority"},
-			components.HelpItem{Key: km.Keys(ActAssignee), Description: "assignee"},
-			components.HelpItem{Key: km.Keys(ActFocusLeft), Description: "back"},
-		)
-		items = append(items, a.customCommandHelpItems(config.CtxDetail)...)
-		if a.detailView.ActiveTab() == views.TabComments {
-			items = append(items, a.customCommandHelpItems(config.CtxDetailComments)...)
-		}
-		items = append(items, components.HelpItem{Key: km.Keys(ActHelp), Description: "help"})
-		return items
 	}
 	return nil
+}
+
+// panelHelpItems appends a panel's custom commands and the help key to its
+// fixed hints, so every panel's strip is built the same way.
+func (a *App) panelHelpItems(ctx config.Context, head ...components.HelpItem) []components.HelpItem {
+	custom := a.customCommandHelpItems(ctx)
+	items := make([]components.HelpItem, 0, len(head)+len(custom)+1)
+	items = append(items, head...)
+	items = append(items, custom...)
+	return append(items, components.HelpItem{Key: a.keymap.Keys(ActHelp), Description: "help"})
 }

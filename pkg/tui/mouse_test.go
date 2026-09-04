@@ -3,21 +3,24 @@ package tui
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
 	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
-	"github.com/lsst25/lazybitbucket/pkg/jira"
-	"github.com/lsst25/lazybitbucket/pkg/jira/jiratest"
 )
 
 func appWithPanelDims(t *testing.T, width int) *App {
 	t.Helper()
-	app := newAppWithFake(t, &jiratest.FakeClient{T: t})
+	app := newAppWithFake(t, &bitbuckettest.FakeClient{T: t})
+	app.keymap = DefaultKeymap()
 	app.width = width
 	app.height = 40
 	app.panelSideW = 30
 	app.panelStatusH = 2
-	app.panelIssuesH = 5
-	app.panelInfoH = 4
-	app.panelProjectsH = 6
+	app.panelPRH = 5
+	app.panelBuildsH = 4
+	app.panelReposH = 6
 	app.panelDetailH = 20
 	app.panelLogH = 5
 	return app
@@ -34,9 +37,9 @@ func TestHitTest_Horizontal(t *testing.T) {
 		wantRelY int
 	}{
 		{"status", 5, 0, panelStatus, 0},
-		{"issues", 5, 3, panelIssues, 1},
-		{"info", 5, 8, panelInfo, 1},
-		{"projects", 5, 15, panelProjects, 4},
+		{"pull requests", 5, 3, panelPullRequests, 1},
+		{"builds", 5, 8, panelBuilds, 1},
+		{"repos", 5, 15, panelRepos, 4},
 		{"detail", 40, 5, panelDetail, 5},
 		{"log", 40, 25, panelLog, 5},
 	}
@@ -62,9 +65,9 @@ func TestHitTest_Vertical(t *testing.T) {
 		wantRelY int
 	}{
 		{"status", 0, panelStatus, 0},
-		{"issues", 3, panelIssues, 1},
-		{"info", 8, panelInfo, 1},
-		{"projects", 13, panelProjects, 2},
+		{"pull requests", 3, panelPullRequests, 1},
+		{"builds", 8, panelBuilds, 1},
+		{"repos", 13, panelRepos, 2},
 		{"detail", 20, panelDetail, 3},
 		{"log", 38, panelLog, 1},
 	}
@@ -79,33 +82,71 @@ func TestHitTest_Vertical(t *testing.T) {
 	}
 }
 
-func TestMouseScroll_FocusesPanel(t *testing.T) {
+func TestHandleMouse_WheelMovesTheListCursor(t *testing.T) {
 	t.Parallel()
 
-	t.Run("issues panel scroll takes focus", func(t *testing.T) {
+	t.Run("wheel down advances and takes focus", func(t *testing.T) {
 		t.Parallel()
 		app := appWithPanelDims(t, 120)
-		app.keymap = DefaultKeymap()
 		app.side = sideRight
-		app.issuesList.SetIssues([]jira.Issue{{Key: testKey}, {Key: "PLAT-2"}})
+		app.prList.SetPullRequests([]bitbucket.PullRequest{
+			newPR(testRepo, 101, testTitle),
+			newPR(testRepo, 102, "second"),
+		})
 
-		_, _ = app.mouseScroll(panelIssues, 3)
+		_, _ = app.handleMouse(tea.MouseMsg{
+			Button: tea.MouseButtonWheelDown,
+			Action: tea.MouseActionPress,
+			X:      5,
+			Y:      3,
+		})
 
-		if app.side != sideLeft || app.leftFocus != focusIssues {
-			t.Errorf("focus = (%v,%v), want left/issues", app.side, app.leftFocus)
-		}
+		testkit.AssertEqual(t, "side", app.side, sideLeft)
+		testkit.AssertEqual(t, "leftFocus", app.leftFocus, focusPullRequests)
+		testkit.AssertEqual(t, "cursor", app.prList.Cursor, 1)
 	})
 
-	t.Run("detail panel scroll switches to right side", func(t *testing.T) {
+	t.Run("wheel up rewinds", func(t *testing.T) {
 		t.Parallel()
 		app := appWithPanelDims(t, 120)
-		app.keymap = DefaultKeymap()
-		app.side = sideLeft
+		app.prList.SetPullRequests([]bitbucket.PullRequest{
+			newPR(testRepo, 101, testTitle),
+			newPR(testRepo, 102, "second"),
+		})
+		app.prList.Cursor = 1
 
-		_, _ = app.mouseScroll(panelDetail, 3)
+		_, _ = app.handleMouse(tea.MouseMsg{
+			Button: tea.MouseButtonWheelUp,
+			Action: tea.MouseActionPress,
+			X:      5,
+			Y:      3,
+		})
 
-		if app.side != sideRight {
-			t.Errorf("side = %v, want right", app.side)
-		}
+		testkit.AssertEqual(t, "cursor", app.prList.Cursor, 0)
 	})
+}
+
+func TestHandleMouse_DetailScrollSwitchesSide(t *testing.T) {
+	t.Parallel()
+	app := appWithPanelDims(t, 120)
+
+	_, _ = app.mouseScroll(panelDetail, 3)
+
+	testkit.AssertEqual(t, "side", app.side, sideRight)
+}
+
+func TestHandleMouse_MotionIsNoop(t *testing.T) {
+	t.Parallel()
+	app := appWithPanelDims(t, 120)
+
+	_, cmd := app.handleMouse(tea.MouseMsg{
+		Button: tea.MouseButtonNone,
+		Action: tea.MouseActionMotion,
+		X:      5,
+		Y:      3,
+	})
+
+	if cmd != nil {
+		t.Error("mouse motion should produce no command")
+	}
 }

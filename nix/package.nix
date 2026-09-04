@@ -11,7 +11,7 @@
 buildGoApplication {
   inherit version;
 
-  pname = "lazyjira";
+  pname = "lazybitbucket";
   src = ./..;
   modules = ../gomod2nix.toml;
   ldflags = [
@@ -19,11 +19,11 @@ buildGoApplication {
     "-w"
     "-X main.version=${version}"
   ];
-  subPackages = [ "cmd/lazyjira" ];
+  subPackages = [ "cmd/lazybitbucket" ];
   meta = with lib; {
-    description = "Terminal UI for Jira";
-    homepage = "https://github.com/textfuel/lazyjira";
+    description = "Terminal UI for Bitbucket Cloud pull requests";
+    homepage = "https://github.com/lsst25/lazybitbucket";
     license = licenses.mit;
-    mainProgram = "lazyjira";
+    mainProgram = "lazybitbucket";
   };
 }

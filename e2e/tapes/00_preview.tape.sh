@@ -2,118 +2,80 @@ Output e2e/golden/00_preview.gif
 
 @start
 
-# Projects panel — pick Platform Services
-@panel 4
-@down
-@select
-
-# Issues — switch to Assigned tab
+# === Pull requests [2] ===
+# The demo dataset opens on api-gateway #103, the most recently updated open PR.
 @panel 2
-@tab_next
+@wait 400
 
-# Open PLAT-3 (space = activate + open)
-@select
-
-# Detail tabs: Body→Cmt→Hist
-@tab_next 2
-
-# History — navigate to description diff (block 3)
-@down 3
-
-# Expand the big diff, scroll, close
-@expand
-@down 5
-@close
-
-# Comments
-@comments
+# walk the list — the detail panel previews whatever the cursor is on
 @down 2
-
-# === Info panel [3] ===
-Type "i"
-Sleep 100ms
-
-# Browse fields, edit labels
-@down 6
-@edit
-@wait 200
-@down 3
-@toggle
-@confirm
-@wait 200
-
-# Lnk tab — preview linked issue
-@tab_next
-@open
-
-# Sub tab — activate subtask
-@tab_next
+@wait 500
 @down
+@wait 500
+
+# scroll the preview without leaving the list
+Type "J"
+Sleep 200ms
+Type "J"
+Sleep 200ms
+Type "K"
+Sleep 200ms
+
+# Mine tab, then back to Open
+@tab_next
+@wait 500
+@tab_prev
+@wait 500
+
+# back to the top of the list: #103, whose pipeline failed
+Type "g"
+Sleep 400ms
+
+# open it in the detail panel and read further down the description
 @select
+@wait 600
+@down 3
+@wait 400
 
-# Back to info, h/l cycling demo
-Type "i"
-Sleep 100ms
-Type "l"
-Sleep 150ms
-Type "l"
-Sleep 150ms
-Type "l"
-Sleep 150ms
-
-# Help
-@help
-
-# Edit summary
-@panel 2
-@edit_type [UPDATED] API auth refactor
-
-# Transition
-Type "t"
-Sleep 200ms
-@down
-Enter
-Sleep 200ms
-
-# JQL Search
-Type "s"
-Sleep 200ms
-Set TypingSpeed 30ms
-Type "status"
-Set TypingSpeed 0ms
-Tab
-Sleep 100ms
-Set TypingSpeed 30ms
-Type "in"
-Set TypingSpeed 0ms
-Tab
-Sleep 100ms
-@down
-Enter
-Sleep 100ms
-@down
-Enter
-Sleep 100ms
-Backspace
-Backspace
-Set TypingSpeed 30ms
-Type ")"
-Set TypingSpeed 0ms
-Enter
+# back to the left panels
+Type "h"
 Sleep 300ms
 
-# Select result, change assignee from info
-@select
-Type "i"
-Sleep 100ms
-Type "a"
-Sleep 200ms
-@down
-Enter
-Sleep 200ms
+# === Builds [3] ===
+# The Builds panel lists the commit statuses of the selected pull request.
+@panel 3
+@wait 400
 
-@close
-Type "x"
-Sleep 100ms
+# drill into the pipeline run of the selected build
+@select
+@wait 800
+
+# walk to the failed step and open its log
+@down
+@wait 400
+@confirm
+@wait 700
+
+# back out: step log → pipeline → pull request
+@back
+@wait 500
+@back
+@wait 500
+
+# back to the left panels
+Type "h"
+Sleep 300ms
+
+# === Repos [4] ===
+@panel 4
+@wait 400
+
+# skip the "All repositories" row and filter the list to one repository
+@down
+@select
+@wait 700
+
+# help popup
+@help
 
 @quit

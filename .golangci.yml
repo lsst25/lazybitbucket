@@ -69,18 +69,12 @@ linters:
       # errcheck: logger writes are best-effort
       - linters: [errcheck]
         text: "fmt.Fprint"
-      # noctx: http.NewRequest in testConnection is one-off CLI tool
-      - linters: [noctx]
-        path: "cmd/lazyjira/main.go"
       # modernize stringsseq: keep strings.Split for clarity in view code
       - linters: [modernize]
         text: "stringsseq"
       # paralleltest: theme tests mutate the global theme singleton and must run serially
       - linters: [paralleltest]
         path: pkg/tui/theme/theme_test.go
-      # paralleltest: exec-seam test swaps the package-level command runner and must run serially
-      - linters: [paralleltest]
-        path: pkg/tui/navigation_exec_test.go
 
 formatters:
   enable:

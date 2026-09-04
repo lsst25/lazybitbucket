@@ -1,13 +1,13 @@
 .PHONY: build build-version build-demo lint lint-fix lint-docs vet test clean check check-demo tidy fix release preview e2e e2e-gen e2e-update nix-deps
 
 build:
-	go build -o lazyjira ./cmd/lazyjira
+	go build -o lazybitbucket ./cmd/lazybitbucket
 
 build-demo:
-	go build -tags demo -o lazyjira ./cmd/lazyjira
+	go build -tags demo -o lazybitbucket ./cmd/lazybitbucket
 
 build-version:
-	go build -ldflags "-s -w -X main.version=$$(git rev-parse --short HEAD)" -o lazyjira ./cmd/lazyjira
+	go build -ldflags "-s -w -X main.version=$$(git rev-parse --short HEAD)" -o lazybitbucket ./cmd/lazybitbucket
 
 lint:
 	go tool golangci-lint run ./...
@@ -26,7 +26,7 @@ test:
 	go test -race ./...
 
 clean:
-	rm -f lazyjira
+	rm -f lazybitbucket
 
 check: lint vet build test
 
@@ -38,8 +38,8 @@ fix: tidy lint-fix nix-deps
 release:
 	@test -n "$(VERSION)" || (echo "Usage: make release VERSION=2.7.0" && exit 1)
 	keepachangelog release $(VERSION)
-	perl -pi -e 's/^pkgver=.*/pkgver=$(VERSION)/' aur/lazyjira-git/PKGBUILD
-	git add CHANGELOG.md aur/lazyjira-git/PKGBUILD
+	perl -pi -e 's/^pkgver=.*/pkgver=$(VERSION)/' aur/lazybitbucket-git/PKGBUILD
+	git add CHANGELOG.md aur/lazybitbucket-git/PKGBUILD
 	git commit -m "release v$(VERSION)"
 	git tag v$(VERSION)
 	@echo "Tagged v$(VERSION). Push with: git push && git push --tags"
@@ -47,7 +47,8 @@ release:
 check-demo:
 	go tool golangci-lint run --build-tags demo ./...
 	go vet -tags demo ./...
-	go build -tags demo -o lazyjira ./cmd/lazyjira
+	go test -race -tags demo ./cmd/...
+	go build -tags demo -o lazybitbucket ./cmd/lazybitbucket
 
 preview: build-demo e2e-gen
 	@vhs -q e2e/tapes/00_preview.tape & vhs -q e2e/tapes/00_preview_vertical.tape & wait

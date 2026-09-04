@@ -5,529 +5,292 @@ import (
 	"errors"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/lsst25/lazybitbucket/pkg/jira"
-	"github.com/lsst25/lazybitbucket/pkg/jira/jiratest"
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
 )
 
-func assertErrorMsg(t *testing.T, msg tea.Msg) {
-	t.Helper()
-	if _, ok := msg.(errorMsg); !ok {
-		t.Fatalf("msg = %T, want errorMsg", msg)
-	}
-}
-
-func newFakeClient(t *testing.T) *jiratest.FakeClient {
-	t.Helper()
-	return &jiratest.FakeClient{T: t}
-}
-
-func TestFetchIssuesByJQL(t *testing.T) {
+func TestFetchCurrentUser(t *testing.T) {
 	t.Parallel()
 
-	t.Run("success tags the tab index", func(t *testing.T) {
+	t.Run("success carries the account", func(t *testing.T) {
 		t.Parallel()
-		fake := &jiratest.FakeClient{T: t}
-		fake.SearchIssuesFunc = func(_ context.Context, _ string, _, _ int) (*jira.SearchResult, error) {
-			return &jira.SearchResult{Issues: []jira.Issue{{Key: testKey}}}, nil
+		fake := &bitbuckettest.FakeClient{T: t}
+		fake.GetCurrentUserFunc = func(context.Context) (*bitbucket.Account, error) {
+			return &bitbucket.Account{UUID: testUserUUID, DisplayName: "Demo User"}, nil
 		}
+		app := newAppWithFake(t, fake)
 
-		msg := fetchIssuesByJQL(fake, "project = PLAT", 2, 50)()
+		msg, ok := app.fetchCurrentUser()().(currentUserLoadedMsg)
 
-		loaded, ok := msg.(issuesLoadedMsg)
 		if !ok {
-			t.Fatalf("msg = %T, want issuesLoadedMsg", msg)
+			t.Fatal("fetchCurrentUser did not produce a currentUserLoadedMsg")
 		}
-		if loaded.tab != 2 || len(loaded.issues) != 1 {
-			t.Errorf("loaded = %+v, want tab=2 with one issue", loaded)
-		}
-	})
-
-	t.Run("error returns errorMsg", func(t *testing.T) {
-		t.Parallel()
-		fake := newFakeClient(t)
-		fake.SearchIssuesFunc = func(_ context.Context, _ string, _, _ int) (*jira.SearchResult, error) {
-			return nil, errors.New("boom")
-		}
-		assertErrorMsg(t, fetchIssuesByJQL(fake, "x", 0, 10)())
-	})
-}
-
-func TestFetchJQLSearch(t *testing.T) {
-	t.Parallel()
-
-	t.Run("success carries jql and issues", func(t *testing.T) {
-		t.Parallel()
-		fake := &jiratest.FakeClient{T: t}
-		fake.SearchIssuesFunc = func(_ context.Context, _ string, _, _ int) (*jira.SearchResult, error) {
-			return &jira.SearchResult{Issues: []jira.Issue{{Key: testKey}}}, nil
-		}
-
-		msg := fetchJQLSearch(fake, "project = PLAT", 25)()
-
-		result, ok := msg.(jqlSearchResultMsg)
-		if !ok {
-			t.Fatalf("msg = %T, want jqlSearchResultMsg", msg)
-		}
-		if result.jql != "project = PLAT" || len(result.issues) != 1 {
-			t.Errorf("result = %+v", result)
+		if msg.user == nil || msg.user.UUID != testUserUUID {
+			t.Errorf("user = %+v, want %s", msg.user, testUserUUID)
 		}
 	})
 
-	t.Run("error returns jqlSearchErrorMsg", func(t *testing.T) {
+	t.Run("the error is carried, not raised", func(t *testing.T) {
 		t.Parallel()
-		fake := newFakeClient(t)
-		fake.SearchIssuesFunc = func(_ context.Context, _ string, _, _ int) (*jira.SearchResult, error) {
-			return nil, errors.New("bad jql")
+		fake := &bitbuckettest.FakeClient{T: t}
+		fake.GetCurrentUserFunc = func(context.Context) (*bitbucket.Account, error) {
+			return nil, errors.New(testBoom)
 		}
-		if _, ok := fetchJQLSearch(fake, "x", 10)().(jqlSearchErrorMsg); !ok {
-			t.Error("want jqlSearchErrorMsg")
+		app := newAppWithFake(t, fake)
+
+		msg, ok := app.fetchCurrentUser()().(currentUserLoadedMsg)
+
+		if !ok || msg.err == nil {
+			t.Fatalf("msg = %+v, want a carried error", msg)
 		}
 	})
 }
 
-func TestFetchChildren_TagsKeyAndEpoch(t *testing.T) {
+func TestFetchRepos_ConfiguredRepositoriesCostNoRequest(t *testing.T) {
 	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.GetChildrenFunc = func(_ context.Context, _ string) ([]jira.Issue, error) {
-		return []jira.Issue{{Key: "SUB-1"}}, nil
-	}
+	fake := &bitbuckettest.FakeClient{T: t}
+	app := newAppWithFake(t, fake)
 
-	msg := fetchChildren(fake, testKey, 7)()
+	msg, ok := app.fetchRepos()().(reposLoadedMsg)
 
-	loaded, ok := msg.(childrenLoadedMsg)
 	if !ok {
-		t.Fatalf("msg = %T, want childrenLoadedMsg", msg)
+		t.Fatal("fetchRepos did not produce a reposLoadedMsg")
 	}
-	if loaded.key != testKey || loaded.epoch != 7 || loaded.err != nil || len(loaded.issues) != 1 {
-		t.Errorf("loaded = %+v", loaded)
-	}
+	testkit.AssertEqual(t, "ListRepositories calls", fake.CallCount("ListRepositories"), 0)
+	testkit.AssertEqual(t, "stub count", len(msg.repos), 2)
+	testkit.AssertEqual(t, "stub full name", msg.repos[0].FullName, testWorkspace+"/"+testRepo)
 }
 
-func TestFetchJQLAutocompleteData(t *testing.T) {
+func TestFetchRepos_DiscoversWhenNoneAreConfigured(t *testing.T) {
 	t.Parallel()
-
-	t.Run("success returns fields", func(t *testing.T) {
-		t.Parallel()
-		fake := &jiratest.FakeClient{T: t}
-		fake.GetJQLAutocompleteDataFunc = func(context.Context) ([]jira.AutocompleteField, error) {
-			return []jira.AutocompleteField{{Value: "status"}}, nil
-		}
-		if _, ok := fetchJQLAutocompleteData(fake)().(jqlFieldsLoadedMsg); !ok {
-			t.Error("want jqlFieldsLoadedMsg")
-		}
-	})
-
-	t.Run("error is swallowed to nil", func(t *testing.T) {
-		t.Parallel()
-		fake := newFakeClient(t)
-		fake.GetJQLAutocompleteDataFunc = func(context.Context) ([]jira.AutocompleteField, error) {
-			return nil, errors.New("nope")
-		}
-		if msg := fetchJQLAutocompleteData(fake)(); msg != nil {
-			t.Errorf("msg = %T, want nil", msg)
-		}
-	})
-}
-
-func TestFetchJQLSuggestions(t *testing.T) {
-	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.GetJQLAutocompleteSuggestionsFunc = func(_ context.Context, _, _ string) ([]jira.AutocompleteSuggestion, error) {
-		return []jira.AutocompleteSuggestion{{Value: "Done"}}, nil
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.ListRepositoriesFunc = func(_ context.Context, workspace string,
+		opts bitbucket.ListRepositoriesOptions,
+	) ([]bitbucket.Repository, error) {
+		testkit.AssertEqual(t, "workspace", workspace, testWorkspace)
+		testkit.AssertEqual(t, "role", opts.Role, "member")
+		testkit.AssertEqual(t, "max items", opts.MaxItems, repoDiscoveryLimit)
+		return []bitbucket.Repository{{Slug: testRepo}}, nil
 	}
+	app := newAppWithFake(t, fake)
+	app.cfg.Bitbucket.Repositories = nil
 
-	if _, ok := fetchJQLSuggestions(fake, "status", "Do")().(jqlSuggestionsMsg); !ok {
-		t.Error("want jqlSuggestionsMsg")
-	}
-}
+	msg, ok := app.fetchRepos()().(reposLoadedMsg)
 
-func TestUpdateIssueField(t *testing.T) {
-	t.Parallel()
-
-	t.Run("success returns issueUpdatedMsg with field", func(t *testing.T) {
-		t.Parallel()
-		fake := &jiratest.FakeClient{T: t}
-		fake.UpdateIssueFunc = func(_ context.Context, _ string, _ map[string]any) error { return nil }
-
-		msg := updateIssueField(fake, testKey, testSummary, "new")()
-
-		updated, ok := msg.(issueUpdatedMsg)
-		if !ok {
-			t.Fatalf("msg = %T, want issueUpdatedMsg", msg)
-		}
-		if updated.issueKey != testKey || updated.field != testSummary {
-			t.Errorf("updated = %+v", updated)
-		}
-	})
-
-	t.Run("error returns errorMsg", func(t *testing.T) {
-		t.Parallel()
-		fake := newFakeClient(t)
-		fake.UpdateIssueFunc = func(_ context.Context, _ string, _ map[string]any) error { return errors.New("x") }
-		assertErrorMsg(t, updateIssueField(fake, testKey, testSummary, "new")())
-	})
-}
-
-func TestRemoveIssueParent(t *testing.T) {
-	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.RemoveIssueParentFunc = func(_ context.Context, _ string) error { return nil }
-
-	msg := removeIssueParent(fake, testKey)()
-
-	updated, ok := msg.(issueUpdatedMsg)
 	if !ok {
-		t.Fatalf("msg = %T, want issueUpdatedMsg", msg)
+		t.Fatal("fetchRepos did not produce a reposLoadedMsg")
 	}
-	if updated.field != "parent" {
-		t.Errorf("field = %q, want parent", updated.field)
-	}
+	testkit.AssertEqual(t, "repo count", len(msg.repos), 1)
 }
 
-func TestAddComment(t *testing.T) {
+func TestFetchPullRequests_OnePerRepositoryAndGuardedByInFlight(t *testing.T) {
 	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.AddCommentFunc = func(_ context.Context, _ string, _ any) (*jira.Comment, error) {
-		return &jira.Comment{ID: "1"}, nil
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.ListPullRequestsFunc = func(_ context.Context, _, repo string,
+		opts bitbucket.ListPullRequestsOptions,
+	) ([]bitbucket.PullRequest, error) {
+		testkit.AssertEqual(t, "state count", len(opts.States), 1)
+		testkit.AssertEqual(t, "state", string(opts.States[0]), testOpenState)
+		return []bitbucket.PullRequest{newPR(repo, 101, testTitle)}, nil
+	}
+	app := newAppWithFake(t, fake)
+
+	cmd := app.fetchPullRequests(testFetchKey)
+	if cmd == nil {
+		t.Fatal("expected a fetch command")
+	}
+	if second := app.fetchPullRequests(testFetchKey); second != nil {
+		t.Error("a second fetch for a key already in flight must be dropped")
 	}
 
-	if _, ok := addComment(fake, testKey, "hi")().(commentAddedMsg); !ok {
-		t.Error("want commentAddedMsg")
+	msg, ok := cmd().(pullRequestsLoadedMsg)
+	if !ok {
+		t.Fatal("the fetch did not produce a pullRequestsLoadedMsg")
 	}
+	testkit.AssertEqual(t, "fetch key", msg.fetchKey, testFetchKey)
+	testkit.AssertEqual(t, "one result per repository", len(msg.results), 2)
+	testkit.AssertEqual(t, "requests", fake.CallCount("ListPullRequests"), 2)
 }
 
-func TestUpdateComment(t *testing.T) {
+func TestFetchPullRequests_NeedsAWorkspaceAndRepositories(t *testing.T) {
 	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.UpdateCommentFunc = func(_ context.Context, _, _ string, _ any) error { return nil }
+	app := newAppWithFake(t, &bitbuckettest.FakeClient{T: t})
+	app.repoSlugs = nil
 
-	if _, ok := updateComment(fake, testKey, "10", "edit")().(commentUpdatedMsg); !ok {
-		t.Error("want commentUpdatedMsg")
+	if cmd := app.fetchPullRequests(testFetchKey); cmd != nil {
+		t.Error("no repositories means no request")
 	}
-}
-
-func TestFetchCreateMeta(t *testing.T) {
-	t.Parallel()
-
-	t.Run("success returns createMetaLoadedMsg", func(t *testing.T) {
-		t.Parallel()
-		fake := &jiratest.FakeClient{T: t}
-		fake.GetCreateMetaFunc = func(_ context.Context, _, _ string) ([]jira.CreateMetaField, error) {
-			return []jira.CreateMetaField{{FieldID: testSummary}}, nil
-		}
-		if _, ok := fetchCreateMeta(fake, testProject, "10001")().(createMetaLoadedMsg); !ok {
-			t.Error("want createMetaLoadedMsg")
-		}
-	})
-
-	t.Run("error returns createPreFormErrorMsg", func(t *testing.T) {
-		t.Parallel()
-		fake := newFakeClient(t)
-		fake.GetCreateMetaFunc = func(_ context.Context, _, _ string) ([]jira.CreateMetaField, error) {
-			return nil, errors.New("x")
-		}
-		if _, ok := fetchCreateMeta(fake, testProject, "10001")().(createPreFormErrorMsg); !ok {
-			t.Error("want createPreFormErrorMsg")
-		}
-	})
-}
-
-func TestFetchCustomFieldOptions(t *testing.T) {
-	t.Parallel()
-
-	t.Run("found field carries options", func(t *testing.T) {
-		t.Parallel()
-		fake := &jiratest.FakeClient{T: t}
-		fake.GetCreateMetaFunc = func(_ context.Context, _, _ string) ([]jira.CreateMetaField, error) {
-			return []jira.CreateMetaField{{
-				FieldID:       "customfield_1",
-				Schema:        jira.CreateMetaSchema{Type: "option"},
-				AllowedValues: []jira.CreateMetaValue{{ID: "1", Name: "A"}},
-			}}, nil
-		}
-
-		msg := fetchCustomFieldOptions(fake, testProject, "10001", customFieldOptionsMsg{fieldID: "customfield_1"})()
-
-		info, ok := msg.(customFieldOptionsMsg)
-		if !ok {
-			t.Fatalf("msg = %T, want customFieldOptionsMsg", msg)
-		}
-		if info.fieldNotFound || len(info.options) != 1 || info.schemaType != "option" {
-			t.Errorf("info = %+v", info)
-		}
-	})
-
-	t.Run("missing field sets fieldNotFound", func(t *testing.T) {
-		t.Parallel()
-		fake := &jiratest.FakeClient{T: t}
-		fake.GetCreateMetaFunc = func(_ context.Context, _, _ string) ([]jira.CreateMetaField, error) {
-			return []jira.CreateMetaField{{FieldID: "other"}}, nil
-		}
-
-		msg := fetchCustomFieldOptions(fake, testProject, "10001", customFieldOptionsMsg{fieldID: "customfield_1"})()
-
-		info, ok := msg.(customFieldOptionsMsg)
-		if !ok || !info.fieldNotFound {
-			t.Errorf("msg = %#v, want fieldNotFound", msg)
-		}
-	})
-}
-
-func TestCreateIssue(t *testing.T) {
-	t.Parallel()
-
-	t.Run("success returns issueCreatedMsg", func(t *testing.T) {
-		t.Parallel()
-		fake := &jiratest.FakeClient{T: t}
-		fake.CreateIssueFunc = func(_ context.Context, _ map[string]any) (*jira.Issue, error) {
-			return &jira.Issue{Key: "PLAT-99"}, nil
-		}
-
-		msg := createIssue(fake, map[string]any{testSummary: "x"})()
-
-		created, ok := msg.(issueCreatedMsg)
-		if !ok {
-			t.Fatalf("msg = %T, want issueCreatedMsg", msg)
-		}
-		if created.issue == nil || created.issue.Key != "PLAT-99" {
-			t.Errorf("created = %+v", created)
-		}
-	})
-
-	t.Run("error returns createErrorMsg", func(t *testing.T) {
-		t.Parallel()
-		fake := newFakeClient(t)
-		fake.CreateIssueFunc = func(_ context.Context, _ map[string]any) (*jira.Issue, error) {
-			return nil, errors.New("x")
-		}
-		if _, ok := createIssue(fake, nil)().(createErrorMsg); !ok {
-			t.Error("want createErrorMsg")
-		}
-	})
-}
-
-func TestFetchMyself(t *testing.T) {
-	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.GetMyselfFunc = func(context.Context) (*jira.User, error) {
-		return &jira.User{AccountID: "me"}, nil
-	}
-
-	msg := fetchMyself(fake)()
-	loaded, ok := msg.(myselfLoadedMsg)
-	if !ok || loaded.user == nil || loaded.user.AccountID != "me" {
-		t.Errorf("msg = %#v, want myselfLoadedMsg with user", msg)
+	if app.inFlight[testFetchKey] {
+		t.Error("a dropped fetch must not be marked in flight")
 	}
 }
 
-func TestFetchFieldDiscovery_WrapsError(t *testing.T) {
+func TestFetchPullRequestDetail_CarriesTheEpoch(t *testing.T) {
 	t.Parallel()
-
-	t.Run("nil error", func(t *testing.T) {
-		t.Parallel()
-		fake := &jiratest.FakeClient{T: t}
-		fake.DiscoverFieldsFunc = func(context.Context) error { return nil }
-
-		msg := fetchFieldDiscovery(fake)()
-		discovered, ok := msg.(fieldsDiscoveredMsg)
-		if !ok || discovered.err != nil {
-			t.Errorf("msg = %#v, want fieldsDiscoveredMsg with nil err", msg)
-		}
-	})
-
-	t.Run("propagates error", func(t *testing.T) {
-		t.Parallel()
-		fake := &jiratest.FakeClient{T: t}
-		fake.DiscoverFieldsFunc = func(context.Context) error { return errors.New("no field") }
-
-		msg := fetchFieldDiscovery(fake)()
-		discovered, ok := msg.(fieldsDiscoveredMsg)
-		if !ok || discovered.err == nil {
-			t.Errorf("msg = %#v, want fieldsDiscoveredMsg with err", msg)
-		}
-	})
-}
-
-func TestFetchUsers_TagsIssueKey(t *testing.T) {
-	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.GetUsersFunc = func(_ context.Context, _ string) ([]jira.User, error) {
-		return []jira.User{{AccountID: "u1"}}, nil
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.GetPullRequestFunc = func(_ context.Context, workspace, repo string, id int,
+	) (*bitbucket.PullRequest, error) {
+		testkit.AssertEqual(t, "workspace", workspace, testWorkspace)
+		testkit.AssertEqual(t, "repo", repo, testRepo)
+		testkit.AssertEqual(t, "id", id, 101)
+		pr := newPR(testRepo, 101, testTitle)
+		return &pr, nil
 	}
+	app := newAppWithFake(t, fake)
+	pr := newPR(testRepo, 101, testTitle)
 
-	msg := fetchUsers(fake, testProject, testKey)()
-	loaded, ok := msg.(usersLoadedMsg)
-	if !ok || loaded.issueKey != testKey || len(loaded.users) != 1 {
-		t.Errorf("msg = %#v", msg)
+	msg, ok := app.fetchPullRequestDetail(&pr, 7)().(pullRequestDetailLoadedMsg)
+
+	if !ok {
+		t.Fatal("expected a pullRequestDetailLoadedMsg")
+	}
+	testkit.AssertEqual(t, "epoch", msg.epoch, 7)
+	if msg.pr == nil {
+		t.Error("the detail should have been carried")
 	}
 }
 
-func TestFetchComponents(t *testing.T) {
+func TestFetchPullRequestDetail_FailureIsSilentButStillEpoched(t *testing.T) {
 	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.GetComponentsFunc = func(_ context.Context, _ string) ([]jira.Component, error) {
-		return []jira.Component{{Name: "backend"}}, nil
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.GetPullRequestFunc = func(context.Context, string, string, int) (*bitbucket.PullRequest, error) {
+		return nil, errors.New(testBoom)
 	}
+	app := newAppWithFake(t, fake)
+	pr := newPR(testRepo, 101, testTitle)
 
-	if _, ok := fetchComponents(fake, testProject)().(componentsLoadedMsg); !ok {
-		t.Error("want componentsLoadedMsg")
+	msg, ok := app.fetchPullRequestDetail(&pr, 3)().(pullRequestDetailLoadedMsg)
+
+	if !ok {
+		t.Fatal("expected a pullRequestDetailLoadedMsg")
 	}
+	if msg.pr != nil {
+		t.Error("a failed detail fetch must not carry a pull request")
+	}
+	testkit.AssertEqual(t, "epoch", msg.epoch, 3)
 }
 
-func TestFetchBoards(t *testing.T) {
+func TestFetchStatuses_CarriesKeyAndUpdatedOn(t *testing.T) {
 	t.Parallel()
-
-	t.Run("success returns boardsLoadedMsg", func(t *testing.T) {
-		t.Parallel()
-		fake := &jiratest.FakeClient{T: t}
-		fake.GetBoardsFunc = func(context.Context) ([]jira.Board, error) {
-			return []jira.Board{{ID: 1}}, nil
-		}
-		if _, ok := fetchBoards(fake)().(boardsLoadedMsg); !ok {
-			t.Error("want boardsLoadedMsg")
-		}
-	})
-
-	t.Run("error is silent nil", func(t *testing.T) {
-		t.Parallel()
-		fake := newFakeClient(t)
-		fake.GetBoardsFunc = func(context.Context) ([]jira.Board, error) { return nil, errors.New("no agile") }
-		if msg := fetchBoards(fake)(); msg != nil {
-			t.Errorf("msg = %T, want nil", msg)
-		}
-	})
-}
-
-func TestFetchSprints(t *testing.T) {
-	t.Parallel()
-
-	t.Run("success returns sprints", func(t *testing.T) {
-		t.Parallel()
-		fake := &jiratest.FakeClient{T: t}
-		fake.GetSprintsFunc = func(_ context.Context, _ int) ([]jira.Sprint, error) {
-			return []jira.Sprint{{ID: 1, Name: "Sprint 1"}}, nil
-		}
-		msg := fetchSprints(fake, 5)()
-		loaded, ok := msg.(sprintsLoadedMsg)
-		if !ok || len(loaded.sprints) != 1 {
-			t.Errorf("msg = %#v", msg)
-		}
-	})
-
-	t.Run("error returns empty sprints not errorMsg", func(t *testing.T) {
-		t.Parallel()
-		fake := newFakeClient(t)
-		fake.GetSprintsFunc = func(_ context.Context, _ int) ([]jira.Sprint, error) {
-			return nil, errors.New("unsupported")
-		}
-		loaded, ok := fetchSprints(fake, 5)().(sprintsLoadedMsg)
-		if !ok || loaded.sprints != nil {
-			t.Errorf("want sprintsLoadedMsg with nil sprints")
-		}
-	})
-}
-
-func TestMoveToSprint(t *testing.T) {
-	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.MoveToSprintFunc = func(_ context.Context, _ int, _ string) error { return nil }
-
-	if _, ok := moveToSprint(fake, 9, testKey)().(issueUpdatedMsg); !ok {
-		t.Error("want issueUpdatedMsg")
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.ListPullRequestStatusesFunc = func(context.Context, string, string, int,
+	) ([]bitbucket.CommitStatus, error) {
+		return []bitbucket.CommitStatus{newStatus(testRepo, 412, bitbucket.StatusSuccessful)}, nil
 	}
+	app := newAppWithFake(t, fake)
+	pr := newPR(testRepo, 101, testTitle)
+
+	msg, ok := app.fetchStatuses(&pr, 2)().(statusesLoadedMsg)
+
+	if !ok {
+		t.Fatal("expected a statusesLoadedMsg")
+	}
+	testkit.AssertEqual(t, "key", msg.key, testPRKey)
+	testkit.AssertEqual(t, "updatedOn", msg.updatedOn.Equal(pr.UpdatedOn), true)
+	testkit.AssertEqual(t, "statuses", len(msg.statuses), 1)
 }
 
-func TestFetchIssueTypes(t *testing.T) {
+func TestFetchPipeline_AsksForTheBuildNumberAndItsSteps(t *testing.T) {
 	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	fake.GetIssueTypesFunc = func(_ context.Context, _ string) ([]jira.IssueType, error) {
-		return []jira.IssueType{{Name: "Story"}}, nil
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.GetPipelineFunc = func(_ context.Context, _, _, ref string) (*bitbucket.Pipeline, error) {
+		testkit.AssertEqual(t, "pipeline ref", ref, "412")
+		return &bitbucket.Pipeline{BuildNumber: 412, UUID: "{run}"}, nil
 	}
+	fake.ListPipelineStepsFunc = func(context.Context, string, string, string) ([]bitbucket.PipelineStep, error) {
+		return []bitbucket.PipelineStep{{UUID: "{step}", Name: "Build"}}, nil
+	}
+	app := newAppWithFake(t, fake)
+	pr := newPR(testRepo, 101, testTitle)
 
-	if _, ok := fetchIssueTypes(fake, "10000")().(issueTypesLoadedMsg); !ok {
-		t.Error("want issueTypesLoadedMsg")
+	msg, ok := app.fetchPipeline(&pr, 412)().(pipelineLoadedMsg)
+
+	if !ok {
+		t.Fatal("expected a pipelineLoadedMsg")
+	}
+	testkit.AssertEqual(t, "key", msg.key, testPRKey)
+	testkit.AssertEqual(t, "build", msg.build, 412)
+	testkit.AssertEqual(t, "steps", len(msg.steps), 1)
+}
+
+func TestFetchPipeline_StepFailureIsCarried(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.GetPipelineFunc = func(context.Context, string, string, string) (*bitbucket.Pipeline, error) {
+		return &bitbucket.Pipeline{BuildNumber: 412}, nil
+	}
+	fake.ListPipelineStepsFunc = func(context.Context, string, string, string) ([]bitbucket.PipelineStep, error) {
+		return nil, errors.New(testBoom)
+	}
+	app := newAppWithFake(t, fake)
+	pr := newPR(testRepo, 101, testTitle)
+
+	msg, ok := app.fetchPipeline(&pr, 412)().(pipelineLoadedMsg)
+
+	if !ok || msg.err == nil {
+		t.Fatalf("msg = %+v, want the step error carried", msg)
 	}
 }
 
-func TestFetchIssueDetail(t *testing.T) {
+func TestFetchStepLog_AsksForTheTail(t *testing.T) {
 	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.GetPipelineStepLogFunc = func(_ context.Context, _, _, pipelineRef, stepUUID string,
+		opts bitbucket.StepLogOptions,
+	) (string, error) {
+		testkit.AssertEqual(t, "pipeline ref", pipelineRef, "{run}")
+		testkit.AssertEqual(t, "step uuid", stepUUID, "{step}")
+		testkit.AssertEqual(t, "tail bytes", opts.TailBytes, stepLogTailBytes)
+		return "hello", nil
+	}
+	app := newAppWithFake(t, fake)
+	pr := newPR(testRepo, 101, testTitle)
 
-	t.Run("success enriches with comments and changelog", func(t *testing.T) {
-		t.Parallel()
-		fake := &jiratest.FakeClient{T: t}
-		fake.GetIssueFunc = func(_ context.Context, _ string) (*jira.Issue, error) {
-			return &jira.Issue{Key: testKey}, nil
-		}
-		fake.GetCommentsFunc = func(_ context.Context, _ string) ([]jira.Comment, error) {
-			return []jira.Comment{{ID: "c1"}}, nil
-		}
-		fake.GetChangelogFunc = func(_ context.Context, _ string) ([]jira.ChangelogEntry, error) {
-			return []jira.ChangelogEntry{{}}, nil
-		}
+	msg, ok := app.fetchStepLog(&pr, "{run}", "{step}")().(stepLogLoadedMsg)
 
-		msg := fetchIssueDetail(fake, testKey)()
-		loaded, ok := msg.(issueDetailLoadedMsg)
-		if !ok {
-			t.Fatalf("msg = %T, want issueDetailLoadedMsg", msg)
-		}
-		if len(loaded.issue.Comments) != 1 || len(loaded.issue.Changelog) != 1 {
-			t.Errorf("issue not enriched: %+v", loaded.issue)
-		}
-	})
-
-	t.Run("get issue error returns errorMsg", func(t *testing.T) {
-		t.Parallel()
-		fake := newFakeClient(t)
-		fake.GetIssueFunc = func(_ context.Context, _ string) (*jira.Issue, error) {
-			return nil, errors.New("404")
-		}
-		assertErrorMsg(t, fetchIssueDetail(fake, testKey)())
-	})
+	if !ok {
+		t.Fatal("expected a stepLogLoadedMsg")
+	}
+	testkit.AssertEqual(t, "text", msg.text, "hello")
 }
 
-func TestBatchPrefetch(t *testing.T) {
+func TestFetchCommands_AreNilWithoutAPullRequest(t *testing.T) {
 	t.Parallel()
+	app := newAppWithFake(t, &bitbuckettest.FakeClient{T: t})
 
-	t.Run("success returns batchPrefetchedMsg", func(t *testing.T) {
-		t.Parallel()
-		var gotJQL string
-		fake := &jiratest.FakeClient{T: t}
-		fake.SearchIssuesFunc = func(_ context.Context, jql string, _, _ int) (*jira.SearchResult, error) {
-			gotJQL = jql
-			return &jira.SearchResult{Issues: []jira.Issue{{Key: "A-1"}, {Key: "B-2"}}}, nil
-		}
-
-		msg := batchPrefetch(fake, []string{"A-1", "B-2"})()
-		if _, ok := msg.(batchPrefetchedMsg); !ok {
-			t.Fatalf("msg = %T, want batchPrefetchedMsg", msg)
-		}
-		if gotJQL != "key in (A-1,B-2)" {
-			t.Errorf("jql = %q, want key in (A-1,B-2)", gotJQL)
-		}
-	})
-
-	t.Run("error is silent nil", func(t *testing.T) {
-		t.Parallel()
-		fake := newFakeClient(t)
-		fake.SearchIssuesFunc = func(_ context.Context, _ string, _, _ int) (*jira.SearchResult, error) {
-			return nil, errors.New("x")
-		}
-		if msg := batchPrefetch(fake, []string{"A-1"})(); msg != nil {
-			t.Errorf("msg = %T, want nil", msg)
-		}
-	})
+	if app.fetchStatuses(nil, 0) != nil ||
+		app.fetchPullRequestDetail(nil, 0) != nil ||
+		app.fetchPipeline(nil, 1) != nil ||
+		app.fetchStepLog(nil, "a", "b") != nil {
+		t.Error("every per-pull-request fetch must be nil without one")
+	}
 }
 
-func TestPrefetchIssue_NilOnFailure(t *testing.T) {
+func TestListOptionsForKey_UsesTheTabBehindTheKey(t *testing.T) {
 	t.Parallel()
-	fake := newFakeClient(t)
-	fake.GetIssueFunc = func(_ context.Context, _ string) (*jira.Issue, error) {
-		return nil, errors.New("gone")
-	}
+	app := newAppWithFake(t, &bitbuckettest.FakeClient{T: t})
 
-	if msg := prefetchIssue(fake, testKey)(); msg != nil {
-		t.Errorf("msg = %T, want nil for failed prefetch", msg)
+	opts := app.listOptionsForKey(testFetchKey)
+
+	testkit.AssertEqual(t, "state", string(opts.States[0]), testOpenState)
+	testkit.AssertEqual(t, "query", opts.Query, "")
+	testkit.AssertEqual(t, "max items", opts.MaxItems, app.cfg.ResolveGlobalMaxResults())
+}
+
+func TestFetchKeyOf_SharesOneKeyAcrossTheDefaultTabs(t *testing.T) {
+	t.Parallel()
+	app := newAppWithFake(t, &bitbuckettest.FakeClient{T: t})
+
+	testkit.AssertEqual(t, "tabs", len(app.tabConfigs()), 3)
+	for tab := range app.tabConfigs() {
+		testkit.AssertEqual(t, "fetch key", app.fetchKeyOf(tab), testFetchKey)
 	}
+	testkit.AssertEqual(t, "out of range", app.fetchKeyOf(99), testFetchKey)
+}
+
+func TestPipelineCacheKey(t *testing.T) {
+	t.Parallel()
+
+	testkit.AssertEqual(t, "cache key", pipelineCacheKey(testPRKey, 412), "acme/api-gateway#412")
 }

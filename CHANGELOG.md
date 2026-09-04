@@ -7,6 +7,58 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+lazyjira is now lazybitbucket: a terminal UI for Bitbucket Cloud pull requests. The Bubbletea shell
+(panels, layout, theming, keybinding config, custom commands, git integration, packaging) is
+inherited; the domain layer is new. Versioning restarts for this project — the entries below this
+one are upstream lazyjira history, and their compare links still point at upstream.
+
+### Added
+
+- `pkg/bitbucket`: a read-only Bitbucket Cloud REST client — API tokens and access tokens (Bearer)
+  or Atlassian email + API token (Basic), pagination that follows `next`, typed `APIError` with
+  not-found / unauthorized / forbidden / rate-limited predicates, and a concurrent multi-repository
+  pull request fetch. The client has no write methods: nothing in lazybitbucket issues a non-GET
+  request
+- `pkg/bitbucket/bitbuckettest`: strict fake client for unit tests
+- `pkg/bitbucket/demo`: a deterministic demo dataset and fake REST server, an ordinary untagged
+  package, used by `--demo` and by integration tests
+- Pull request list across all configured repositories, with configurable columns (repo, id, title,
+  author, approvals, build, updated, branch, state) and Open / Mine / Reviewing tabs
+- Pull request detail pane: branches, author, reviewers with approval state, and the description
+  rendered from Markdown with glamour
+- Builds panel showing the commit statuses of the selected pull request, with drill-down into the
+  pipeline run and its steps
+- Repos panel that filters the pull request list to a single repository
+- Repository discovery when `bitbucket.repositories` is not configured
+- `refreshInterval` for a background refresh of the active tab
+- Pipeline drill-down reaches each step's log, and `backspace` walks back out (step log → pipeline →
+  pull request)
+- `--demo` (needs a `-tags demo` build), `--workspace` and the repeatable `--repo` flag
+
+### Changed
+
+- Renamed `cmd/lazyjira` to `cmd/lazybitbucket`; the binary, the Homebrew tap, the AUR packages, the
+  nix attribute and the nfpm package are all `lazybitbucket`
+- Config directory moved to `~/.config/lazybitbucket`; the override env var is now
+  `LAZYBITBUCKET_CONFIG_DIR`
+- Config schema replaced: `bitbucket` (workspace, repositories, email, baseUrl), `pullRequestTabs`,
+  `gui.pullRequestListFields`, `refreshInterval`. Credentials are an API token or access token, in
+  `auth.json` or `BITBUCKET_TOKEN`
+- Custom command contexts are now `pullrequests`, `builds`, `repos` and `detail`, with `PR`, `Repo`
+  and `Build` template scopes
+- Keybinding groups are `universal`, `navigation`, `pullRequests` and `detail`. There is no `repos`
+  group any more: the Repos and Builds panels reuse `pullRequests.select`, `pullRequests.open` and
+  `pullRequests.focusRight`, so those bindings can no longer be silently overwritten
+- Panels are Status / Pull Requests / Builds / Repos on `1`–`4`, detail on `0`
+- Docs rewritten for the Bitbucket workflow; `docs/Custom_Fields.md` removed
+
+### Removed
+
+- Everything Jira: `pkg/jira`, JQL search and history, issue create/edit/transition, comments,
+  the info panel and custom fields, ADF conversion and rendering, mentions, issue hierarchy, and
+  Jira Server / Data Center and mTLS support
+- App-password authentication is not implemented — Atlassian removed app passwords on 2026-07-28
+
 ## [2.19.2] - 2026-07-08
 
 ### Fixed

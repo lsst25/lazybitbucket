@@ -5,16 +5,13 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
 	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
-	"github.com/lsst25/lazybitbucket/pkg/jira/jiratest"
 )
 
 func helpApp(t *testing.T) *App {
 	t.Helper()
-	app := newAppWithFake(t, &jiratest.FakeClient{T: t})
-	app.keymap = DefaultKeymap()
-	app.width = 120
-	app.height = 40
+	app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
 	app.showHelp = true
 	app.helpCursor = 0
 	app.helpFilter = ""
@@ -24,11 +21,7 @@ func helpApp(t *testing.T) *App {
 
 func TestHandleDetailScroll_Down(t *testing.T) {
 	t.Parallel()
-	app := newAppWithFake(t, &jiratest.FakeClient{T: t})
-	app.keymap = DefaultKeymap()
-	app.width = 120
-	app.height = 40
-	app.layoutPanels()
+	app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
 
 	_, _, ok := app.handleDetailScroll(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
 
@@ -39,11 +32,7 @@ func TestHandleDetailScroll_Down(t *testing.T) {
 
 func TestHandleDetailScroll_Up(t *testing.T) {
 	t.Parallel()
-	app := newAppWithFake(t, &jiratest.FakeClient{T: t})
-	app.keymap = DefaultKeymap()
-	app.width = 120
-	app.height = 40
-	app.layoutPanels()
+	app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
 
 	_, _, ok := app.handleDetailScroll(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
 
@@ -54,8 +43,7 @@ func TestHandleDetailScroll_Up(t *testing.T) {
 
 func TestHandleDetailScroll_UnknownKey(t *testing.T) {
 	t.Parallel()
-	app := newAppWithFake(t, &jiratest.FakeClient{T: t})
-	app.keymap = DefaultKeymap()
+	app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
 
 	_, _, ok := app.handleDetailScroll(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
 

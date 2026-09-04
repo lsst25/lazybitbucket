@@ -3,18 +3,15 @@ package tui
 import (
 	"testing"
 
-	"github.com/lsst25/lazybitbucket/pkg/jira"
-	"github.com/lsst25/lazybitbucket/pkg/jira/jiratest"
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
+	"github.com/lsst25/lazybitbucket/pkg/config"
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
 func appForKeybindings(t *testing.T) *App {
 	t.Helper()
-	app := newAppWithFake(t, &jiratest.FakeClient{T: t})
-	app.keymap = DefaultKeymap()
-	app.width = 120
-	app.height = 40
-	return app
+	return sizedApp(t, &bitbuckettest.FakeClient{T: t})
 }
 
 func TestContextBindings_ContainsQuit(t *testing.T) {
@@ -24,26 +21,11 @@ func TestContextBindings_ContainsQuit(t *testing.T) {
 		name  string
 		setup func(*App)
 	}{
-		{
-			name:  "issues focus",
-			setup: func(app *App) { app.side = sideLeft; app.leftFocus = focusIssues },
-		},
-		{
-			name:  "info focus",
-			setup: func(app *App) { app.side = sideLeft; app.leftFocus = focusInfo },
-		},
-		{
-			name:  "projects focus",
-			setup: func(app *App) { app.side = sideLeft; app.leftFocus = focusProjects },
-		},
-		{
-			name:  "status focus",
-			setup: func(app *App) { app.side = sideLeft; app.leftFocus = focusStatus },
-		},
-		{
-			name:  "detail side",
-			setup: func(app *App) { app.side = sideRight },
-		},
+		{"pull requests focus", func(app *App) { app.side, app.leftFocus = sideLeft, focusPullRequests }},
+		{"builds focus", func(app *App) { app.side, app.leftFocus = sideLeft, focusBuilds }},
+		{"repos focus", func(app *App) { app.side, app.leftFocus = sideLeft, focusRepos }},
+		{"status focus", func(app *App) { app.side, app.leftFocus = sideLeft, focusStatus }},
+		{"detail side", func(app *App) { app.side = sideRight }},
 	}
 
 	for _, testCase := range cases {
@@ -51,42 +33,56 @@ func TestContextBindings_ContainsQuit(t *testing.T) {
 			t.Parallel()
 			app := appForKeybindings(t)
 			testCase.setup(app)
+
 			bindings := app.ContextBindings()
+
 			if len(bindings) == 0 {
 				t.Fatal("expected non-empty bindings")
 			}
-			found := false
-			for _, binding := range bindings {
-				if binding.Description == string(ActQuit) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Error("quit binding missing from context bindings")
+			if !hasDescription(bindings, string(ActQuit)) {
+				t.Error("quit binding missing from the context bindings")
 			}
 		})
 	}
 }
 
-func TestContextBindings_DetailCommentsIncludesEdit(t *testing.T) {
+func TestContextBindings_PipelineModeOffersBack(t *testing.T) {
 	t.Parallel()
 	app := appForKeybindings(t)
 	app.side = sideRight
-	app.detailView.SetIssue(&jira.Issue{Key: testKey})
-	app.detailView.SetActiveTab(views.TabComments)
+	pr := newPR(testRepo, 101, testTitle)
+	app.detailView.SetPullRequest(&pr)
+	app.detailView.SetPipelineLoading(pr.Key(), 412)
 
 	bindings := app.ContextBindings()
 
-	found := false
-	for _, binding := range bindings {
-		if binding.Description == "edit comment" {
-			found = true
-			break
-		}
+	if !hasDescription(bindings, "back to the pull request") {
+		t.Error("the pipeline view must offer a way back")
 	}
-	if !found {
-		t.Error("edit comment binding missing when on comments tab")
+}
+
+func TestContextBindings_PullRequestModeOffersCheckout(t *testing.T) {
+	t.Parallel()
+	app := appForKeybindings(t)
+
+	bindings := app.ContextBindings()
+
+	if !hasDescription(bindings, "check out the source branch") {
+		t.Error("the pull request list must offer checkout")
+	}
+}
+
+func TestContextBindings_IncludesCustomCommands(t *testing.T) {
+	t.Parallel()
+	app := appForKeybindings(t)
+	app.cfg.CustomCommands = []config.CustomCommandConfig{
+		{Key: "F", Name: "open in fzf", Command: "echo {{.PR.ID}}", Contexts: []string{"builds"}},
+	}
+	app.initCustomCommands()
+	app.leftFocus = focusBuilds
+
+	if !hasDescription(app.ContextBindings(), "open in fzf") {
+		t.Error("a builds-context custom command must appear in the builds bindings")
 	}
 }
 
@@ -97,25 +93,124 @@ func TestHelpBarItems_NotEmpty(t *testing.T) {
 		name  string
 		setup func(*App)
 	}{
+		{"pull requests", func(app *App) { app.side, app.leftFocus = sideLeft, focusPullRequests }},
+		{"builds", func(app *App) { app.side, app.leftFocus = sideLeft, focusBuilds }},
+		{"repos", func(app *App) { app.side, app.leftFocus = sideLeft, focusRepos }},
+		{"status", func(app *App) { app.side, app.leftFocus = sideLeft, focusStatus }},
+		{"detail", func(app *App) { app.side = sideRight }},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			app := appForKeybindings(t)
+			testCase.setup(app)
+
+			if len(app.helpBarItems()) == 0 {
+				t.Error("expected non-empty help bar items")
+			}
+		})
+	}
+}
+
+func TestHelpBarItems_PipelineModeShowsStepLog(t *testing.T) {
+	t.Parallel()
+	app := appForKeybindings(t)
+	app.side = sideRight
+	pr := newPR(testRepo, 101, testTitle)
+	app.detailView.SetPullRequest(&pr)
+	app.detailView.SetPipeline(pr.Key(), &bitbucket.Pipeline{BuildNumber: 412}, nil)
+
+	items := app.helpBarItems()
+
+	found := false
+	for _, item := range items {
+		if item.Description == "step log" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("pipeline help bar = %v, want a step log hint", items)
+	}
+}
+
+func TestHelpBarItems_ModalTakesPriority(t *testing.T) {
+	t.Parallel()
+	app := appForKeybindings(t)
+	app.modal.Show("URLs", nil)
+
+	items := app.helpBarItems()
+
+	if len(items) == 0 || items[0].Description != "search" {
+		t.Errorf("modal help bar = %v, want the modal hints", items)
+	}
+}
+
+func TestNavBindings_HasSixEntries(t *testing.T) {
+	t.Parallel()
+	app := appForKeybindings(t)
+
+	if got := len(app.navBindings()); got != 6 {
+		t.Errorf("navBindings len = %d, want 6", got)
+	}
+}
+
+func TestDetailScrollBindings_HasFourEntries(t *testing.T) {
+	t.Parallel()
+	app := appForKeybindings(t)
+
+	if got := len(app.detailScrollBindings()); got != 4 {
+		t.Errorf("detailScrollBindings len = %d, want 4", got)
+	}
+}
+
+func TestBind_CarriesKeyAndDescription(t *testing.T) {
+	t.Parallel()
+	app := appForKeybindings(t)
+
+	b := app.bind(ActQuit, "quit the app")
+
+	if b.Description != "quit the app" || b.Key == "" {
+		t.Errorf("bind = %+v, want a key and the given description", b)
+	}
+}
+
+func TestActiveContexts_FollowFocusAndDetailMode(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		setup func(*App)
+		want  []config.Context
+	}{
+		{"pull requests", func(app *App) { app.leftFocus = focusPullRequests }, []config.Context{config.CtxPullRequests}},
+		{"builds", func(app *App) { app.leftFocus = focusBuilds }, []config.Context{config.CtxBuilds}},
+		{"repos", func(app *App) { app.leftFocus = focusRepos }, []config.Context{config.CtxRepos}},
+		{"status", func(app *App) { app.leftFocus = focusStatus }, nil},
 		{
-			name:  "issues panel",
-			setup: func(app *App) { app.side = sideLeft; app.leftFocus = focusIssues },
+			name: "detail pull request",
+			setup: func(app *App) {
+				app.side = sideRight
+				pr := newPR(testRepo, 101, testTitle)
+				app.detailView.SetPullRequest(&pr)
+			},
+			want: []config.Context{config.CtxDetail},
 		},
 		{
-			name:  "info panel",
-			setup: func(app *App) { app.side = sideLeft; app.leftFocus = focusInfo },
+			name: "detail repo",
+			setup: func(app *App) {
+				app.side = sideRight
+				app.detailView.SetRepo(&views.RepoItem{Slug: testRepo})
+			},
+			want: []config.Context{config.CtxRepos},
 		},
 		{
-			name:  "projects panel",
-			setup: func(app *App) { app.side = sideLeft; app.leftFocus = focusProjects },
-		},
-		{
-			name:  "status panel",
-			setup: func(app *App) { app.side = sideLeft; app.leftFocus = focusStatus },
-		},
-		{
-			name:  "detail right panel",
-			setup: func(app *App) { app.side = sideRight },
+			name: "detail splash",
+			setup: func(app *App) {
+				app.side = sideRight
+				app.detailView.SetSplash(views.SplashInfo{Version: "test"})
+			},
+			want: nil,
 		},
 	}
 
@@ -124,40 +219,26 @@ func TestHelpBarItems_NotEmpty(t *testing.T) {
 			t.Parallel()
 			app := appForKeybindings(t)
 			testCase.setup(app)
-			items := app.helpBarItems()
-			if len(items) == 0 {
-				t.Error("expected non-empty help bar items")
+
+			got := app.activeContexts()
+
+			if len(got) != len(testCase.want) {
+				t.Fatalf("contexts = %v, want %v", got, testCase.want)
+			}
+			for i := range got {
+				if got[i] != testCase.want[i] {
+					t.Errorf("contexts[%d] = %q, want %q", i, got[i], testCase.want[i])
+				}
 			}
 		})
 	}
 }
 
-func TestNavBindings_HasSixEntries(t *testing.T) {
-	t.Parallel()
-	app := appForKeybindings(t)
-	bindings := app.navBindings()
-	if len(bindings) != 6 {
-		t.Errorf("navBindings len = %d, want 6", len(bindings))
+func hasDescription(bindings []Binding, want string) bool {
+	for _, b := range bindings {
+		if b.Description == want {
+			return true
+		}
 	}
-}
-
-func TestDetailScrollBindings_HasFourEntries(t *testing.T) {
-	t.Parallel()
-	app := appForKeybindings(t)
-	bindings := app.detailScrollBindings()
-	if len(bindings) != 4 {
-		t.Errorf("detailScrollBindings len = %d, want 4", len(bindings))
-	}
-}
-
-func TestBind_ReturnsBindingWithDescription(t *testing.T) {
-	t.Parallel()
-	app := appForKeybindings(t)
-	b := app.bind(ActQuit, "quit the app")
-	if b.Description != "quit the app" {
-		t.Errorf("description = %q, want %q", b.Description, "quit the app")
-	}
-	if b.Key == "" {
-		t.Error("key should not be empty for ActQuit")
-	}
+	return false
 }

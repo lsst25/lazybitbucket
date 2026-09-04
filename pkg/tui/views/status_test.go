@@ -1,0 +1,198 @@
+package views
+
+import (
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
+)
+
+const testUser = "user@example.com"
+
+func makeStatusPanel() *StatusPanel {
+	panel := NewStatusPanel(testWorkspace, testUser, testWorkspace)
+	panel.SetSize(80, 10)
+	return panel
+}
+
+func TestStatusPanel_NewStatusPanel_StartsCleanAndOnline(t *testing.T) {
+	t.Parallel()
+	panel := makeStatusPanel()
+
+	testkit.AssertEqual(t, "error", panel.ErrorMessage(), "")
+	out := stripANSI(panel.View())
+	if !strings.Contains(out, "✓ "+testUser+" → "+testWorkspace) {
+		t.Errorf("View() = %q, want the online summary line", out)
+	}
+}
+
+func TestStatusPanel_SetScope_UpdatesTheSummaryLine(t *testing.T) {
+	t.Parallel()
+	panel := makeStatusPanel()
+	panel.SetScope(testRepo)
+
+	if !strings.Contains(stripANSI(panel.View()), "→ "+testRepo) {
+		t.Errorf("View() = %q, want the new scope", stripANSI(panel.View()))
+	}
+}
+
+func TestStatusPanel_SetOnline_TogglesTheIndicator(t *testing.T) {
+	t.Parallel()
+	panel := makeStatusPanel()
+
+	panel.SetOnline(false)
+	if !strings.Contains(stripANSI(panel.View()), "✗") {
+		t.Error("an offline panel should show ✗")
+	}
+
+	panel.SetOnline(true)
+	if !strings.Contains(stripANSI(panel.View()), "✓") {
+		t.Error("an online panel should show ✓")
+	}
+}
+
+func TestStatusPanel_SetError_ShowsAndOutranksTheWarning(t *testing.T) {
+	t.Parallel()
+	panel := makeStatusPanel()
+	panel.SetWarning("showing the first 25 repositories")
+	panel.SetError("connection failed")
+
+	testkit.AssertEqual(t, "ErrorMessage", panel.ErrorMessage(), "connection failed")
+	out := stripANSI(panel.View())
+	if !strings.Contains(out, "connection failed") {
+		t.Errorf("View() = %q, want the error line", out)
+	}
+	if strings.Contains(out, "first 25") {
+		t.Errorf("View() = %q, want the warning suppressed while there is an error", out)
+	}
+
+	panel.SetError("")
+	if !strings.Contains(stripANSI(panel.View()), "first 25") {
+		t.Error("clearing the error should reveal the warning")
+	}
+}
+
+func TestStatusPanel_SetRateLimit(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		remaining int
+		wantLine  bool
+	}{
+		{"unknown", -1, false},
+		{"low", 150, true},
+		{"zero", 0, true},
+		{"comfortable", 500, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			panel := makeStatusPanel()
+			panel.SetRateLimit(tc.remaining)
+
+			out := stripANSI(panel.View())
+			got := strings.Contains(out, "rate limit:")
+			if got != tc.wantLine {
+				t.Errorf("View() = %q, rate limit line present = %v, want %v", out, got, tc.wantLine)
+			}
+		})
+	}
+}
+
+func TestStatusPanel_SetRateLimit_RendersTheRemainingCount(t *testing.T) {
+	t.Parallel()
+	panel := makeStatusPanel()
+	panel.SetRateLimit(150)
+
+	if !strings.Contains(stripANSI(panel.View()), "rate limit: 150 left") {
+		t.Errorf("View() = %q, want the remaining count", stripANSI(panel.View()))
+	}
+}
+
+func TestStatusPanel_View_CollapsedBarWhenHeightOne(t *testing.T) {
+	t.Parallel()
+	panel := makeStatusPanel()
+	panel.SetSize(80, 1)
+
+	out := stripANSI(panel.View())
+	if !strings.Contains(out, "Status") {
+		t.Errorf("collapsed bar = %q, want the Status label", out)
+	}
+	if strings.Contains(out, testUser) {
+		t.Errorf("collapsed bar = %q, want no summary line", out)
+	}
+}
+
+func TestStatusPanel_View_FallsBackToTheWorkspaceLabel(t *testing.T) {
+	t.Parallel()
+	panel := NewStatusPanel(testRepo, "", testWorkspace)
+	panel.SetSize(80, 10)
+
+	if !strings.Contains(stripANSI(panel.View()), testWorkspace+" → "+testRepo) {
+		t.Errorf("View() = %q, want the workspace as the user label", stripANSI(panel.View()))
+	}
+}
+
+func TestStatusPanel_View_LongUserIsTruncated(t *testing.T) {
+	t.Parallel()
+	longUser := strings.Repeat("a", 100) + "@example.com"
+	panel := NewStatusPanel(testRepo, longUser, testWorkspace)
+	panel.SetSize(40, 10)
+
+	out := stripANSI(panel.View())
+	if strings.Contains(out, longUser) {
+		t.Error("a long user label should be truncated")
+	}
+	if !strings.Contains(out, "...") {
+		t.Errorf("View() = %q, want a truncation ellipsis", out)
+	}
+}
+
+func TestStatusPanel_SetFocused_AndUpdateAreInert(t *testing.T) {
+	t.Parallel()
+	panel := makeStatusPanel()
+	panel.SetFocused(true)
+	if panel.View() == "" {
+		t.Error("a focused panel should still render")
+	}
+	if cmd := panel.Init(); cmd != nil {
+		t.Error("Init() should return nil")
+	}
+
+	got, cmd := panel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if got != panel {
+		t.Error("Update() should return the same panel")
+	}
+	if cmd != nil {
+		t.Error("Update() should return no command")
+	}
+}
+
+func TestStatusPanel_View_ClampsEveryLineToThePanelWidth(t *testing.T) {
+	t.Parallel()
+	const width = 35
+	cases := []struct {
+		name  string
+		scope string
+		user  string
+	}{
+		{"long repository slug", "terraform-infrastructure-modules", "demo@example.com"},
+		{"wide runes in the scope", strings.Repeat("測", 24), strings.Repeat("a", 40) + "@example.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			panel := NewStatusPanel(tc.scope, tc.user, testWorkspace)
+			panel.SetSize(width, 10)
+
+			for _, line := range strings.Split(panel.View(), "\n") {
+				if got := lipgloss.Width(line); got > width {
+					t.Errorf("line %q is %d columns wide, want at most %d", stripANSI(line), got, width)
+				}
+			}
+		})
+	}
+}

@@ -1,464 +1,322 @@
 package tui
 
 import (
-	"bytes"
-	"context"
-	"fmt"
+	"errors"
+	"slices"
+	"strconv"
 	"strings"
-	"text/template"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/config"
 	"github.com/lsst25/lazybitbucket/pkg/git"
-	"github.com/lsst25/lazybitbucket/pkg/jira"
-	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
-// Git message types
-type gitBranchCreatedMsg struct{ name string }
+// repoDiscoveryLimit is how many repositories are listed when none are
+// configured. One page, one request; the status bar says when it is hit.
+const repoDiscoveryLimit = 25
+
+// stepLogTailBytes is how much of a step log is fetched — the tail is the part
+// that explains a failure.
+const stepLogTailBytes = 64 << 10
+
+// currentUserLoadedMsg carries the account behind the credentials. Repository
+// and project access tokens cannot read /user, so err is expected there.
+type currentUserLoadedMsg struct {
+	user *bitbucket.Account
+	err  error
+}
+
+// reposLoadedMsg carries the configured or discovered repositories.
+type reposLoadedMsg struct {
+	repos []bitbucket.Repository
+	err   error
+}
+
+// pullRequestsLoadedMsg carries one cross-repository fetch, keyed by the
+// (state, query) pair every tab sharing it re-filters from.
+type pullRequestsLoadedMsg struct {
+	fetchKey string
+	results  []bitbucket.RepoPullRequests
+}
+
+// pullRequestDetailLoadedMsg carries a single pull request fetched because the
+// list item lacked review data. See App.previewEpoch.
+type pullRequestDetailLoadedMsg struct {
+	pr    *bitbucket.PullRequest
+	epoch int
+}
+
+// statusesLoadedMsg carries the build statuses of the previewed pull request.
+type statusesLoadedMsg struct {
+	key       string
+	statuses  []bitbucket.CommitStatus
+	updatedOn time.Time
+	err       error
+	epoch     int
+}
+
+// previewDebounceMsg is delivered when a selection's debounce tick expires.
+type previewDebounceMsg struct {
+	key   string
+	epoch int
+}
+
+// prefetchedMsg carries one warmed pull request. The handler chains the next
+// prefetch, so exactly one prefetch request is in flight at a time.
+type prefetchedMsg struct {
+	key       string
+	epoch     int
+	statuses  []bitbucket.CommitStatus
+	updatedOn time.Time
+	pr        *bitbucket.PullRequest
+	err       error
+}
+
+// pipelineLoadedMsg carries a pipeline run and its steps.
+type pipelineLoadedMsg struct {
+	key      string
+	build    int
+	pipeline *bitbucket.Pipeline
+	steps    []bitbucket.PipelineStep
+	err      error
+}
+
+// stepLogLoadedMsg carries one pipeline step's log tail.
+type stepLogLoadedMsg struct {
+	pipelineUUID string
+	stepUUID     string
+	text         string
+	err          error
+}
+
+// errorMsg is a failure worth interrupting the user for: it opens the error
+// modal as well as marking the status panel offline.
+type errorMsg struct{ err error }
+
+// autoFetchTickMsg fires the periodic refresh.
+type autoFetchTickMsg struct{}
+
+// Git messages. There is no branch-creation path: checkout only.
 type gitCheckoutDoneMsg struct{ name string }
 type gitErrorMsg struct{ err error }
 
-func gitCreateBranch(repoPath, name string) tea.Cmd {
+func autoFetchTick(every time.Duration) tea.Cmd {
+	return tea.Tick(every, func(time.Time) tea.Msg { return autoFetchTickMsg{} })
+}
+
+// gitCheckoutBranch checks out an existing local branch, or creates a local
+// branch tracking a remote one. It never creates a branch from scratch: the
+// pull request's source branch exists somewhere or the user must fetch.
+func (a *App) gitCheckoutBranch(name string) tea.Cmd {
+	repoPath := a.gitRepoPath
 	return func() tea.Msg {
-		if err := git.CreateBranch(repoPath, name); err != nil {
-			return gitErrorMsg{err: err}
-		}
-		return gitBranchCreatedMsg{name: name}
-	}
-}
-
-func gitCheckoutBranch(repoPath, name string) tea.Cmd {
-	return func() tea.Msg {
-		if err := git.Checkout(repoPath, name); err != nil {
-			return gitErrorMsg{err: err}
-		}
-		return gitCheckoutDoneMsg{name: name}
-	}
-}
-
-func gitCheckoutTracking(repoPath, remoteBranch string) tea.Cmd {
-	return func() tea.Msg {
-		if err := git.CheckoutTracking(repoPath, remoteBranch); err != nil {
-			return gitErrorMsg{err: err}
-		}
-		// Extract local name from remote branch (strip remote prefix).
-		name := remoteBranch
-		if _, after, ok := strings.Cut(remoteBranch, "/"); ok {
-			name = after
-		}
-		return gitCheckoutDoneMsg{name: name}
-	}
-}
-
-func fetchIssuesByJQL(client jira.ClientInterface, jql string, tab, maxResults int) tea.Cmd {
-	return func() tea.Msg {
-		result, err := client.SearchIssues(context.Background(), jql, 0, maxResults)
-		if err != nil {
-			return errorMsg{err: err}
-		}
-		return issuesLoadedMsg{issues: result.Issues, tab: tab}
-	}
-}
-
-// resolveTabJQL applies template variables to a tab's JQL string.
-func resolveTabJQL(tab config.IssueTabConfig, projectKey, email string) string {
-	tmpl, err := template.New("jql").Parse(tab.JQL)
-	if err != nil {
-		return fmt.Sprintf("project = \"%s\" ORDER BY updated DESC", projectKey)
-	}
-	data := struct {
-		ProjectKey string
-		UserEmail  string
-	}{ProjectKey: "\"" + projectKey + "\"", UserEmail: email}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Sprintf("project = \"%s\" ORDER BY updated DESC", projectKey)
-	}
-	return buf.String()
-}
-
-// fetchFullIssue fetches issue + comments + changelog, returning the given message type.
-func fetchFullIssue(client jira.ClientInterface, key string, mkMsg func(*jira.Issue) tea.Msg) tea.Cmd {
-	return func() tea.Msg {
-		issue, err := client.GetIssue(context.Background(), key)
-		if err != nil {
-			return mkMsg(nil)
-		}
-		comments, err := client.GetComments(context.Background(), key)
-		if err == nil {
-			issue.Comments = comments
-		}
-		changelog, err := client.GetChangelog(context.Background(), key)
-		if err == nil {
-			issue.Changelog = changelog
-		}
-		return mkMsg(issue)
-	}
-}
-
-func fetchIssueDetail(client jira.ClientInterface, key string) tea.Cmd {
-	return fetchFullIssue(client, key, func(issue *jira.Issue) tea.Msg {
-		if issue == nil {
-			return errorMsg{err: fmt.Errorf("failed to fetch issue %s", key)}
-		}
-		return issueDetailLoadedMsg{issue: issue}
-	})
-}
-
-// fetchPreviewDetail is like fetchIssueDetail but returns a previewDetailLoadedMsg
-// carrying the caller's epoch, so that responses from a superseded preview
-// intent can be dropped. See App.previewEpoch.
-func fetchPreviewDetail(client jira.ClientInterface, key string, epoch int) tea.Cmd {
-	return fetchFullIssue(client, key, func(issue *jira.Issue) tea.Msg {
-		if issue == nil {
-			return errorMsg{err: fmt.Errorf("failed to fetch issue %s", key)}
-		}
-		return previewDetailLoadedMsg{issue: issue, epoch: epoch}
-	})
-}
-
-// fetchChildren issues a Cloud GetChildren request and tags the response
-// with the caller's epoch so that stale responses can be dropped.
-// See App.childrenEpoch.
-func fetchChildren(client jira.ClientInterface, key string, epoch int) tea.Cmd {
-	return func() tea.Msg {
-		issues, err := client.GetChildren(context.Background(), key)
-		return childrenLoadedMsg{key: key, issues: issues, err: err, epoch: epoch}
-	}
-}
-
-func fetchProjects(client jira.ClientInterface) tea.Cmd {
-	return func() tea.Msg {
-		projects, err := client.GetProjects(context.Background())
-		if err != nil {
-			return errorMsg{err: err}
-		}
-		return projectsLoadedMsg{projects: projects}
-	}
-}
-
-func prefetchIssue(client jira.ClientInterface, key string) tea.Cmd {
-	return fetchFullIssue(client, key, func(issue *jira.Issue) tea.Msg {
-		if issue == nil {
-			return nil // silent fail for prefetch
-		}
-		return issuePrefetchedMsg{issue: issue}
-	})
-}
-
-func batchPrefetch(client jira.ClientInterface, keys []string) tea.Cmd {
-	return func() tea.Msg {
-		jql := "key in (" + strings.Join(keys, ",") + ")"
-		result, err := client.SearchIssues(context.Background(), jql, 0, len(keys))
-		if err != nil || result == nil {
-			return nil
-		}
-		return batchPrefetchedMsg{issues: result.Issues}
-	}
-}
-
-func fetchTransitions(client jira.ClientInterface, issueKey string) tea.Cmd {
-	return func() tea.Msg {
-		transitions, err := client.GetTransitions(context.Background(), issueKey)
-		if err != nil {
-			return errorMsg{err: err}
-		}
-		return transitionsLoadedMsg{issueKey: issueKey, transitions: transitions}
-	}
-}
-
-func doTransition(client jira.ClientInterface, key, transitionID string) tea.Cmd {
-	return func() tea.Msg {
-		err := client.DoTransition(context.Background(), key, transitionID)
-		if err != nil {
-			return errorMsg{err: err}
-		}
-		return transitionDoneMsg{}
-	}
-}
-
-// JQL search messages
-type jqlSearchResultMsg struct {
-	issues []jira.Issue
-	jql    string
-}
-type jqlSearchErrorMsg struct{ err string }
-
-// JQL autocomplete messages
-type jqlFieldsLoadedMsg struct{ fields []jira.AutocompleteField }
-type jqlSuggestionsMsg struct{ suggestions []jira.AutocompleteSuggestion }
-
-func fetchJQLSearch(client jira.ClientInterface, jql string, maxResults int) tea.Cmd {
-	return func() tea.Msg {
-		result, err := client.SearchIssues(context.Background(), jql, 0, maxResults)
-		if err != nil {
-			return jqlSearchErrorMsg{err: err.Error()}
-		}
-		return jqlSearchResultMsg{issues: result.Issues, jql: jql}
-	}
-}
-
-func fetchJQLAutocompleteData(client jira.ClientInterface) tea.Cmd {
-	return func() tea.Msg {
-		fields, err := client.GetJQLAutocompleteData(context.Background())
-		if err != nil {
-			return nil
-		}
-		return jqlFieldsLoadedMsg{fields: fields}
-	}
-}
-
-func fetchJQLSuggestions(client jira.ClientInterface, fieldName, partial string) tea.Cmd {
-	return func() tea.Msg {
-		suggestions, err := client.GetJQLAutocompleteSuggestions(context.Background(), fieldName, partial)
-		if err != nil {
-			return nil
-		}
-		return jqlSuggestionsMsg{suggestions: suggestions}
-	}
-}
-
-type myselfLoadedMsg struct{ user *jira.User }
-
-type fieldsDiscoveredMsg struct{ err error }
-
-type issueUpdatedMsg struct {
-	issueKey string
-	field    string
-}
-type commentAddedMsg struct{ issueKey string }
-type commentUpdatedMsg struct{ issueKey string }
-type prioritiesLoadedMsg struct{ priorities []jira.Priority }
-type usersLoadedMsg struct {
-	users    []jira.User
-	issueKey string
-}
-type labelsLoadedMsg struct{ labels []string }
-type componentsLoadedMsg struct{ components []jira.Component }
-type issueTypesLoadedMsg struct{ issueTypes []jira.IssueType }
-type createMetaLoadedMsg struct{ fields []jira.CreateMetaField }
-type issueCreatedMsg struct{ issue *jira.Issue }
-type createErrorMsg struct{ err error }
-
-// createPreFormErrorMsg is a create failure that happens before the form is
-// populated (issue-type metadata load). Unlike createErrorMsg it aborts the
-// flow instead of resuming an empty form.
-type createPreFormErrorMsg struct{ err error }
-
-type customFieldOptionsMsg struct {
-	issueKey      string
-	fieldID       string
-	fieldName     string
-	fieldType     views.InfoFieldType
-	currentValue  string
-	useEditor     bool
-	schemaType    string
-	schemaItems   string
-	options       []jira.CreateMetaValue
-	allFields     []jira.CreateMetaField
-	issueTypeID   string
-	projectKey    string
-	fieldNotFound bool
-}
-
-func updateIssueField(client jira.ClientInterface, issueKey, field string, value any) tea.Cmd {
-	return func() tea.Msg {
-		fields := map[string]any{field: value}
-		err := client.UpdateIssue(context.Background(), issueKey, fields)
-		if err != nil {
-			return errorMsg{err: err}
-		}
-		return issueUpdatedMsg{issueKey: issueKey, field: field}
-	}
-}
-
-func removeIssueParent(client jira.ClientInterface, issueKey string) tea.Cmd {
-	return func() tea.Msg {
-		if err := client.RemoveIssueParent(context.Background(), issueKey); err != nil {
-			return errorMsg{err: err}
-		}
-		return issueUpdatedMsg{issueKey: issueKey, field: "parent"}
-	}
-}
-
-func addComment(client jira.ClientInterface, issueKey string, body any) tea.Cmd {
-	return func() tea.Msg {
-		_, err := client.AddComment(context.Background(), issueKey, body)
-		if err != nil {
-			return errorMsg{err: err}
-		}
-		return commentAddedMsg{issueKey: issueKey}
-	}
-}
-
-func updateComment(client jira.ClientInterface, issueKey, commentID string, body any) tea.Cmd {
-	return func() tea.Msg {
-		err := client.UpdateComment(context.Background(), issueKey, commentID, body)
-		if err != nil {
-			return errorMsg{err: err}
-		}
-		return commentUpdatedMsg{issueKey: issueKey}
-	}
-}
-
-func fetchCreateMeta(client jira.ClientInterface, projectKey, issueTypeID string) tea.Cmd {
-	return func() tea.Msg {
-		fields, err := client.GetCreateMeta(context.Background(), projectKey, issueTypeID)
-		if err != nil {
-			return createPreFormErrorMsg{err: err}
-		}
-		return createMetaLoadedMsg{fields: fields}
-	}
-}
-
-func fetchCustomFieldOptions(client jira.ClientInterface, projectKey, issueTypeID string, info customFieldOptionsMsg) tea.Cmd {
-	return func() tea.Msg {
-		meta, err := client.GetCreateMeta(context.Background(), projectKey, issueTypeID)
-		if err != nil {
-			return errorMsg{err: err}
-		}
-		info.allFields = meta
-		info.issueTypeID = issueTypeID
-		info.projectKey = projectKey
-		for _, f := range meta {
-			if f.FieldID == info.fieldID {
-				info.options = f.AllowedValues
-				info.schemaType = f.Schema.Type
-				info.schemaItems = f.Schema.Items
-				return info
+		switch git.ResolveBranchAction(repoPath, name) {
+		case git.ActionCheckout:
+			if err := git.Checkout(repoPath, name); err != nil {
+				return gitErrorMsg{err: err}
 			}
+			return gitCheckoutDoneMsg{name: name}
+		case git.ActionCheckoutTracking:
+			if err := git.CheckoutTracking(repoPath, name); err != nil {
+				return gitErrorMsg{err: err}
+			}
+			local := name
+			if _, after, ok := strings.Cut(name, "/"); ok {
+				local = after
+			}
+			return gitCheckoutDoneMsg{name: local}
+		default:
+			return gitErrorMsg{err: errors.New("branch " + name + " not found locally or on a remote — fetch first")}
 		}
-		info.fieldNotFound = true
-		return info
 	}
 }
 
-func createIssue(client jira.ClientInterface, fields map[string]any) tea.Cmd {
+func (a *App) fetchCurrentUser() tea.Cmd {
+	ctx, client := a.context(), a.client
 	return func() tea.Msg {
-		issue, err := client.CreateIssue(context.Background(), fields)
+		user, err := client.GetCurrentUser(ctx)
+		return currentUserLoadedMsg{user: user, err: err}
+	}
+}
+
+// fetchRepos returns the configured repositories as stubs without a request,
+// or discovers the first page of repositories the user is a member of.
+func (a *App) fetchRepos() tea.Cmd {
+	workspace := a.workspace
+	if len(a.cfg.Bitbucket.Repositories) > 0 {
+		slugs := slices.Clone(a.cfg.Bitbucket.Repositories)
+		return func() tea.Msg {
+			repos := make([]bitbucket.Repository, 0, len(slugs))
+			for _, slug := range slugs {
+				repos = append(repos, bitbucket.Repository{Slug: slug, FullName: workspace + "/" + slug})
+			}
+			return reposLoadedMsg{repos: repos, err: nil}
+		}
+	}
+	ctx, client := a.context(), a.client
+	a.logFlag.Store(true)
+	return func() tea.Msg {
+		repos, err := client.ListRepositories(ctx, workspace, bitbucket.ListRepositoriesOptions{
+			Role:     "member",
+			Query:    "",
+			Sort:     "",
+			MaxItems: repoDiscoveryLimit,
+		})
+		return reposLoadedMsg{repos: repos, err: err}
+	}
+}
+
+// listOptionsForKey builds the request options of the first tab that shares a
+// fetch key; tabs with the same key are identical as far as the API goes.
+func (a *App) listOptionsForKey(fetchKey string) bitbucket.ListPullRequestsOptions {
+	tabs := a.tabConfigs()
+	tab := tabs[0]
+	for index := range tabs {
+		if a.fetchKeyOf(index) == fetchKey {
+			tab = tabs[index]
+			break
+		}
+	}
+	maxItems := config.DefaultMaxResults
+	if a.cfg != nil {
+		maxItems = a.cfg.ResolveMaxResults(tab)
+	}
+	return bitbucket.ListPullRequestsOptions{
+		States:   []bitbucket.PullRequestState{bitbucket.PullRequestState(tab.ResolveState())},
+		Query:    tab.Query,
+		Sort:     "",
+		MaxItems: maxItems,
+		Fields:   "",
+	}
+}
+
+// fetchPullRequests lists the pull requests behind one fetch key across every
+// repository. A second request for a key already in flight is dropped.
+func (a *App) fetchPullRequests(fetchKey string) tea.Cmd {
+	if a.workspace == "" || len(a.repoSlugs) == 0 || a.inFlight[fetchKey] {
+		return nil
+	}
+	if a.inFlight == nil {
+		a.inFlight = make(map[string]bool)
+	}
+	a.inFlight[fetchKey] = true
+
+	ctx, client := a.context(), a.client
+	workspace := a.workspace
+	repos := slices.Clone(a.repoSlugs)
+	opts := a.listOptionsForKey(fetchKey)
+	a.logFlag.Store(true)
+
+	return func() tea.Msg {
+		results := bitbucket.FetchPullRequests(ctx, client, workspace, repos, opts, 0)
+		return pullRequestsLoadedMsg{fetchKey: fetchKey, results: results}
+	}
+}
+
+func (a *App) fetchPullRequestDetail(pr *bitbucket.PullRequest, epoch int) tea.Cmd {
+	if pr == nil {
+		return nil
+	}
+	ctx, client := a.context(), a.client
+	workspace, slug, id := pr.Workspace(), pr.RepoSlug(), pr.ID
+	return func() tea.Msg {
+		detail, err := client.GetPullRequest(ctx, workspace, slug, id)
 		if err != nil {
-			return createErrorMsg{err: err}
+			return pullRequestDetailLoadedMsg{pr: nil, epoch: epoch}
 		}
-		return issueCreatedMsg{issue: issue}
+		return pullRequestDetailLoadedMsg{pr: detail, epoch: epoch}
 	}
 }
 
-func fetchPriorities(client jira.ClientInterface) tea.Cmd {
+func (a *App) fetchStatuses(pr *bitbucket.PullRequest, epoch int) tea.Cmd {
+	if pr == nil {
+		return nil
+	}
+	ctx, client := a.context(), a.client
+	workspace, slug, id := pr.Workspace(), pr.RepoSlug(), pr.ID
+	key, updatedOn := pr.Key(), pr.UpdatedOn
 	return func() tea.Msg {
-		priorities, err := client.GetPriorities(context.Background())
+		statuses, err := client.ListPullRequestStatuses(ctx, workspace, slug, id)
+		return statusesLoadedMsg{key: key, statuses: statuses, updatedOn: updatedOn, err: err, epoch: epoch}
+	}
+}
+
+// prefetchNext pops the head of the prefetch queue and warms it: statuses
+// always, detail as well when the list item carries no review data. Errors are
+// carried, not raised — a prefetch failure must never interrupt the user.
+func (a *App) prefetchNext() tea.Cmd {
+	for len(a.prefetchQueue) > 0 {
+		key := a.prefetchQueue[0]
+		a.prefetchQueue = a.prefetchQueue[1:]
+		pr := a.pullRequestByKey(key)
+		if pr == nil {
+			continue
+		}
+		ctx, client := a.context(), a.client
+		workspace, slug, id := pr.Workspace(), pr.RepoSlug(), pr.ID
+		updatedOn := pr.UpdatedOn
+		needDetail := !pr.HasReviewData()
+		epoch := a.prefetchEpoch
+		return func() tea.Msg {
+			msg := prefetchedMsg{
+				key: key, epoch: epoch, statuses: nil,
+				updatedOn: updatedOn, pr: nil, err: nil,
+			}
+			statuses, err := client.ListPullRequestStatuses(ctx, workspace, slug, id)
+			msg.statuses, msg.err = statuses, err
+			if needDetail {
+				if detail, detailErr := client.GetPullRequest(ctx, workspace, slug, id); detailErr == nil {
+					msg.pr = detail
+				} else if msg.err == nil {
+					msg.err = detailErr
+				}
+			}
+			return msg
+		}
+	}
+	return nil
+}
+
+func (a *App) fetchPipeline(pr *bitbucket.PullRequest, build int) tea.Cmd {
+	if pr == nil {
+		return nil
+	}
+	ctx, client := a.context(), a.client
+	workspace, slug := pr.Workspace(), pr.RepoSlug()
+	key := pr.Key()
+	ref := strconv.Itoa(build)
+	a.logFlag.Store(true)
+	return func() tea.Msg {
+		msg := pipelineLoadedMsg{key: key, build: build, pipeline: nil, steps: nil, err: nil}
+		pipeline, err := client.GetPipeline(ctx, workspace, slug, ref)
 		if err != nil {
-			return errorMsg{err: err}
+			msg.err = err
+			return msg
 		}
-		return prioritiesLoadedMsg{priorities: priorities}
-	}
-}
-
-func fetchMyself(client jira.ClientInterface) tea.Cmd {
-	return func() tea.Msg {
-		user, err := client.GetMyself(context.Background())
+		msg.pipeline = pipeline
+		steps, err := client.ListPipelineSteps(ctx, workspace, slug, ref)
 		if err != nil {
-			return errorMsg{err: err}
+			msg.err = err
+			return msg
 		}
-		return myselfLoadedMsg{user: user}
+		msg.steps = steps
+		return msg
 	}
 }
 
-func fetchFieldDiscovery(client jira.ClientInterface) tea.Cmd {
+func (a *App) fetchStepLog(pr *bitbucket.PullRequest, pipelineUUID, stepUUID string) tea.Cmd {
+	if pr == nil {
+		return nil
+	}
+	ctx, client := a.context(), a.client
+	workspace, slug := pr.Workspace(), pr.RepoSlug()
+	a.logFlag.Store(true)
 	return func() tea.Msg {
-		return fieldsDiscoveredMsg{err: client.DiscoverFields(context.Background())}
+		text, err := client.GetPipelineStepLog(ctx, workspace, slug, pipelineUUID, stepUUID,
+			bitbucket.StepLogOptions{TailBytes: stepLogTailBytes})
+		return stepLogLoadedMsg{pipelineUUID: pipelineUUID, stepUUID: stepUUID, text: text, err: err}
 	}
-}
-
-// prefetchUsersMsg triggers a background users fetch after a short delay
-type prefetchUsersMsg struct{ projectKey string }
-
-// prefetchUsers schedules a users fetch after a delay to avoid
-// hammering the API when the user switches projects quickly
-func prefetchUsers(projectKey string) tea.Cmd {
-	return tea.Tick(500*time.Millisecond, func(_ time.Time) tea.Msg {
-		return prefetchUsersMsg{projectKey: projectKey}
-	})
-}
-
-func fetchUsers(client jira.ClientInterface, projectKey, issueKey string) tea.Cmd {
-	return func() tea.Msg {
-		users, err := client.GetUsers(context.Background(), projectKey)
-		if err != nil {
-			return errorMsg{err: err}
-		}
-		return usersLoadedMsg{users: users, issueKey: issueKey}
-	}
-}
-
-func fetchLabels(client jira.ClientInterface) tea.Cmd {
-	return func() tea.Msg {
-		labels, err := client.GetLabels(context.Background())
-		if err != nil {
-			return errorMsg{err: err}
-		}
-		return labelsLoadedMsg{labels: labels}
-	}
-}
-
-func fetchComponents(client jira.ClientInterface, projectKey string) tea.Cmd {
-	return func() tea.Msg {
-		comps, err := client.GetComponents(context.Background(), projectKey)
-		if err != nil {
-			return errorMsg{err: err}
-		}
-		return componentsLoadedMsg{components: comps}
-	}
-}
-
-func fetchBoards(client jira.ClientInterface) tea.Cmd {
-	return func() tea.Msg {
-		boards, err := client.GetBoards(context.Background())
-		if err != nil {
-			return nil // silent fail — boards are optional (agile API may be unavailable)
-		}
-		return boardsLoadedMsg{boards: boards}
-	}
-}
-
-func fetchSprints(client jira.ClientInterface, boardID int) tea.Cmd {
-	return func() tea.Msg {
-		sprints, err := client.GetSprints(context.Background(), boardID)
-		if err != nil {
-			// silently ignore, board may not support sprints
-			return sprintsLoadedMsg{sprints: nil}
-		}
-		return sprintsLoadedMsg{sprints: sprints}
-	}
-}
-
-func moveToSprint(client jira.ClientInterface, sprintID int, issueKey string) tea.Cmd {
-	return func() tea.Msg {
-		err := client.MoveToSprint(context.Background(), sprintID, issueKey)
-		if err != nil {
-			return errorMsg{err: err}
-		}
-		return issueUpdatedMsg{issueKey: issueKey}
-	}
-}
-
-func fetchIssueTypes(client jira.ClientInterface, projectID string) tea.Cmd {
-	return func() tea.Msg {
-		types, err := client.GetIssueTypes(context.Background(), projectID)
-		if err != nil {
-			return errorMsg{err: err}
-		}
-		return issueTypesLoadedMsg{issueTypes: types}
-	}
-}
-
-func saveLastProject(projectKey string) {
-	creds, err := config.LoadCredentials()
-	if err != nil || creds == nil {
-		return
-	}
-	creds.LastProject = projectKey
-	_ = config.SaveCredentials(creds)
 }

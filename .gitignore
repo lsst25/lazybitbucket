@@ -10,7 +10,7 @@ config.yml
 .env.*
 
 # Binary
-/lazyjira
+/lazybitbucket
 
 # IDE
 .idea/
@@ -29,4 +29,4 @@ e2e/tapes/*.tape
 
 # OS
 .DS_Store
-/lazyjira.exe
+/lazybitbucket.exe

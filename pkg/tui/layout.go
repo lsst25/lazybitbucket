@@ -38,79 +38,79 @@ func (a *App) layoutPanels() {
 		// Detail always gets its target first, then remaining
 		// space goes to the focused left panel.
 		const (
-			detailTarget = 12 // enough for issue description
-			projectsCap  = 8  // hard cap for projects
-			infoCap      = 8  // hard cap for info
+			detailTarget = 12 // enough for a pull request description
+			reposCap     = 8  // hard cap for repos
+			buildsCap    = 8  // hard cap for builds
 		)
 
 		statusH := 1 // always collapsed in vertical
-		issuesH := 1
-		infoH := 1
-		projectsH := 1
+		prH := 1
+		buildsH := 1
+		reposH := 1
 		var detailH int
 
-		avail := totalH - statusH - logH // space for detail + issues + info + projects
+		avail := totalH - statusH - logH // space for detail + pull requests + builds + repos
 
 		switch {
 		case a.side == sideRight:
 			// Detail focused: all left panels collapsed.
-			detailH = avail - issuesH - infoH - projectsH
+			detailH = avail - prH - buildsH - reposH
 
-		case a.leftFocus == focusIssues:
-			// Issues focused: others collapsed.
-			remaining := avail - infoH - projectsH
+		case a.leftFocus == focusPullRequests:
+			// Pull requests focused: others collapsed.
+			remaining := avail - buildsH - reposH
 			detailH = min(detailTarget, max(remaining-1, 1))
-			issuesH = remaining - detailH
+			prH = remaining - detailH
 
-		case a.leftFocus == focusInfo:
-			// Info focused: others collapsed.
-			remaining := avail - issuesH - projectsH
+		case a.leftFocus == focusBuilds:
+			// Builds focused: others collapsed.
+			remaining := avail - prH - reposH
 			detailH = min(detailTarget, max(remaining-1, 1))
-			infoH = min(remaining-detailH, infoCap)
-			detailH = remaining - infoH
+			buildsH = min(remaining-detailH, buildsCap)
+			detailH = remaining - buildsH
 
-		case a.leftFocus == focusProjects:
-			// Projects focused: others collapsed.
-			remaining := avail - issuesH - infoH
+		case a.leftFocus == focusRepos:
+			// Repos focused: others collapsed.
+			remaining := avail - prH - buildsH
 			detailH = min(detailTarget, max(remaining-1, 1))
-			projectsH = min(remaining-detailH, projectsCap)
-			detailH = remaining - projectsH
+			reposH = min(remaining-detailH, reposCap)
+			detailH = remaining - reposH
 
 		case a.leftFocus == focusStatus:
-			statusH = 3
-			avail -= 2 // status took 2 extra
-			remaining := avail - infoH - projectsH
+			statusH = a.statusPanelHeight()
+			avail -= statusH - 1
+			remaining := avail - buildsH - reposH
 			detailH = min(detailTarget, max(remaining-1, 1))
-			issuesH = remaining - detailH
+			prH = remaining - detailH
 
 		default:
-			detailH = avail - issuesH - infoH - projectsH
+			detailH = avail - prH - buildsH - reposH
 		}
 
-		if issuesH < 1 {
-			issuesH = 1
+		if prH < 1 {
+			prH = 1
 		}
-		if infoH < 1 {
-			infoH = 1
+		if buildsH < 1 {
+			buildsH = 1
 		}
-		if projectsH < 1 {
-			projectsH = 1
+		if reposH < 1 {
+			reposH = 1
 		}
 		if detailH < 3 {
 			detailH = 3
 		}
 
 		a.statusPanel.SetSize(w, statusH)
-		a.issuesList.SetSize(w, issuesH)
-		a.infoPanel.SetSize(w, infoH)
-		a.projectList.SetSize(w, projectsH)
+		a.prList.SetSize(w, prH)
+		a.buildsPanel.SetSize(w, buildsH)
+		a.repoList.SetSize(w, reposH)
 		a.detailView.SetSize(w, detailH)
 		a.logPanel.SetSize(w, logH)
 		a.panelSideW = w
 		a.panelStatusH = statusH
-		a.panelIssuesH = issuesH
-		a.panelInfoH = infoH
-		a.panelProjectsH = projectsH
+		a.panelPRH = prH
+		a.panelBuildsH = buildsH
+		a.panelReposH = reposH
 		a.panelDetailH = detailH
 		a.panelLogH = logH
 		return
@@ -119,47 +119,47 @@ func (a *App) layoutPanels() {
 	sideW := a.sideWidth()
 	mainW := a.width - sideW
 
-	statusH := 3
+	statusH := a.statusPanelHeight()
 	remaining := totalH - statusH
 
-	var issuesH, infoH, projectsH int
+	var prH, buildsH, reposH int
 	minH := 3
 	collapsedH := max(a.cfg.GUI.CollapsedPanelHeight, minH)
 
 	switch a.leftFocus {
-	case focusProjects:
-		// Projects focused: info and issues compact.
-		infoH = collapsedH
-		issuesNat := max(min(a.issuesList.ContentHeight(), 12), minH)
-		issuesH = max(min(issuesNat, remaining/3), minH)
-		projectsH = remaining - issuesH - infoH
-	case focusInfo:
-		// Info focused: issues compact, projects compact.
-		projectsH = collapsedH
-		issuesNat := max(min(a.issuesList.ContentHeight(), 12), minH)
-		issuesH = max(min(issuesNat, remaining/3), minH)
-		infoH = remaining - issuesH - projectsH
+	case focusRepos:
+		// Repos focused: builds and pull requests compact.
+		buildsH = collapsedH
+		prNat := max(min(a.prList.ContentHeight(), 12), minH)
+		prH = max(min(prNat, remaining/3), minH)
+		reposH = remaining - prH - buildsH
+	case focusBuilds:
+		// Builds focused: pull requests compact, repos compact.
+		reposH = collapsedH
+		prNat := max(min(a.prList.ContentHeight(), 12), minH)
+		prH = max(min(prNat, remaining/3), minH)
+		buildsH = remaining - prH - reposH
 	default:
-		// Issues focused (or status): info and projects compact, issues gets space.
-		infoH = collapsedH
-		projectsH = collapsedH
-		issuesH = remaining - infoH - projectsH
+		// Pull requests focused (or status): builds and repos compact, pull requests get the space.
+		buildsH = collapsedH
+		reposH = collapsedH
+		prH = remaining - buildsH - reposH
 	}
 
-	if issuesH < minH {
-		issuesH = minH
+	if prH < minH {
+		prH = minH
 	}
-	if infoH < minH {
-		infoH = minH
+	if buildsH < minH {
+		buildsH = minH
 	}
-	if projectsH < minH {
-		projectsH = minH
+	if reposH < minH {
+		reposH = minH
 	}
 
 	a.statusPanel.SetSize(sideW, statusH)
-	a.issuesList.SetSize(sideW, issuesH)
-	a.infoPanel.SetSize(sideW, infoH)
-	a.projectList.SetSize(sideW, projectsH)
+	a.prList.SetSize(sideW, prH)
+	a.buildsPanel.SetSize(sideW, buildsH)
+	a.repoList.SetSize(sideW, reposH)
 
 	// Right column: log fits content or max 8, detail gets the rest.
 	logH := 8
@@ -171,9 +171,9 @@ func (a *App) layoutPanels() {
 	// Cache sizes for mouse.
 	a.panelSideW = sideW
 	a.panelStatusH = statusH
-	a.panelIssuesH = issuesH
-	a.panelInfoH = infoH
-	a.panelProjectsH = projectsH
+	a.panelPRH = prH
+	a.panelBuildsH = buildsH
+	a.panelReposH = reposH
 	a.panelDetailH = detailH
 	a.panelLogH = logH
 }

@@ -13,31 +13,29 @@ import (
 type Context string
 
 const (
-	CtxIssues         Context = "issues"
-	CtxInfo           Context = "info"
-	CtxProjects       Context = "projects"
-	CtxDetail         Context = "detail"
-	CtxDetailComments Context = "detail.comments"
+	CtxPullRequests Context = "pullrequests"
+	CtxBuilds       Context = "builds"
+	CtxRepos        Context = "repos"
+	CtxDetail       Context = "detail"
 )
 
 // DefaultCommandContexts is applied when a command omits `contexts:`.
-var DefaultCommandContexts = []Context{CtxIssues, CtxInfo, CtxDetail}
+var DefaultCommandContexts = []Context{CtxPullRequests, CtxDetail}
 
 // ScopeMask is a bitmask of data scopes a command expects.
 type ScopeMask uint8
 
 const (
-	ScopeIssue ScopeMask = 1 << iota
-	ScopeProject
-	ScopeComment
+	ScopePullRequest ScopeMask = 1 << iota
+	ScopeRepo
+	ScopeBuild
 )
 
 var contextScopes = map[Context]ScopeMask{
-	CtxIssues:         ScopeIssue,
-	CtxInfo:           ScopeIssue,
-	CtxProjects:       ScopeProject,
-	CtxDetail:         ScopeIssue,
-	CtxDetailComments: ScopeIssue | ScopeComment,
+	CtxPullRequests: ScopePullRequest | ScopeRepo,
+	CtxBuilds:       ScopePullRequest | ScopeRepo | ScopeBuild,
+	CtxRepos:        ScopeRepo,
+	CtxDetail:       ScopePullRequest | ScopeRepo,
 }
 
 // ResolvedCustomCommand is a validated, pre-computed custom command.

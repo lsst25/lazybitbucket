@@ -5,15 +5,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/lsst25/lazybitbucket/pkg/ascii"
-	"github.com/lsst25/lazybitbucket/pkg/git"
-	"github.com/lsst25/lazybitbucket/pkg/jira"
 	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
-// handleKeyMsg dispatches keyboard actions.
-// Returns (nil, nil) if the key was not handled and should be forwarded to the focused panel
+// handleKeyMsg dispatches keyboard actions. It returns (nil, nil) when the key
+// belongs to the focused panel instead.
 func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a.helpBar.SetStatusMsg("")
 
@@ -21,23 +18,23 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleHelpKeys(msg)
 	}
 
-	// Custom commands take precedence over built-in keybindings so users
-	// can override any action they want.
+	// Custom commands take precedence over built-in bindings so a user can
+	// override any action.
 	if m, cmd, ok := a.handleCustomCommand(msg.String()); ok {
 		return m, cmd
 	}
 
 	action := a.keymap.Match(msg.String())
 
-	// In the hierarchy tab, ActFocusLeft pops a NavFrame instead of
-	// shifting focus.
-	if action == ActFocusLeft {
-		if cmd, ok := a.goBack(); ok {
-			return a, cmd
+	// In the pipeline and step-log views, back and focus-left walk out of the
+	// drill-down before they move focus.
+	if action == ActBack || action == ActFocusLeft {
+		if a.side == sideRight && a.detailView.Back() {
+			return a, nil
 		}
 	}
 
-	switch action { //nolint:exhaustive
+	switch action { //nolint:exhaustive // the remaining actions are handled by the helpers below
 	case ActQuit:
 		return a, tea.Quit
 	case ActHelp:
@@ -49,21 +46,10 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ActSearch:
 		a.searchBar.Activate()
 		return a, nil
-	case ActSelect:
-		return a.handleActionSelect()
-	case ActOpen:
-		return a.handleActionOpen()
+	case ActSelect, ActOpen:
+		return a.handleActivate()
 	case ActURLPicker:
 		return a.handleActionURLPicker()
-	case ActEdit:
-		return a.handleActionEdit()
-	case ActCreateBranch:
-		return a.handleActionCreateBranch()
-	case ActShowParent:
-		if cmd, ok := a.showParent(); ok {
-			return a, cmd
-		}
-		return a, nil
 	}
 
 	if m, cmd, ok := a.handleFocusAction(action); ok {
@@ -72,11 +58,11 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m, cmd, ok := a.handleTabAction(action); ok {
 		return m, cmd
 	}
-	if m, cmd, ok := a.handleIssueAction(action); ok {
+	if m, cmd, ok := a.handlePullRequestAction(action); ok {
 		return m, cmd
 	}
 
-	if a.side == sideLeft && (a.leftFocus == focusIssues || a.leftFocus == focusInfo) {
+	if a.side == sideLeft && a.leftFocus != focusStatus {
 		if m, cmd, ok := a.handleDetailScroll(msg); ok {
 			return m, cmd
 		}
@@ -85,8 +71,9 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return nil, nil
 }
 
+// handleDetailScroll lets the left-hand panels scroll the detail pane.
 func (a *App) handleDetailScroll(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
-	switch a.keymap.Match(msg.String()) { //nolint:exhaustive
+	switch a.keymap.Match(msg.String()) { //nolint:exhaustive // only the four scroll actions apply
 	case ActDetailScrollDown:
 		a.detailView.ScrollBy(1)
 		return a, nil, true
@@ -223,7 +210,7 @@ func (a *App) filteredHelpBindings() []Binding {
 }
 
 func (a *App) handleFocusAction(action Action) (tea.Model, tea.Cmd, bool) {
-	switch action { //nolint:exhaustive
+	switch action { //nolint:exhaustive // only the focus actions are handled here
 	case ActSwitchPanel:
 		if a.side == sideLeft {
 			a.side = sideRight
@@ -237,12 +224,12 @@ func (a *App) handleFocusAction(action Action) (tea.Model, tea.Cmd, bool) {
 		if a.side == sideLeft {
 			switch a.leftFocus {
 			case focusStatus:
-				a.leftFocus = focusIssues
-			case focusIssues:
-				a.leftFocus = focusInfo
-			case focusInfo:
-				a.leftFocus = focusProjects
-			case focusProjects:
+				a.leftFocus = focusPullRequests
+			case focusPullRequests:
+				a.leftFocus = focusBuilds
+			case focusBuilds:
+				a.leftFocus = focusRepos
+			case focusRepos:
 				a.leftFocus = focusStatus
 			}
 			a.updateFocusState()
@@ -253,29 +240,20 @@ func (a *App) handleFocusAction(action Action) (tea.Model, tea.Cmd, bool) {
 		if a.side == sideLeft {
 			switch a.leftFocus {
 			case focusStatus:
-				a.leftFocus = focusProjects
-			case focusIssues:
+				a.leftFocus = focusRepos
+			case focusPullRequests:
 				a.leftFocus = focusStatus
-			case focusInfo:
-				tab := a.infoPanel.ActiveTab()
-				var cmd tea.Cmd
-				if tab == views.InfoTabSubtasks || tab == views.InfoTabLinks {
-					cmd = a.previewSelectedIssue()
-				}
-				a.leftFocus = focusIssues
-				a.updateFocusState()
-				return a, cmd, true
-			case focusProjects:
-				a.leftFocus = focusInfo
+			case focusBuilds:
+				a.leftFocus = focusPullRequests
+			case focusRepos:
+				a.leftFocus = focusBuilds
 			}
 			a.updateFocusState()
 			return a, nil, true
 		}
-		if a.side == sideRight {
-			a.side = sideLeft
-			a.updateFocusState()
-			return a, nil, true
-		}
+		a.side = sideLeft
+		a.updateFocusState()
+		return a, nil, true
 
 	case ActFocusDetail:
 		a.side = sideRight
@@ -285,555 +263,229 @@ func (a *App) handleFocusAction(action Action) (tea.Model, tea.Cmd, bool) {
 	case ActFocusStatus:
 		a.side = sideLeft
 		a.leftFocus = focusStatus
-		a.splashInfo.Project = a.projectKey
-		a.detailView.SetSplash(a.splashInfo)
+		a.showSplash()
 		a.updateFocusState()
 		return a, nil, true
 
-	case ActFocusIssues:
+	case ActFocusPullRequests:
 		a.side = sideLeft
-		a.leftFocus = focusIssues
-		if sel := a.issuesList.SelectedIssue(); sel != nil {
-			a.showCachedIssue(sel.Key)
+		a.leftFocus = focusPullRequests
+		a.updateFocusState()
+		return a, a.previewSelected(), true
+
+	case ActFocusBuilds:
+		a.side = sideLeft
+		a.leftFocus = focusBuilds
+		a.updateFocusState()
+		return a, nil, true
+
+	case ActFocusRepos:
+		a.side = sideLeft
+		a.leftFocus = focusRepos
+		a.updateFocusState()
+		if repo := a.repoList.SelectedRepo(); repo != nil {
+			a.detailView.SetRepo(repo)
 		}
-		a.updateFocusState()
-		return a, nil, true
-
-	case ActFocusInfo, ActInfoTab:
-		a.side = sideLeft
-		a.leftFocus = focusInfo
-		a.updateFocusState()
-		return a, nil, true
-
-	case ActFocusProj:
-		a.side = sideLeft
-		a.leftFocus = focusProjects
-		a.updateFocusState()
 		return a, nil, true
 	}
 	return nil, nil, false
 }
 
 func (a *App) handleTabAction(action Action) (tea.Model, tea.Cmd, bool) {
-	switch action { //nolint:exhaustive
+	switch action { //nolint:exhaustive // only the two tab actions are handled here
 	case ActPrevTab:
-		switch {
-		case a.side == sideRight:
+		if a.side == sideRight {
 			a.detailView.PrevTab()
-		case a.side == sideLeft && a.leftFocus == focusIssues:
-			a.issuesList.PrevTab()
-			if !a.issuesList.HasCachedTab() {
-				return a, a.fetchActiveTab(), true
-			}
-			return a, a.previewSelectedIssue(), true
-		case a.side == sideLeft && a.leftFocus == focusInfo:
-			a.infoPanel.PrevTab()
-			return a, tea.Batch(a.previewForInfoTab(), a.infoPanel.MaybeChildrenRequest()), true
+			return a, nil, true
+		}
+		if a.leftFocus == focusPullRequests {
+			a.prList.PrevTab()
+			return a, a.afterTabSwitch(), true
 		}
 		return a, nil, true
 
 	case ActNextTab:
-		switch {
-		case a.side == sideRight:
+		if a.side == sideRight {
 			a.detailView.NextTab()
-		case a.side == sideLeft && a.leftFocus == focusIssues:
-			a.issuesList.NextTab()
-			if !a.issuesList.HasCachedTab() {
-				return a, a.fetchActiveTab(), true
-			}
-			return a, a.previewSelectedIssue(), true
-		case a.side == sideLeft && a.leftFocus == focusInfo:
-			a.infoPanel.NextTab()
-			return a, tea.Batch(a.previewForInfoTab(), a.infoPanel.MaybeChildrenRequest()), true
+			return a, nil, true
+		}
+		if a.leftFocus == focusPullRequests {
+			a.prList.NextTab()
+			return a, a.afterTabSwitch(), true
 		}
 		return a, nil, true
-
-	case ActCloseJQLTab:
-		if a.side == sideLeft && a.leftFocus == focusIssues && a.issuesList.IsJQLTab() {
-			a.issuesList.RemoveJQLTab()
-			if !a.issuesList.HasCachedTab() {
-				return a, a.fetchActiveTab(), true
-			}
-		}
-		return a, nil, true
-
-	case ActJQLSearch:
-		history := LoadJQLHistory()
-		prefill := ""
-		if a.projectKey != "" {
-			prefill = "project = " + a.projectKey + " AND "
-		}
-		a.jqlModal.Show(prefill, history)
-		var cmds []tea.Cmd
-		if a.jqlFields == nil {
-			cmds = append(cmds, fetchJQLAutocompleteData(a.client))
-		}
-		return a, tea.Batch(cmds...), true
 	}
 	return nil, nil, false
 }
 
-func (a *App) handleIssueAction(action Action) (tea.Model, tea.Cmd, bool) {
-	switch action { //nolint:exhaustive
+// afterTabSwitch fetches the new tab when nothing has been loaded for it, and
+// otherwise just previews whatever the cursor landed on. It goes through
+// refreshCmd so a tab switch also re-runs repository discovery when that is
+// what left the list empty.
+func (a *App) afterTabSwitch() tea.Cmd {
+	if !a.prList.HasCachedTab() {
+		return a.refreshCmd()
+	}
+	return tea.Batch(a.previewSelected(), a.startPrefetch())
+}
+
+func (a *App) handlePullRequestAction(action Action) (tea.Model, tea.Cmd, bool) {
+	switch action { //nolint:exhaustive // the rest of the actions are handled elsewhere
 	case ActCopyURL:
-		if cur := a.currentIssue(); cur != nil {
-			copyToClipboard(a.cfg.Jira.Host + "/browse/" + cur.Key)
+		if pr := a.currentPullRequest(); pr != nil {
+			a.copyToClipboard(pr.HTMLURL())
 		}
 		return a, nil, true
 
 	case ActBrowser:
-		if cur := a.currentIssue(); cur != nil {
-			openBrowser(a.cfg.Jira.Host + "/browse/" + cur.Key)
+		if url := a.browserURL(); url != "" {
+			a.openBrowser(url)
 		}
 		return a, nil, true
 
-	case ActTransition:
-		if a.side == sideLeft && (a.leftFocus == focusIssues || a.leftFocus == focusInfo) {
-			if cur := a.currentIssue(); cur != nil {
-				*a.logFlag = true
-				return a, fetchTransitions(a.client, cur.Key), true
-			}
-		}
-		return a, nil, true
-
-	case ActComments:
-		cur := a.currentIssue()
-		if cur == nil {
-			return a, nil, true
-		}
-		a.side = sideRight
-		a.detailView.SetActiveTab(views.TabComments)
-		a.updateFocusState()
-		if _, ok := a.issueCache[cur.Key]; !ok {
-			return a, fetchIssueDetail(a.client, cur.Key), true
-		}
-		return a, nil, true
-
-	case ActDuplicateIssue:
-		if a.side == sideLeft && a.leftFocus == focusIssues {
-			m, cmd := a.startDuplicateIssue()
-			return m, cmd, true
-		}
-		return a, nil, true
-
-	case ActCreateIssue:
-		m, cmd := a.startCreateIssue()
-		return m, cmd, true
-
-	case ActCreateSubtask:
-		if a.canCreateSubtask() {
-			m, cmd := a.startCreateSubtask()
-			return m, cmd, true
-		}
-		return a, nil, true
-
-	case ActNew:
-		if a.side == sideLeft && a.leftFocus == focusIssues && a.projectKey != "" {
-			m, cmd := a.startCreateIssue()
-			return m, cmd, true
-		}
-		cur := a.currentIssue()
-		if cur == nil || a.side != sideRight || a.detailView.ActiveTab() != views.TabComments {
-			return a, nil, true
-		}
-		a.editContext = editCtx{kind: editCommentNew, issueKey: cur.Key}
-		return a, launchEditor("", ".md"), true
-
-	case ActPriority:
-		if cur := a.currentIssue(); cur != nil {
-			*a.logFlag = true
-			return a, fetchPriorities(a.client), true
-		}
-		return a, nil, true
-
-	case ActAssignee:
-		if cur := a.currentIssue(); cur != nil {
-			*a.logFlag = true
-			a.onSelect = a.makePersonSelectCallback(cur.Key, "assignee")
-			if cached, ok := a.usersCache[a.projectKey]; ok {
-				m, cmd := a.handleUsersLoaded(usersLoadedMsg{users: cached, issueKey: cur.Key})
-				return m, cmd, true
-			}
-			return a, fetchUsers(a.client, a.projectKey, cur.Key), true
-		}
-		return a, nil, true
+	case ActCheckout:
+		return a.handleActionCheckout()
 
 	case ActRefresh:
-		if a.previewKey != "" {
-			delete(a.issueCache, a.previewKey)
-			delete(a.childrenCache, a.previewKey)
-			*a.logFlag = true
-			cmds := []tea.Cmd{fetchIssueDetail(a.client, a.previewKey)}
-			if a.isCloud {
-				key := a.previewKey
-				cmds = append(cmds, func() tea.Msg { return views.ChildrenRequestMsg{Key: key} })
-			}
-			return a, tea.Batch(cmds...), true
-		}
-		return a, nil, true
+		return a.handleActionRefresh()
 
 	case ActRefreshAll:
-		return a, a.fetchActiveTab(), true
+		return a, a.refreshCmd(), true
 	}
 	return nil, nil, false
 }
 
-func (a *App) startDuplicateIssue() (tea.Model, tea.Cmd) {
-	source := a.currentIssue()
-	if source == nil || a.projectKey == "" {
-		return a, nil
+// browserURL is what `o` opens, which depends on what the user is looking at.
+func (a *App) browserURL() string {
+	if a.side == sideRight {
+		mode := a.detailView.Mode()
+		if mode == views.ModePipeline || mode == views.ModeStepLog {
+			if pipeline := a.detailView.Pipeline(); pipeline != nil {
+				if url := pipeline.HTMLURL(); url != "" {
+					return url
+				}
+			}
+			if status := a.buildsPanel.SelectedStatus(); status != nil {
+				return status.URL
+			}
+		}
+		if mode == views.ModeRepo {
+			// The panel is showing a repository, so `o` opens that repository
+			// rather than whichever pull request happens to be selected.
+			if repo := a.repoList.SelectedRepo(); repo != nil && repo.URL != "" {
+				return repo.URL
+			}
+		}
+		if pr := a.currentPullRequest(); pr != nil {
+			return pr.HTMLURL()
+		}
+		return ""
 	}
-	a.createCtx = createCtx{
-		intent:        true,
-		projectKey:    a.projectKey,
-		projectID:     a.projectID,
-		duplicateFrom: source,
-	}
-	*a.logFlag = true
-	return a, fetchIssueTypes(a.client, a.projectID)
-}
 
-// canCreateSubtask reports whether a subtask can be created for the parent under
-// the cursor on the active surface (issues list or info-panel Sub tab). Subtasks
-// and epics (hierarchyLevel > 0) are excluded; an unknown issue type is allowed
-// and validated by the API. The board project is irrelevant: the subtask follows
-// its parent's project.
-func (a *App) canCreateSubtask() bool {
-	parent := a.currentSubtaskParent()
-	if parent == nil {
-		return false
-	}
-	if parent.IssueType != nil && (parent.IssueType.Subtask || parent.IssueType.HierarchyLevel > 0) {
-		return false
-	}
-	return true
-}
-
-// currentSubtaskParent resolves the parent issue under the cursor for the active
-// surface: the selected issue when the issues list is focused, or the selected
-// Sub-tab child when the info panel is focused. Returns nil when no valid parent
-// is selectable. Gate and startCreateSubtask share it so they never diverge.
-func (a *App) currentSubtaskParent() *jira.Issue {
-	if a.side != sideLeft {
-		return nil
-	}
 	switch a.leftFocus {
-	case focusIssues:
-		return a.currentIssue()
-	case focusInfo:
-		return a.infoPanel.SelectedSubtaskIssue()
-	default:
-		return nil
-	}
-}
-
-func (a *App) startCreateSubtask() (tea.Model, tea.Cmd) {
-	parent := a.currentSubtaskParent()
-	if parent == nil {
-		return a, nil
-	}
-
-	// A subtask lives in its parent's project, which may differ from the board
-	// (cross-project JQL tab). Derive it from the parent, not the board.
-	projectKey := projectKeyFromIssueKey(parent.Key)
-	projectID, ok := a.resolveProjectID(projectKey)
-	if !ok {
-		a.statusPanel.SetError("Cannot create subtask in " + projectKey + ": project not found")
-		return a, nil
-	}
-
-	a.createCtx = createCtx{
-		intent:     true,
-		projectKey: projectKey,
-		projectID:  projectID,
-		parentKey:  parent.Key,
-	}
-	*a.logFlag = true
-	return a, fetchIssueTypes(a.client, projectID)
-}
-
-// projectKeyFromIssueKey returns the project key prefix of an issue key
-// ("PROJ" from "PROJ-123"). Jira project keys contain no hyphen, so the key is
-// everything before the last hyphen.
-func projectKeyFromIssueKey(issueKey string) string {
-	if i := strings.LastIndex(issueKey, "-"); i > 0 {
-		return issueKey[:i]
-	}
-	return issueKey
-}
-
-// resolveProjectID maps a project key to its numeric ID via the loaded project
-// list. The cloud issue-type endpoint requires the ID, not the key.
-func (a *App) resolveProjectID(projectKey string) (string, bool) {
-	for _, p := range a.projectList.AllProjects() {
-		if p.Key == projectKey {
-			return p.ID, true
+	case focusBuilds:
+		if status := a.buildsPanel.SelectedStatus(); status != nil {
+			return status.URL
+		}
+	case focusRepos:
+		if repo := a.repoList.SelectedRepo(); repo != nil {
+			return repo.URL
+		}
+	case focusPullRequests, focusStatus:
+		if pr := a.currentPullRequest(); pr != nil {
+			return pr.HTMLURL()
 		}
 	}
-	return "", false
+	return ""
 }
 
-func (a *App) startCreateIssue() (tea.Model, tea.Cmd) {
-	if a.projectKey == "" {
-		return a, nil
-	}
-	a.createCtx = createCtx{
-		intent:     true,
-		projectKey: a.projectKey,
-		projectID:  a.projectID,
-	}
-	*a.logFlag = true
-	return a, fetchIssueTypes(a.client, a.projectID)
-}
-
-func (a *App) handleActionSelect() (tea.Model, tea.Cmd) {
-	if cmd, ok := a.showChildren(); ok {
-		return a, cmd
-	}
-	switch {
-	case a.side == sideLeft && a.leftFocus == focusIssues:
-		return a.openIssueDetail()
-	case a.side == sideLeft && a.leftFocus == focusInfo:
-		if a.infoPanel.ActiveTab() == views.InfoTabFields {
-			if sel := a.issuesList.SelectedIssue(); sel != nil {
-				return a.editInfoField(sel)
-			}
-			return a, nil
-		}
-		return a.navigateToLinkedIssue()
-	case a.side == sideLeft && a.leftFocus == focusProjects:
-		return a.openProject()
-	}
-	return nil, nil
-}
-
-func (a *App) handleActionOpen() (tea.Model, tea.Cmd) {
-	switch {
-	case a.side == sideLeft && a.leftFocus == focusIssues:
-		return a.openIssueDetail()
-	case a.side == sideLeft && a.leftFocus == focusInfo:
-		if a.infoPanel.ActiveTab() == views.InfoTabFields {
-			if sel := a.issuesList.SelectedIssue(); sel != nil {
-				return a.editInfoField(sel)
-			}
-			return a, nil
-		}
-		return a.openLinkedIssueDetail()
-	case a.side == sideLeft && a.leftFocus == focusProjects:
-		return a.openProject()
-	}
-	return nil, nil
-}
-
-func (a *App) openIssueDetail() (tea.Model, tea.Cmd) {
-	if sel := a.issuesList.SelectedIssue(); sel != nil {
-		a.side = sideRight
-		a.updateFocusState()
-		return a, fetchIssueDetail(a.client, sel.Key)
-	}
-	return a, nil
-}
-
-func (a *App) openProject() (tea.Model, tea.Cmd) {
-	if p := a.projectList.SelectedProject(); p != nil {
-		prefetch := a.selectProject(p)
-		a.leftFocus = focusIssues
-		a.updateFocusState()
-		return a, tea.Batch(a.fetchActiveTab(), prefetch)
-	}
-	return a, nil
-}
-
-func (a *App) openLinkedIssueDetail() (tea.Model, tea.Cmd) {
-	key := a.infoPanelSelectedKey()
-	if key == "" {
-		return a, nil
-	}
-	a.side = sideRight
-	a.updateFocusState()
-	a.showCachedIssue(key)
-	return a, fetchIssueDetail(a.client, key)
-}
-
-func (a *App) navigateToLinkedIssue() (tea.Model, tea.Cmd) {
-	key := a.infoPanelSelectedKey()
-	if key == "" {
-		return a, nil
-	}
-	if tab, found := a.issuesList.FindInAnyTab(key); found {
-		if tab != a.issuesList.GetTabIndex() {
-			a.issuesList.SetTabIndex(tab)
-		}
-	} else if cached, ok := a.issueCache[key]; ok {
-		a.issuesList.InjectIssue(*cached)
-		a.issuesList.SetTabIndex(0)
-	}
-	a.issuesList.SelectByKey(key)
-	a.leftFocus = focusIssues
-	a.updateFocusState()
-	a.showCachedIssue(key)
-	return a, fetchIssueDetail(a.client, key)
-}
-
-// infoPanelSelectedKey returns the issue key under cursor in Lnk/Sub tabs, or ""
-func (a *App) infoPanelSelectedKey() string {
-	if key := a.infoPanel.SelectedLinkKey(); key != "" {
-		return key
-	}
-	return a.infoPanel.SelectedSubtaskKey()
-}
-
-// handleActionURLPicker shows the URL picker modal
-func (a *App) handleActionURLPicker() (tea.Model, tea.Cmd) {
-	if cur := a.currentIssue(); cur != nil {
-		groups := views.ExtractURLs(cur, a.cfg.Jira.Host)
-		if len(groups) > 0 {
-			var items []components.ModalItem
-			for i, g := range groups {
-				if i > 0 || len(groups) > 1 {
-					items = append(items, components.ModalItem{Label: g.Section, Separator: true})
-				}
-				for _, u := range g.URLs {
-					display := strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://")
-					if key := a.extractIssueKey(u); key != "" {
-						items = append(items, components.ModalItem{ID: u, Label: key + " " + display, Internal: true})
-					} else {
-						items = append(items, components.ModalItem{ID: u, Label: display})
-					}
-				}
-			}
-			a.onSelect = func(item components.ModalItem) tea.Cmd {
-				id := item.ID
-				if strings.HasPrefix(id, "http") {
-					if issueKey := a.extractIssueKey(id); issueKey != "" {
-						a.navigateToIssue(issueKey)
-						return nil
-					}
-					openBrowser(id)
-				}
-				return nil
-			}
-			a.modal.Show("URLs", items)
-		}
-	}
-	return a, nil
-}
-
-// handleActionEdit dispatches context-aware editing
-func (a *App) handleActionEdit() (tea.Model, tea.Cmd) {
-	cur := a.currentIssue()
-	if cur == nil {
-		return a, nil
-	}
-	if a.side == sideLeft && a.leftFocus == focusIssues {
-		a.inputModal.Show("Edit Summary", cur.Summary)
-		a.editContext = editCtx{kind: editSummary, issueKey: cur.Key}
-		return a, nil
-	}
-	if a.side == sideLeft && a.leftFocus == focusInfo {
-		if a.infoPanel.ActiveTab() == views.InfoTabFields {
-			// Fields tab shows the main list issue's fields; edit those.
-			if sel := a.issuesList.SelectedIssue(); sel != nil {
-				return a.editInfoField(sel)
-			}
-			return a, nil
-		}
-		// Sub or Lnk tab: edit the previewed issue's summary.
-		a.inputModal.Show("Edit Summary", cur.Summary)
-		a.editContext = editCtx{kind: editSummary, issueKey: cur.Key}
-		return a, nil
-	}
-	if a.side == sideRight && a.detailView.ActiveTab() == views.TabComments {
-		cmt := a.detailView.SelectedComment()
-		if cmt == nil {
-			return a, nil
-		}
-		md := ""
-		var convState any
-		if cmt.BodyADF != nil {
-			var err error
-			md, convState, err = a.converter.ToMarkdown(cmt.BodyADF)
-			if err != nil {
-				a.statusPanel.SetError("convert comment: " + err.Error())
-				return a, nil
-			}
-		} else if cmt.Body != "" {
-			md = cmt.Body
-		}
-		a.editContext = editCtx{kind: editCommentMod, issueKey: cur.Key, commentID: cmt.ID, converterState: convState}
-		return a, launchEditor(md, ".md")
-	}
-	md := ""
-	var convState any
-	if cur.DescriptionADF != nil {
-		var err error
-		md, convState, err = a.converter.ToMarkdown(cur.DescriptionADF)
-		if err != nil {
-			a.statusPanel.SetError("convert description: " + err.Error())
-			return a, nil
-		}
-	} else if cur.Description != "" {
-		md = cur.Description
-	}
-	a.editContext = editCtx{kind: editDesc, issueKey: cur.Key, converterState: convState}
-	return a, launchEditor(md, ".md")
-}
-
-// handleActionCreateBranch opens the branch creation input
-func (a *App) handleActionCreateBranch() (tea.Model, tea.Cmd) {
-	if a.side != sideLeft || a.leftFocus != focusIssues {
-		return a, nil
+// handleActionCheckout checks out the selected pull request's source branch.
+func (a *App) handleActionCheckout() (tea.Model, tea.Cmd, bool) {
+	pr := a.currentPullRequest()
+	if pr == nil {
+		return a, nil, true
 	}
 	if a.gitRepoPath == "" {
-		a.statusPanel.SetError("not a git repository")
+		a.statusPanel.SetError("not inside a git repository")
+		return a, nil, true
+	}
+	branch := pr.SourceBranch()
+	if branch == "" {
+		return a, nil, true
+	}
+	return a, a.gitCheckoutBranch(branch), true
+}
+
+// handleActionRefresh drops the selected pull request's caches and refetches
+// its detail and statuses.
+func (a *App) handleActionRefresh() (tea.Model, tea.Cmd, bool) {
+	pr := a.currentPullRequest()
+	if pr == nil {
+		return a, nil, true
+	}
+	key := pr.Key()
+	delete(a.prCache, key)
+	delete(a.statusCache, key)
+	a.previewEpoch++
+	a.logFlag.Store(true)
+	return a, tea.Batch(
+		a.fetchStatuses(pr, a.previewEpoch),
+		a.fetchPullRequestDetail(pr, a.previewEpoch),
+	), true
+}
+
+// handleActivate is Enter and space: open the pull request detail, drill into a
+// build, or apply a repository filter.
+func (a *App) handleActivate() (tea.Model, tea.Cmd) {
+	if a.side != sideLeft {
+		// The detail panel handles activation itself (a pipeline step's log).
+		return nil, nil
+	}
+	switch a.leftFocus {
+	case focusPullRequests:
+		if a.prList.SelectedPullRequest() == nil {
+			return a, nil
+		}
+		a.side = sideRight
+		a.updateFocusState()
+		return a, nil
+	case focusBuilds:
+		return a.openBuild(a.buildsPanel.SelectedStatus())
+	case focusRepos:
+		return a, a.selectRepo(a.repoList.SelectedRepo())
+	case focusStatus:
 		return a, nil
 	}
-	sel := a.currentIssue()
-	if sel == nil {
+	return a, nil
+}
+
+// handleActionURLPicker opens every URL reachable from the pull request.
+func (a *App) handleActionURLPicker() (tea.Model, tea.Cmd) {
+	pr := a.currentPullRequest()
+	if pr == nil {
 		return a, nil
 	}
-	parts := strings.SplitN(sel.Key, "-", 2)
-	projKey := parts[0]
-	number := ""
-	if len(parts) > 1 {
-		number = parts[1]
+	groups := views.ExtractURLs(pr, a.statusCache[pr.Key()].statuses)
+	if len(groups) == 0 {
+		return a, nil
 	}
-	typeName := ""
-	if sel.IssueType != nil {
-		typeName = sel.IssueType.Name
-	}
-	if a.cfg.Git.AsciiOnly {
-		typeName = ascii.Convert(typeName)
-	}
-	parentKey := ""
-	if sel.Parent != nil {
-		parentKey = sel.Parent.Key
-	}
-	data := git.BranchTemplateData{
-		Key:        sel.Key,
-		ProjectKey: projKey,
-		Number:     number,
-		Summary:    git.SanitizeSummary(sel.Summary, a.cfg.Git.AsciiOnly),
-		Type:       typeName,
-		ParentKey:  parentKey,
-	}
-	tmplStr := ""
-	for _, r := range a.cfg.Git.BranchFormat {
-		if r.When.Type == "*" || strings.EqualFold(r.When.Type, typeName) {
-			tmplStr = r.Template
-			break
+
+	var items []components.ModalItem
+	for i, group := range groups {
+		if i > 0 || len(groups) > 1 {
+			items = append(items, components.ModalItem{Label: group.Section, Separator: true})
+		}
+		for _, url := range group.URLs {
+			display := strings.TrimPrefix(strings.TrimPrefix(url, "https://"), "http://")
+			items = append(items, components.ModalItem{ID: url, Label: display})
 		}
 	}
-	name := git.GenerateBranchName(data, tmplStr)
-	a.inputModal.Show("Create branch", name)
-	a.editContext = editCtx{kind: editBranch}
-	if result, err := git.SearchBranches(a.gitRepoPath, sel.Key); err == nil {
-		hints := make([]string, 0, len(result.Local)+len(result.Remote))
-		hints = append(hints, result.Local...)
-		hints = append(hints, result.Remote...)
-		if len(hints) > 0 {
-			a.inputModal.SetHints(hints)
+	a.onSelect = func(item components.ModalItem) tea.Cmd {
+		if strings.HasPrefix(item.ID, "http") {
+			a.openBrowser(item.ID)
 		}
+		return nil
 	}
+	a.modal.Show("URLs", items)
 	return a, nil
 }

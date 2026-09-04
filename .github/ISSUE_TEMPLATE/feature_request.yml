@@ -6,7 +6,7 @@ body:
     id: problem
     attributes:
       label: Problem
-      placeholder: What are you trying to do that lazyjira doesn't support?
+      placeholder: What are you trying to do that lazybitbucket doesn't support?
     validations:
       required: true
   - type: textarea

@@ -13,93 +13,127 @@ integration, release packaging. What it does not have is any concept of a pull r
 
 ## Current status
 
-The fork, the repo rename, and the Go module rename are **done**. The domain port has **not started**.
+ROADMAP steps 0 and 1 are **implemented**. The domain layer is Bitbucket, `pkg/jira` is gone, and the
+binary, config dir and packaging are renamed.
 
-As of now this is still functionally lazyjira with a new module path. `pkg/jira` is untouched Jira code,
-the binary is still `lazyjira`, and the config still lives in `~/.config/lazyjira`. Do not assume any
-Bitbucket support exists yet.
+What exists:
 
-## Port plan
+- `pkg/bitbucket` — read-only Bitbucket Cloud REST client (auth, pagination, `APIError` + predicates,
+  concurrent multi-repo PR fetch), `pkg/bitbucket/bitbuckettest` (strict fake client) and
+  `pkg/bitbucket/demo` (deterministic dataset + fake REST server, an ordinary untagged package used by
+  `--demo` and by integration tests).
+- `pkg/config` — `bitbucket` (workspace, repositories, email, baseUrl), `pullRequestTabs`,
+  `gui.pullRequestListFields`, `refreshInterval`, custom command contexts
+  `pullrequests`/`builds`/`repos`/`detail`.
+- `pkg/tui` — panels Status `[1]`, Pull Requests `[2]`, Builds `[3]`, Repos `[4]`, Detail `[0]`. PR list
+  with Open/Mine/Reviewing tabs and configurable columns, detail pane with Markdown descriptions via
+  glamour, Builds panel with drill-down into a pipeline run, its steps and each step's log, repo filter,
+  `/` search, URL picker, copy URL, browser hand-off, source-branch checkout, custom commands, themes,
+  and a `refreshInterval` auto-refresh of the active tab.
+- `cmd/lazybitbucket` — CLI (`auth`, `logout`, `version`; `--demo --log --debug --workspace --repo`),
+  credential wizard.
 
-| Package | Files | Plan |
+Hard constraints that still hold:
+
+- **The client has no write methods.** Nothing in the tool issues a non-GET request to Bitbucket.
+  Merging, approving, commenting and editing are later roadmap steps.
+- No test touches the network. Unit tests use `bitbuckettest.FakeClient` or `httptest`; integration
+  tests use `pkg/bitbucket/demo`.
+- `pkg/bitbucket` and `pkg/bitbucket/demo` import nothing from `pkg/tui` or `pkg/config`.
+
+Not built yet (ROADMAP step 2+): diff pane, review threads, commits list, editor integration on files,
+and every write operation. The detail pane therefore has a single tab (Overview), and `config.Editor` /
+`ResolveEditor` are validated but unused — nothing opens an editor yet. ROADMAP step 2 still lists
+custom commands as unchecked; they are in fact implemented.
+
+## Port plan (done)
+
+| Package | Plan | Outcome |
 | --- | --- | --- |
-| `pkg/tui` | 155 | **Reuse.** The main asset. Add PR-shaped panes; keep the app/message/navstack structure. |
-| `pkg/jira` | 26 | **Replace** with `pkg/bitbucket`. New client, models, and rendering. |
-| `pkg/git` | 10 | **Reuse** mostly as-is — branch ops and branch-name generation carry over. |
-| `pkg/config` | 6 | **Adapt.** Auth moves from Jira token to Bitbucket app password / access token. |
-| `pkg/ascii` | 2 | Reuse. |
-| `cmd/lazyjira` | 4 | **Rename** to `cmd/lazybitbucket`. |
+| `pkg/tui` | **Reuse** — the main asset | Kept. Panes renamed and re-shaped for PRs; app/message/layout structure unchanged. JQL, create/edit/transition, mentions, hierarchy, ADF and the navstack were deleted |
+| `pkg/jira` | **Replace** with `pkg/bitbucket` | Deleted. `pkg/bitbucket` + `bitbuckettest` + `demo` replace it |
+| `pkg/git` | **Reuse** mostly as-is | Kept; branch checkout carries over |
+| `pkg/config` | **Adapt** | New schema; auth is an API token or access token |
+| `pkg/ascii` | Reuse | Kept |
+| `cmd/lazyjira` | **Rename** | `cmd/lazybitbucket` |
 
-### Coupling is shallower than it looks (measured)
-
-Of the 155 Go files in `pkg/tui`, only **20 non-test files** import `pkg/jira` (56 test files do).
-And `pkg/jira` imports **nothing** from `pkg/tui` — the dependency runs one way.
-
-So the domain swap is a bounded job against ~20 files plus their tests, not a rewrite of the TUI. Verify
-this before relying on it:
-
-```
-grep -rl 'lazybitbucket/pkg/jira' pkg/tui --include='*.go' | grep -v _test | wc -l
-```
-
-### The domain shapes do not line up
-
-This is the real work, and it is not a find-and-replace. A Jira issue is a flat bag of fields; a Bitbucket
-PR is a composite of several resources fetched separately:
-
-- **diff** — per-file hunks, with no Jira analogue at all. Needs a new pane and a syntax-highlighted
-  viewer (`chroma` is already a dependency).
-- **review threads** — comments anchored to a file *and line*, and nested. Jira comments are a flat list.
-- **commits** — a list per PR.
-- **build statuses / pipelines** — pass/fail state to surface per PR.
-- **approvals** — reviewer state (approved / changes requested / none).
-
-Expect to add panes rather than just re-label existing ones. Jira's ADF rendering
-(`seflue/adf-converter`) is Atlassian-wiki-specific; Bitbucket PR descriptions and comments are Markdown,
-so that dependency can likely go away in favour of the existing `glamour` renderer.
+The domain shapes never lined up — a Jira issue is a flat bag of fields, a Bitbucket PR is a composite
+of resources fetched separately (detail, statuses, pipelines, steps). That is why the port added panes
+rather than re-labelling existing ones, and why the app caches per PR key (`workspace/slug#id`).
+`seflue/adf-converter` is gone: Bitbucket descriptions and comments are Markdown, rendered with
+`glamour`.
 
 ## Build and test
 
 ```
 go build ./...        # or: make build
-go test ./...         # or: make test
+go test -race ./...   # or: make test
 make check            # lint + vet + build + test
+make check-demo       # lint + vet + build with -tags demo
 make lint-fix
 make tidy
 ```
 
-Baseline before the domain port: `go build ./...` clean, all 12 test packages passing. Keep it that way —
-if a change makes the suite red, that is a regression, not the starting state.
+`go build ./...` clean and `go test -race ./...` green is the baseline. If a change makes the suite red,
+that is a regression, not the starting state.
 
 Go 1.25+ (toolchain declared in `go.mod`). Nix flake and goreleaser config are inherited and work.
+`--demo` needs `make build-demo`: only `cmd/lazybitbucket/demo.go` is behind the `demo` build tag.
 
 ## Repo setup
 
 - Module: `github.com/lsst25/lazybitbucket` (no `/v2` — versioning restarts for this project)
 - `origin` → `git@github.com:lsst25/lazybitbucket.git`
 - `upstream` → `git@github.com:textfuel/lazyjira.git`, so `git fetch upstream && git merge upstream/main`
-  can still pull their fixes. Expect conflicts in `pkg/jira` once that package is replaced.
+  can still pull their fixes. `pkg/jira` no longer exists here, so upstream changes to it do not apply;
+  expect conflicts in `pkg/tui` and `pkg/config` instead.
 - **No tags.** The 49 inherited upstream tags were deleted so releases can start clean.
 - `fetch.pruneTags = false` is set repo-locally on purpose. The global `~/.gitconfig` sets it to `true`,
   which forces an explicit `refs/tags/*` refspec onto every fetch and would re-sync all 49 upstream tags
   back on the next `git fetch upstream`. `--no-tags` cannot suppress that. Do not "clean up" this override.
 
-## Renames still pending
+## Naming and paths
 
-Deliberately not done yet — they touch packaging and user-visible behaviour:
+Everything user-visible is `lazybitbucket`:
 
-- `cmd/lazyjira/` → `cmd/lazybitbucket/`, and the binary name. Touches `Makefile`, `.goreleaser.yml`,
-  `.golangci.yml:74`, `flake.nix`, `nix/`, `aur/lazyjira-git/PKGBUILD`, `e2e/tape.sh`, docs.
-- Config dir, in `pkg/config/config.go:341-357` — `LAZYJIRA_CONFIG_DIR` env var and the
-  `~/.config/lazyjira` path. This is user-visible behaviour, not just a string swap.
-- Upstream URLs in `README.md`, `CONTRIBUTING.md`, `.goreleaser.yml`, `nix/package.nix`, the AUR PKGBUILD.
-  Note the `CHANGELOG.md` compare links **should** stay pointed at upstream — that is accurate history.
+- Binary `lazybitbucket`, built from `./cmd/lazybitbucket`.
+- Config dir resolution (`pkg/config`): `LAZYBITBUCKET_CONFIG_DIR` → `$XDG_CONFIG_HOME/lazybitbucket` →
+  `os.UserConfigDir()/lazybitbucket` → `~/.config/lazybitbucket`. Files: `config.yml`, `auth.json` (0600).
+- Env overrides: `BITBUCKET_WORKSPACE`, `BITBUCKET_REPOSITORIES`, `BITBUCKET_EMAIL`, `BITBUCKET_TOKEN`,
+  `BITBUCKET_API_URL`.
+- Packaging: GitHub `lsst25/lazybitbucket`, brew tap `lsst25/homebrew-tap`, AUR `lazybitbucket-bin` and
+  `lazybitbucket-git`, nix attr `.#lazybitbucket`, nfpm package `lazybitbucket`.
+- `LICENSE` keeps the upstream copyright notice, and the `CHANGELOG.md` compare links **stay** pointed at
+  upstream — that is accurate history. Everything below the `[Unreleased]` section is upstream's.
+
+Auth: Atlassian removed app passwords on 2026-07-28. There is no app-password mode. Two credential
+shapes: a token alone (API token or access token) sent as `Authorization: Bearer`, or an Atlassian
+account email plus an API token sent as HTTP Basic — the Basic username must be the **account email**,
+not a Bitbucket username, or the server answers 401.
 
 ## Conventions
 
-- Match the surrounding lazyjira style. It is a well-linted codebase (`.golangci.yml` is strict —
-  `exhaustruct`, `wrapcheck`, `funlen` and friends are on). Run `make lint` before assuming a change is done.
-- Tests sit next to their subject as `*_test.go` and are plentiful. New domain code gets tests; the fake
-  server pattern in `pkg/jira/demoserver.go` and `pkg/jira/jiratest/fake.go` is the model to copy for
-  `pkg/bitbucket`.
+- Match the surrounding lazyjira style. It is a well-linted codebase; run `make lint` before assuming a
+  change is done.
+- `.golangci.yml` is strict but **does not** enable `exhaustruct`, `wrapcheck` or `funlen` — do not write
+  code as if it did. What is on and bites in practice:
+  - `unused` — an unused unexported function fails the build. Delete dead code rather than keeping it
+    "for later".
+  - `exhaustive` with `default-signifies-exhaustive: true` — every switch over an API enum needs a
+    `default:` branch. All wire enums are open `string` types.
+  - `errorlint` — `errors.As`/`errors.Is`, `%w` when wrapping.
+  - `noctx`, `bodyclose`, `nilerr`, `gosec`, `gocritic`, `revive`, `misspell`, `nakedret`.
+  - `goconst` with `min-occurrences: 4` — a string repeated four times needs a constant. In test files
+    that means a `testconsts_test.go`.
+  - `gocognit` with `min-complexity: 50`.
+  - `prealloc`, `unconvert`, `perfsprint`, `intrange`, `modernize`, `copyloopvar`, `fatcontext`.
+  - Tests: `thelper`, `tparallel`, `paralleltest`, `usetesting`, `testableexamples`.
+  - Existing exclusions live at the bottom of `.golangci.yml`; add one only with a comment saying why.
+- Tests sit next to their subject as `*_test.go` and are plentiful. Internal test package, `t.Parallel()`
+  unless the test calls `t.Setenv`, `t.Context()` over `context.Background()`, `testkit.AssertEqual`,
+  inline fixtures, no golden files, no `//nolint` in tests.
+- `pkg/tui` test helpers live in `pkg/tui/testsupport_test.go` — `newTestApp`, `newAppWithFake`,
+  `sizedApp`, `runAll`, `collectMsgs`, `newPR`/`withAuthor`/`withReviewer`/`newStatus`, `plain`,
+  `runeKey`. Build an app or a fixture from there instead of hand-rolling one; shared string literals
+  for tests sit in the package's `testconsts_test.go`.
 - Keep the Bitbucket client free of TUI imports; the domain layer must stay independently testable.

@@ -1,74 +1,83 @@
 package tui
 
 import (
-	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 
-	"github.com/lsst25/lazybitbucket/pkg/jira"
-	"github.com/lsst25/lazybitbucket/pkg/jira/jiratest"
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
 )
-
-var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
-
-func plain(s string) string {
-	return ansiRe.ReplaceAllString(s, "")
-}
 
 func appForView(t *testing.T) *App {
 	t.Helper()
-	app := newAppWithFake(t, &jiratest.FakeClient{T: t})
-	app.keymap = DefaultKeymap()
-	app.width = 120
-	app.height = 40
-	app.layoutPanels()
+	app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
 	app.updateFocusState()
 	return app
 }
 
 func TestView_LoadingBeforeWidthSet(t *testing.T) {
 	t.Parallel()
-	app := newAppWithFake(t, &jiratest.FakeClient{T: t})
+	app := newAppWithFake(t, &bitbuckettest.FakeClient{T: t})
 
 	output := app.View()
 
 	if output != "Loading..." {
-		t.Errorf("expected Loading..., got %q", output)
+		t.Errorf("View() = %q, want Loading...", output)
 	}
 }
 
-func TestView_HorizontalLayout(t *testing.T) {
+func TestView_HorizontalLayoutShowsPullRequest(t *testing.T) {
 	t.Parallel()
 	app := appForView(t)
-	app.issuesList.SetIssues([]jira.Issue{{Key: testKey, Summary: testSummary}})
+	app.prList.SetPullRequests([]bitbucket.PullRequest{newPR(testRepo, 101, testTitle)})
 
-	output := app.View()
+	stripped := plain(app.View())
 
-	if output == "" {
-		t.Fatal("View() returned empty string")
+	if !strings.Contains(stripped, "#101") {
+		t.Errorf("view should list #101:\n%s", stripped)
 	}
-	stripped := plain(output)
-	if stripped == "" {
-		t.Error("stripped output should not be empty")
+	if !strings.Contains(stripped, "api-gate") {
+		t.Errorf("view should name the repository:\n%s", stripped)
 	}
 }
 
 func TestView_VerticalLayout(t *testing.T) {
 	t.Parallel()
-	app := newAppWithFake(t, &jiratest.FakeClient{T: t})
-	app.keymap = DefaultKeymap()
+	app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
 	app.width = 60
-	app.height = 40
 	app.layoutPanels()
 	app.updateFocusState()
-	app.issuesList.SetIssues([]jira.Issue{{Key: testKey, Summary: testSummary}})
+	app.prList.SetPullRequests([]bitbucket.PullRequest{newPR(testRepo, 101, testTitle)})
 
-	output := app.View()
-
-	if output == "" {
-		t.Fatal("View() returned empty string")
-	}
 	if !app.isVerticalLayout() {
-		t.Error("expected vertical layout for 60-col terminal")
+		t.Fatal("60 columns should be a vertical layout")
+	}
+	if plain(app.View()) == "" {
+		t.Error("vertical View() returned nothing")
+	}
+}
+
+func TestView_RateLimitWarningFromTheAtomic(t *testing.T) {
+	t.Parallel()
+	app := appForView(t)
+	app.rateLimit.Store(150 + 1)
+
+	stripped := plain(app.View())
+
+	if !strings.Contains(stripped, "rate limit") {
+		t.Errorf("a low rate limit should reach the status panel:\n%s", stripped)
+	}
+}
+
+func TestView_NoRateLimitLineWhenUnknown(t *testing.T) {
+	t.Parallel()
+	app := appForView(t)
+
+	stripped := plain(app.View())
+
+	if strings.Contains(stripped, "rate limit") {
+		t.Errorf("an unknown rate limit must render nothing:\n%s", stripped)
 	}
 }
 
@@ -77,55 +86,64 @@ func TestView_ShowHelpOverlay(t *testing.T) {
 	app := appForView(t)
 	app.showHelp = true
 
-	output := app.View()
+	stripped := plain(app.View())
 
-	stripped := plain(output)
-	if stripped == "" {
-		t.Error("help overlay output should not be empty")
+	if !strings.Contains(stripped, "Keybindings") {
+		t.Errorf("help overlay missing:\n%s", stripped)
 	}
 }
 
-func TestView_ShowHelpOverlay_WithFilter(t *testing.T) {
+func TestView_ShowHelpOverlayWithFilter(t *testing.T) {
 	t.Parallel()
 	app := appForView(t)
 	app.showHelp = true
 	app.helpFilter = string(ActQuit)
 
-	output := app.View()
-
-	stripped := plain(output)
-	if stripped == "" {
-		t.Error("filtered help overlay output should not be empty")
+	if plain(app.View()) == "" {
+		t.Error("filtered help overlay rendered nothing")
 	}
 }
 
-func TestView_NoPanic_AllFocusStates(t *testing.T) {
+// TestView_ShowHelpOverlayInATinyTerminal pins the clamps around the help
+// popup: a terminal shorter than the popup's own chrome used to compute a
+// negative inner height and panic the renderer out of View().
+func TestView_ShowHelpOverlayInATinyTerminal(t *testing.T) {
+	t.Parallel()
+
+	sizes := []struct {
+		width, height int
+	}{
+		{120, 1}, {120, 2}, {120, 3}, {120, 4}, {120, 5},
+		{10, 3}, {6, 1}, {1, 1},
+	}
+
+	for _, size := range sizes {
+		t.Run(strconv.Itoa(size.width)+"x"+strconv.Itoa(size.height), func(t *testing.T) {
+			t.Parallel()
+			app := appForView(t)
+			app.showHelp = true
+			app.width, app.height = size.width, size.height
+			app.layoutPanels()
+
+			// The assertion is that View does not panic; the output of a
+			// terminal this small is not worth pinning.
+			_ = app.View()
+		})
+	}
+}
+
+func TestView_NoPanicInAnyFocusState(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name  string
 		setup func(*App)
 	}{
-		{
-			name:  "left issues",
-			setup: func(app *App) { app.side = sideLeft; app.leftFocus = focusIssues },
-		},
-		{
-			name:  "left info",
-			setup: func(app *App) { app.side = sideLeft; app.leftFocus = focusInfo },
-		},
-		{
-			name:  "left projects",
-			setup: func(app *App) { app.side = sideLeft; app.leftFocus = focusProjects },
-		},
-		{
-			name:  "left status",
-			setup: func(app *App) { app.side = sideLeft; app.leftFocus = focusStatus },
-		},
-		{
-			name:  "right side",
-			setup: func(app *App) { app.side = sideRight },
-		},
+		{"pull requests", func(app *App) { app.side, app.leftFocus = sideLeft, focusPullRequests }},
+		{"builds", func(app *App) { app.side, app.leftFocus = sideLeft, focusBuilds }},
+		{"repos", func(app *App) { app.side, app.leftFocus = sideLeft, focusRepos }},
+		{"status", func(app *App) { app.side, app.leftFocus = sideLeft, focusStatus }},
+		{"detail", func(app *App) { app.side = sideRight }},
 	}
 
 	for _, testCase := range cases {
@@ -135,9 +153,8 @@ func TestView_NoPanic_AllFocusStates(t *testing.T) {
 			testCase.setup(app)
 			app.updateFocusState()
 
-			output := app.View()
-			if output == "" {
-				t.Error("View() returned empty string")
+			if app.View() == "" {
+				t.Error("View() returned an empty string")
 			}
 		})
 	}

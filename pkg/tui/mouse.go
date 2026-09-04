@@ -2,17 +2,15 @@ package tui
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
 type panelID int
 
 const (
 	panelStatus panelID = iota
-	panelIssues
-	panelInfo
-	panelProjects
+	panelPullRequests
+	panelBuilds
+	panelRepos
 	panelDetail
 	panelLog
 )
@@ -41,18 +39,18 @@ func (a *App) hitTest(x, y int) (panelID, int) {
 			return panelStatus, y - top
 		}
 		top += a.panelStatusH
-		if y < top+a.panelIssuesH {
-			return panelIssues, y - top
+		if y < top+a.panelPRH {
+			return panelPullRequests, y - top
 		}
-		top += a.panelIssuesH
-		if y < top+a.panelInfoH {
-			return panelInfo, y - top
+		top += a.panelPRH
+		if y < top+a.panelBuildsH {
+			return panelBuilds, y - top
 		}
-		top += a.panelInfoH
-		if y < top+a.panelProjectsH {
-			return panelProjects, y - top
+		top += a.panelBuildsH
+		if y < top+a.panelReposH {
+			return panelRepos, y - top
 		}
-		top += a.panelProjectsH
+		top += a.panelReposH
 		if y < top+a.panelDetailH {
 			return panelDetail, y - top
 		}
@@ -66,15 +64,15 @@ func (a *App) hitTest(x, y int) (panelID, int) {
 			return panelStatus, y - top
 		}
 		top += a.panelStatusH
-		if y < top+a.panelIssuesH {
-			return panelIssues, y - top
+		if y < top+a.panelPRH {
+			return panelPullRequests, y - top
 		}
-		top += a.panelIssuesH
-		if y < top+a.panelInfoH {
-			return panelInfo, y - top
+		top += a.panelPRH
+		if y < top+a.panelBuildsH {
+			return panelBuilds, y - top
 		}
-		top += a.panelInfoH
-		return panelProjects, y - top
+		top += a.panelBuildsH
+		return panelRepos, y - top
 	}
 
 	// Right side.
@@ -85,124 +83,93 @@ func (a *App) hitTest(x, y int) (panelID, int) {
 }
 
 func (a *App) mouseScroll(panel panelID, delta int) (tea.Model, tea.Cmd) {
-	switch panel { //nolint:exhaustive
-	case panelIssues:
-		if a.side != sideLeft || a.leftFocus != focusIssues {
-			a.side = sideLeft
-			a.leftFocus = focusIssues
-			a.updateFocusState()
-		}
-		if delta > 0 {
-			a.issuesList.ScrollBy(1)
-		} else {
-			a.issuesList.ScrollBy(-1)
-		}
-		if sel := a.issuesList.SelectedIssue(); sel != nil {
-			return a.Update(views.IssueSelectedMsg{Issue: sel})
-		}
-	case panelInfo:
-		if a.side != sideLeft || a.leftFocus != focusInfo {
-			a.side = sideLeft
-			a.leftFocus = focusInfo
-			a.updateFocusState()
-		}
-		if delta > 0 {
-			a.infoPanel.ScrollBy(1)
-		} else {
-			a.infoPanel.ScrollBy(-1)
-		}
-	case panelProjects:
-		if a.side != sideLeft || a.leftFocus != focusProjects {
-			a.side = sideLeft
-			a.leftFocus = focusProjects
-			a.updateFocusState()
-		}
-		if delta > 0 {
-			a.projectList.ScrollBy(1)
-		} else {
-			a.projectList.ScrollBy(-1)
-		}
-		if p := a.projectList.SelectedProject(); p != nil {
-			a.detailView.SetProject(p)
+	step := 1
+	if delta < 0 {
+		step = -1
+	}
+
+	switch panel { //nolint:exhaustive // the log panel and the status panel do not scroll
+	case panelPullRequests:
+		a.focusLeftPanel(focusPullRequests)
+		a.prList.ScrollBy(step)
+		return a, a.previewSelected()
+	case panelBuilds:
+		a.focusLeftPanel(focusBuilds)
+		a.buildsPanel.ScrollBy(step)
+	case panelRepos:
+		a.focusLeftPanel(focusRepos)
+		a.repoList.ScrollBy(step)
+		if repo := a.repoList.SelectedRepo(); repo != nil {
+			a.detailView.SetRepo(repo)
 		}
 	case panelDetail:
 		if a.side != sideRight {
 			a.side = sideRight
 			a.updateFocusState()
 		}
-		if delta > 0 {
-			a.detailView.ScrollBy(1)
-		} else {
-			a.detailView.ScrollBy(-1)
-		}
+		a.detailView.ScrollBy(step)
 	}
 	return a, nil
 }
 
-func (a *App) mouseClick(panel panelID, relY int, x int) (tea.Model, tea.Cmd) {
-	switch panel { //nolint:exhaustive
-	case panelStatus:
-		a.side = sideLeft
-		a.leftFocus = focusStatus
-		a.splashInfo.Project = a.projectKey
-		a.detailView.SetSplash(a.splashInfo)
-		a.updateFocusState()
+// focusLeftPanel moves focus to a left panel if it is not already there.
+func (a *App) focusLeftPanel(panel focusPanel) {
+	if a.side == sideLeft && a.leftFocus == panel {
+		return
+	}
+	a.side = sideLeft
+	a.leftFocus = panel
+	a.updateFocusState()
+}
 
-	case panelIssues:
-		a.side = sideLeft
-		a.leftFocus = focusIssues
-		a.updateFocusState()
+func (a *App) mouseClick(panel panelID, relY, x int) (tea.Model, tea.Cmd) {
+	switch panel { //nolint:exhaustive // clicking the log panel does nothing
+	case panelStatus:
+		a.focusLeftPanel(focusStatus)
+		a.showSplash()
+
+	case panelPullRequests:
+		a.focusLeftPanel(focusPullRequests)
 		if relY == 0 {
 			// Title bar — tab click.
-			if a.issuesList.ClickTabAt(x) && !a.issuesList.HasCachedTab() {
-				return a, a.fetchActiveTab()
+			if a.prList.ClickTabAt(x) && !a.prList.HasCachedTab() {
+				return a, a.refreshCmd()
 			}
-		} else if dbl := a.issuesList.ClickAt(relY); dbl {
-			return a.openIssueDetail()
-		} else if sel := a.issuesList.SelectedIssue(); sel != nil {
-			return a.Update(views.IssueSelectedMsg{Issue: sel})
+			return a, a.previewSelected()
+		}
+		a.prList.ClickAt(relY)
+		return a, a.previewSelected()
+
+	case panelBuilds:
+		a.focusLeftPanel(focusBuilds)
+		if relY > 0 && a.buildsPanel.ClickAt(relY) {
+			return a.openBuild(a.buildsPanel.SelectedStatus())
 		}
 
-	case panelInfo:
-		a.side = sideLeft
-		a.leftFocus = focusInfo
-		a.updateFocusState()
-		if relY == 0 {
-			a.infoPanel.ClickTabAt(x)
-			return a, a.infoPanel.MaybeChildrenRequest()
+	case panelRepos:
+		a.focusLeftPanel(focusRepos)
+		if dbl := a.repoList.ClickAt(relY); dbl {
+			return a, a.selectRepo(a.repoList.SelectedRepo())
 		}
-		a.infoPanel.ClickAt(relY)
-
-	case panelProjects:
-		a.side = sideLeft
-		a.leftFocus = focusProjects
-		a.updateFocusState()
-		if dbl := a.projectList.ClickAt(relY); dbl {
-			// Double-click → select project (same as Enter).
-			if p := a.projectList.SelectedProject(); p != nil {
-				prefetch := a.selectProject(p)
-				a.leftFocus = focusIssues
-				a.updateFocusState()
-				return a, tea.Batch(a.fetchActiveTab(), prefetch)
-			}
-		} else if p := a.projectList.SelectedProject(); p != nil {
-			a.detailView.SetProject(p)
+		if repo := a.repoList.SelectedRepo(); repo != nil {
+			a.detailView.SetRepo(repo)
 		}
 
 	case panelDetail:
-		a.side = sideRight
-		a.updateFocusState()
+		if a.side != sideRight {
+			a.side = sideRight
+			a.updateFocusState()
+		}
 		if relY == 0 {
-			// Title bar → tab click.
 			relX := x
 			if !a.isVerticalLayout() {
 				relX = x - a.panelSideW
 			}
 			a.detailView.ClickTab(relX)
-		} else {
-			if cmd := a.detailView.ClickItem(relY); cmd != nil {
-				return a, cmd
-			}
+			return a, nil
+		}
+		if cmd := a.detailView.ClickItem(relY); cmd != nil {
+			return a, cmd
 		}
 	}
 	return a, nil

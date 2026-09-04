@@ -3,96 +3,17 @@ package tui
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/lsst25/lazybitbucket/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
-	"github.com/lsst25/lazybitbucket/pkg/jira"
-	"github.com/lsst25/lazybitbucket/pkg/jira/jiratest"
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
 func mouseApp(t *testing.T) *App {
 	t.Helper()
-	app := appWithPanelDims(t, 120)
-	app.keymap = DefaultKeymap()
-	return app
+	return appWithPanelDims(t, 120)
 }
 
-func TestHandleMouse_WheelUpScrollsUp(t *testing.T) {
-	t.Parallel()
-	app := mouseApp(t)
-	app.side = sideLeft
-	app.leftFocus = focusIssues
-	app.issuesList.SetIssues([]jira.Issue{{Key: testKey}, {Key: mainKey}, {Key: subKey1}})
-	app.issuesList.Cursor = 1
-
-	_, _ = app.handleMouse(tea.MouseMsg{
-		Button: tea.MouseButtonWheelUp,
-		Action: tea.MouseActionPress,
-		X:      5,
-		Y:      3,
-	})
-
-	if app.issuesList.Cursor != 0 {
-		t.Errorf("cursor = %d, want 0 after wheel up", app.issuesList.Cursor)
-	}
-}
-
-func TestHandleMouse_WheelDownScrollsDown(t *testing.T) {
-	t.Parallel()
-	app := mouseApp(t)
-	app.side = sideLeft
-	app.leftFocus = focusIssues
-	app.issuesList.SetIssues([]jira.Issue{{Key: testKey}, {Key: mainKey}, {Key: subKey1}})
-
-	_, _ = app.handleMouse(tea.MouseMsg{
-		Button: tea.MouseButtonWheelDown,
-		Action: tea.MouseActionPress,
-		X:      5,
-		Y:      3,
-	})
-
-	if app.issuesList.Cursor != 1 {
-		t.Errorf("cursor = %d, want 1 after wheel down", app.issuesList.Cursor)
-	}
-}
-
-func TestHandleMouse_LeftClickFocusesPanel(t *testing.T) {
-	t.Parallel()
-	app := mouseApp(t)
-	app.side = sideRight
-
-	_, _ = app.handleMouse(tea.MouseMsg{
-		Button: tea.MouseButtonLeft,
-		Action: tea.MouseActionPress,
-		X:      5,
-		Y:      0,
-	})
-
-	testkit.AssertEqual(t, "side after click on status", app.side, sideLeft)
-	testkit.AssertEqual(t, "leftFocus after status click", app.leftFocus, focusStatus)
-}
-
-func TestHandleMouse_MotionIsNoop(t *testing.T) {
-	t.Parallel()
-	app := mouseApp(t)
-	app.side = sideLeft
-	app.leftFocus = focusIssues
-
-	_, cmd := app.handleMouse(tea.MouseMsg{
-		Button: tea.MouseButtonNone,
-		Action: tea.MouseActionMotion,
-		X:      5,
-		Y:      3,
-	})
-
-	if cmd != nil {
-		t.Error("mouse motion should produce no cmd")
-	}
-}
-
-func TestMouseClick_StatusFocusesStatus(t *testing.T) {
+func TestMouseClick_StatusFocusesStatusAndShowsSplash(t *testing.T) {
 	t.Parallel()
 	app := mouseApp(t)
 	app.side = sideRight
@@ -101,59 +22,71 @@ func TestMouseClick_StatusFocusesStatus(t *testing.T) {
 
 	testkit.AssertEqual(t, "side", app.side, sideLeft)
 	testkit.AssertEqual(t, "leftFocus", app.leftFocus, focusStatus)
+	testkit.AssertEqual(t, "detail mode", app.detailView.Mode(), views.ModeSplash)
 }
 
-func TestMouseClick_IssuesTitleBarTabClick(t *testing.T) {
+func TestMouseClick_PullRequestRowPreviews(t *testing.T) {
 	t.Parallel()
-	fake := &jiratest.FakeClient{T: t}
-	app := appWithPanelDims(t, 120)
-	app.keymap = DefaultKeymap()
-	app.client = fake
-	app.projectKey = testProject
-	app.issuesList.SetTabs([]config.IssueTabConfig{
-		{Name: "All", JQL: "project = X"},
-		{Name: "Mine", JQL: "assignee = currentUser()"},
-	})
+	app := mouseApp(t)
+	app.side = sideRight
+	app.prList.SetPullRequests([]bitbucket.PullRequest{newPR(testRepo, 101, testTitle)})
 
-	_, _ = app.mouseClick(panelIssues, 0, 15)
+	_, cmd := app.mouseClick(panelPullRequests, 1, 5)
 
 	testkit.AssertEqual(t, "side", app.side, sideLeft)
-	testkit.AssertEqual(t, "leftFocus", app.leftFocus, focusIssues)
-	testkit.AssertEqual(t, "active tab index", app.issuesList.GetTabIndex(), 1)
+	testkit.AssertEqual(t, "leftFocus", app.leftFocus, focusPullRequests)
+	testkit.AssertEqual(t, "previewKey", app.previewKey, testPRKey)
+	if cmd == nil {
+		t.Error("clicking a row should schedule the preview debounce")
+	}
 }
 
-func TestMouseClick_InfoFocusesInfo(t *testing.T) {
+func TestMouseClick_PullRequestTitleBarSwitchesTab(t *testing.T) {
+	t.Parallel()
+	app := mouseApp(t)
+
+	_, _ = app.mouseClick(panelPullRequests, 0, 15)
+
+	testkit.AssertEqual(t, "leftFocus", app.leftFocus, focusPullRequests)
+	if app.prList.GetTabIndex() == 0 {
+		t.Error("clicking the second tab zone should change the tab")
+	}
+}
+
+func TestMouseClick_BuildsFocusesBuilds(t *testing.T) {
 	t.Parallel()
 	app := mouseApp(t)
 	app.side = sideRight
 
-	_, _ = app.mouseClick(panelInfo, 1, 5)
+	_, _ = app.mouseClick(panelBuilds, 1, 5)
 
 	testkit.AssertEqual(t, "side", app.side, sideLeft)
-	testkit.AssertEqual(t, "leftFocus", app.leftFocus, focusInfo)
+	testkit.AssertEqual(t, "leftFocus", app.leftFocus, focusBuilds)
 }
 
-func TestMouseClick_InfoTitleBarClicksTab(t *testing.T) {
+func TestMouseClick_ReposHoverPreviewsRepository(t *testing.T) {
 	t.Parallel()
 	app := mouseApp(t)
-	app.infoPanel.SetIssue(&jira.Issue{Key: testKey})
+	app.repoList.SetRepos([]bitbucket.Repository{{Slug: testRepo, Name: testRepo}})
 
-	_, _ = app.mouseClick(panelInfo, 0, 12)
+	_, _ = app.mouseClick(panelRepos, 1, 5)
 
-	testkit.AssertEqual(t, "side", app.side, sideLeft)
-	testkit.AssertEqual(t, "leftFocus", app.leftFocus, focusInfo)
-	testkit.AssertEqual(t, "active info tab", app.infoPanel.ActiveTab(), views.InfoTabLinks)
+	testkit.AssertEqual(t, "leftFocus", app.leftFocus, focusRepos)
+	testkit.AssertEqual(t, "detail mode", app.detailView.Mode(), views.ModeRepo)
 }
 
-func TestMouseClick_ProjectsFocusesProjects(t *testing.T) {
+func TestMouseClick_ReposDoubleClickFiltersTheList(t *testing.T) {
 	t.Parallel()
 	app := mouseApp(t)
-	app.side = sideRight
+	app.repoList.SetRepos([]bitbucket.Repository{{Slug: testRepo, Name: testRepo}})
 
-	_, _ = app.mouseClick(panelProjects, 1, 5)
+	// Row 1 is the first real repository; the second click on the same row is
+	// the double-click that activates it.
+	_, _ = app.mouseClick(panelRepos, 2, 5)
+	_, _ = app.mouseClick(panelRepos, 2, 5)
 
-	testkit.AssertEqual(t, "side", app.side, sideLeft)
-	testkit.AssertEqual(t, "leftFocus", app.leftFocus, focusProjects)
+	testkit.AssertEqual(t, "repo filter", app.repoFilter, testRepo)
+	testkit.AssertEqual(t, "leftFocus", app.leftFocus, focusPullRequests)
 }
 
 func TestMouseClick_DetailFocusesDetail(t *testing.T) {
@@ -164,21 +97,4 @@ func TestMouseClick_DetailFocusesDetail(t *testing.T) {
 	_, _ = app.mouseClick(panelDetail, 1, 40)
 
 	testkit.AssertEqual(t, "side", app.side, sideRight)
-}
-
-func TestMouseClick_DetailTitleBarClicksTab(t *testing.T) {
-	t.Parallel()
-	app := mouseApp(t)
-	app.side = sideLeft
-	app.detailView.SetIssue(&jira.Issue{Key: testKey, Comments: []jira.Comment{{ID: "1", Body: "hi"}}})
-	app.layoutPanels()
-
-	separatorWidth := 3
-	tabsStart := len("[0] "+testKey) + separatorWidth
-	commentsTabX := app.panelSideW + tabsStart + len("Body") + separatorWidth
-
-	_, _ = app.mouseClick(panelDetail, 0, commentsTabX)
-
-	testkit.AssertEqual(t, "side", app.side, sideRight)
-	testkit.AssertEqual(t, "active detail tab", app.detailView.ActiveTab(), views.TabComments)
 }

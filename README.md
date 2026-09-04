@@ -1,167 +1,177 @@
 <p align="center">
-  <a href="https://go.dev/"><img src="https://img.shields.io/github/go-mod/go-version/textfuel/lazyjira" alt="Go"></a>
-  <a href="https://github.com/textfuel/lazyjira/releases"><img src="https://img.shields.io/github/v/release/textfuel/lazyjira" alt="Release"></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/github/go-mod/go-version/lsst25/lazybitbucket" alt="Go"></a>
+  <a href="https://github.com/lsst25/lazybitbucket/releases"><img src="https://img.shields.io/github/v/release/lsst25/lazybitbucket" alt="Release"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
-  <br>
-  <a href="https://github.com/textfuel/lazyjira/releases"><img src="https://img.shields.io/github/downloads/textfuel/lazyjira/total?label=downloads" alt="Downloads"></a>
 </p>
 
-# lazyjira
+# lazybitbucket
 
-Terminal UI for Jira. Like [lazygit](https://github.com/jesseduffield/lazygit) but for Jira.
+Terminal UI for **Bitbucket Cloud pull requests**. Like [lazygit](https://github.com/jesseduffield/lazygit), but for PRs.
 
-Jira's web UI is painfully slow. Changing a ticket status takes multiple clicks, pages take seconds to load, and you spend more time fighting the interface than actually working. lazyjira gives you a fast, keyboard-driven terminal UI so you can browse issues, update statuses, read descriptions and more with minimum latency.
+Reviewing in the Bitbucket web UI means a lot of waiting and clicking: one tab per repository, a page load to see whether a build went green, another to find out who has approved. lazybitbucket puts the open pull requests of every repository you care about into one keyboard-driven list, with the description, the reviewers and the pipeline result a keystroke away.
 
-<p>
-  <img src="e2e/golden/00_preview.gif" width="67%" alt="preview">&nbsp;<img src="e2e/golden/00_preview_vertical.gif" width="31%" alt="preview vertical">
-</p>
+> Screenshots and demo GIFs are pending — the recorded tapes now drive the Bitbucket UI, but the GIFs still have to be regenerated with [vhs](https://github.com/charmbracelet/vhs) (`make e2e-update`).
 
 ### Demo mode
 
-Try without a Jira account (build from source required):
+Try it without a Bitbucket account. Demo mode serves a built-in dataset from a local fake API, so nothing leaves your machine (build from source required):
 
 ```
 make build-demo
-./lazyjira --demo
+./lazybitbucket --demo
 ```
 
 ## Features
 
-- **JQL search** with autocomplete, syntax highlighting, and persistent history
-- **4-panel layout** - issues, projects, detail, status - with vim-style navigation
-- **Inline editing** - transitions, priority, assignee, labels, comments, description (`$EDITOR`)
-- **Configurable** - custom keybindings (including navigation keys), JQL tabs, issue columns, custom fields
-- **Themes** - default ANSI palette plus all four Catppuccin flavors (Latte, Frappé, Macchiato, Mocha)
-- **Adaptive** - side-by-side or stacked layout, mouse support
+- **One list, many repositories** — open pull requests across all configured repos, with repo, id, title, author, approval state, build result and last-update time as columns
+- **Tabs** — Open / Mine / Reviewing out of the box, configurable per state and filter
+- **Detail pane** — branches, author, reviewers with approval state, and the description rendered from Markdown
+- **Builds** — the commit statuses of the selected PR, with drill-down into the pipeline run, its steps and each step's log
+- **Repo filter** — narrow the list to a single repository from the Repos panel
+- **Search** — `/` filters the focused list as you type
+- **Browser hand-off** — `o` opens what you are looking at, `y` copies the PR URL, `u` opens a picker of every URL the PR reaches (branches, commits, builds, links in the description)
+- **Read-only** — the client has no write methods at all. lazybitbucket never merges, approves, comments or edits
+- **Git integration** — check out the source branch of the selected PR; the PR matching your current branch is selected at startup
+- **Custom commands** — bind shell commands to keys with template access to the focused PR, repo or build
+- **Themes** — default ANSI palette plus all four Catppuccin flavors (Latte, Frappé, Macchiato, Mocha)
+- **Adaptive** — side-by-side or stacked layout, mouse support
 
 ## Installation
-
-<details>
-<summary><b>macOS</b></summary>
-
-#### Homebrew
-
-```
-brew install textfuel/tap/lazyjira
-```
-
-</details>
-
-<details>
-<summary><b>Linux</b></summary>
-
-#### Arch Linux (AUR)
-
-```
-yay -S lazyjira-bin     # prebuilt binary
-yay -S lazyjira-git     # build from source
-```
-
-#### Nix / NixOS
-
-```
-nix run github:textfuel/lazyjira
-```
-
-Or add to your flake inputs:
-
-```nix
-inputs.lazyjira.url = "github:textfuel/lazyjira";
-```
-
-Or import the package
-
-```nix
-let
-  version = "...";
-  src =
-    fetchFromGitHub {
-      owner = "textfuel";
-      repo = "lazyjira";
-      tag = "v${version}";
-      hash = "...";
-    };
-
-  buildGoApplication = import "${src}/nix/build-go-application.nix" system;
-in
-callPackage "${src}/nix/package.nix" { inherit buildGoApplication version; }
-```
-
-#### deb (Debian, Ubuntu)
-
-Download `.deb` from [Releases](https://github.com/textfuel/lazyjira/releases):
-
-```
-sudo dpkg -i lazyjira_*.deb
-```
-
-#### rpm (Fedora, RHEL)
-
-Download `.rpm` from [Releases](https://github.com/textfuel/lazyjira/releases):
-
-```
-sudo rpm -i lazyjira_*.rpm
-```
-
-#### apk (Alpine)
-
-Download `.apk` from [Releases](https://github.com/textfuel/lazyjira/releases):
-
-```
-sudo apk add --allow-untrusted lazyjira_*.apk
-```
-
-</details>
-
-<details>
-<summary><b>Windows</b></summary>
-
-Download `.zip` from [Releases](https://github.com/textfuel/lazyjira/releases), extract `lazyjira.exe`, and add it to your `PATH`.
-
-Use [Windows Terminal](https://aka.ms/terminal) for best rendering.
-
-</details>
 
 <details>
 <summary><b>Go / From source</b></summary>
 
 ```
-go install github.com/lsst25/lazybitbucket/cmd/lazyjira@latest
+go install github.com/lsst25/lazybitbucket/cmd/lazybitbucket@latest
 ```
 
 Or build manually:
 
 ```
-git clone https://github.com/textfuel/lazyjira.git
-cd lazyjira
+git clone https://github.com/lsst25/lazybitbucket.git
+cd lazybitbucket
 make build
 ```
 
 </details>
 
+<details>
+<summary><b>Packaged builds</b></summary>
+
+The release pipeline publishes these channels. They only exist once a release is cut, so build from source until then.
+
+#### Homebrew (macOS, Linux)
+
+```
+brew install lsst25/tap/lazybitbucket
+```
+
+#### Arch Linux (AUR)
+
+```
+yay -S lazybitbucket-bin     # prebuilt binary
+yay -S lazybitbucket-git     # build from source
+```
+
+#### Nix / NixOS
+
+```
+nix run github:lsst25/lazybitbucket
+```
+
+Or add to your flake inputs:
+
+```nix
+inputs.lazybitbucket.url = "github:lsst25/lazybitbucket";
+```
+
+#### deb / rpm / apk
+
+Download the package for your distro from [Releases](https://github.com/lsst25/lazybitbucket/releases):
+
+```
+sudo dpkg -i lazybitbucket_*.deb
+sudo rpm -i lazybitbucket_*.rpm
+sudo apk add --allow-untrusted lazybitbucket_*.apk
+```
+
+#### Windows
+
+Download the `.zip` from [Releases](https://github.com/lsst25/lazybitbucket/releases), extract `lazybitbucket.exe`, and add it to your `PATH`. Use [Windows Terminal](https://aka.ms/terminal) for best rendering.
+
+</details>
+
 ## Setup
 
-Run `lazyjira`. On first launch the setup wizard asks for your Jira type (Cloud or Server/Data Center), host, and credentials.
+Run `lazybitbucket`. On first launch a setup wizard asks for your credentials and workspace, tests the connection, and saves the result.
 
-### Jira Cloud
+### Get a token
 
-Provide your email and an API token (also called Personal Access Token / PAT).
+Atlassian **app passwords no longer exist** — they were removed on 28 July 2026. Use an **API token with scopes**:
 
-Create one at <https://id.atlassian.com/manage-profile/security/api-tokens>
+1. Profile (upper right) → **Account settings**
+2. **Security** tab → **Create and manage API tokens**
+3. **Create API token with scopes**
+4. Name and expiry (max one year) → **Next**
+5. Pick **Bitbucket** as the app → **Next**
+6. Tick the scopes below → **Next** → **Create**
 
-### Jira Server / Data Center
+The token is shown once and cannot be retrieved later.
 
-Provide your Personal Access Token (PAT). No email needed.
+A token without scopes does not work. lazybitbucket only reads, so the five read scopes are enough:
 
-Generate a PAT in Jira: Profile > Personal Access Tokens > Create token.
+| Scope | Needed for |
+|-------|------------|
+| `read:pullrequest:bitbucket` | the pull request list and detail |
+| `read:repository:bitbucket` | repository metadata and commit statuses |
+| `read:pipeline:bitbucket` | pipeline runs, steps and step logs |
+| `read:user:bitbucket` | who you are — the Mine / Reviewing tabs |
+| `read:workspace:bitbucket` | the workspace itself (used by the connection test) |
 
-For environments that require client certificates (mTLS), see [Configuration](docs/Config.md#tls).
+API token scopes are a different namespace from OAuth 2.0 scopes and do **not** imply each other, so tick all five.
 
-Credentials saved to `~/.config/lazyjira/auth.json`.
+### Auth options
+
+The wizard offers two, and both are API tokens under the hood:
+
+1. **Token only, sent as `Authorization: Bearer <token>`** (the default). Works for account API tokens and for repository / project / workspace **access tokens**. Nothing else to type.
+2. **Atlassian account email + API token, sent as HTTP Basic.** The username must be your **Atlassian account email** — a Bitbucket username or the token's name yields a 401. Your email is listed under *Email Aliases* on the Bitbucket Personal settings page.
+
+A repository, project or workspace access token cannot call `/user`, so the wizard prints `Connected (token cannot read the current user; Mine/Reviewing tabs are disabled)` and those tabs stay empty. That is expected, not a failure.
+
+Credentials are written to `~/.config/lazybitbucket/auth.json` with `0600` permissions. `lazybitbucket logout` deletes the file.
+
+### Workspace and repositories
+
+The workspace comes from the wizard, `bitbucket.workspace` in `config.yml`, or `--workspace`. Repositories are listed in `config.yml`:
+
+```yaml
+bitbucket:
+  workspace: acme
+  repositories:
+    - api-gateway
+    - web-app
+    - infra
+```
+
+With no `repositories` set, lazybitbucket discovers the repositories you are a member of — the first 25, most recently updated first — and warns in the status bar when it hits that cap. An access token sees none that way, so it has to list them explicitly.
+
+### Environment variables
+
+These override both `config.yml` and `auth.json`, which makes them handy for a per-project shell or CI-ish scripting.
+
+| Variable | Effect |
+|----------|--------|
+| `BITBUCKET_WORKSPACE` | Workspace slug |
+| `BITBUCKET_REPOSITORIES` | Comma-separated repository slugs |
+| `BITBUCKET_EMAIL` | Atlassian account email (switches to Basic auth when a token is also set) |
+| `BITBUCKET_TOKEN` | API token or access token |
+| `BITBUCKET_API_URL` | API base URL (defaults to `https://api.bitbucket.org/2.0`) |
+| `LAZYBITBUCKET_CONFIG_DIR` | Override the whole config directory |
 
 ## Themes
 
-lazyjira supports the default ANSI 16 palette, Catppuccin presets, auto light/dark selection, and custom palette overrides. Set `gui.theme` in `~/.config/lazyjira/config.yml`:
+lazybitbucket supports the default ANSI 16 palette, Catppuccin presets, auto light/dark selection, and custom palette overrides. Set `gui.theme` in `~/.config/lazybitbucket/config.yml`:
 
 ```yaml
 gui:
@@ -173,59 +183,51 @@ See the [Themes docs](docs/Config.md#themes) for supported values, palette overr
 ## Usage
 
 ```
-lazyjira                 # start
-lazyjira auth            # re-authenticate
-lazyjira logout          # clear credentials
-lazyjira --dry-run       # read-only mode (no writes to Jira)
-lazyjira --log app.log   # log API requests to file
-lazyjira --version       # show version
+lazybitbucket                    # start
+lazybitbucket auth               # re-run the credential wizard
+lazybitbucket logout             # clear credentials
+lazybitbucket version            # show version
+lazybitbucket --demo             # built-in demo dataset (requires a -tags demo build)
+lazybitbucket --workspace acme   # override the configured workspace
+lazybitbucket --repo web-app     # override the configured repositories (repeatable)
+lazybitbucket --log api.log      # log API requests to a file
+lazybitbucket --debug debug.log  # log internal debug output to a file
 ```
 
 Press `?` inside the app for all keybindings.
 
+## Keys
+
+| Key | Action |
+|-----|--------|
+| `0` `1` `2` `3` `4` | Focus Detail, Status, Pull Requests, Builds, Repos |
+| `j` / `k` | Move down / up |
+| `space` / `enter` | Open the highlighted row |
+| `tab` | Switch between the left panels and the detail panel |
+| `h` / `l` | Previous / next panel |
+| `[` / `]` | Previous / next tab |
+| `J` / `K` | Scroll the detail pane without leaving the list |
+| `/` | Search the focused list |
+| `o` | Open in browser |
+| `u` | URL picker |
+| `y` | Copy the pull request URL |
+| `c` | Check out the source branch |
+| `backspace` | Back out of the step log / pipeline view |
+| `r` / `R` | Refresh the selection / the whole tab |
+| `?` | Help |
+| `q` | Quit |
+
+Full list, including everything remappable: [Keybindings](docs/Keybindings.md).
+
 ## Documentation
 
-- [Configuration](docs/Config.md) - config file, keybindings, issue tabs, custom fields, git integration
-- [Keybindings](docs/Keybindings.md) - full list of default keys
-- [Custom Fields](docs/Custom_Fields.md) - displaying Jira custom fields
+- [Configuration](docs/Config.md) — config file, tabs, list columns, keybindings, themes, git, custom commands
+- [Keybindings](docs/Keybindings.md) — full list of default keys
+- [Roadmap](ROADMAP.md) — what is built and what is next
 
-## Roadmap
+## Credits
 
-- [x] Robust JQL search
-- [x] Git integration, create branches from issues, open issue from current branch
-- [x] Jira Server and Data Center support
-- [x] Client certificate authentication (mTLS)
-- [x] Create issues
-- [x] Configurable navigation keys
-- [x] Searchable keybindings help popup
-- [x] Scroll detail panel without switching focus
-- [x] Create subtasks from TUI
-- [ ] Link issues (add/remove issue links)
-- [ ] CLI mode (non-interactive commands for scripting and automation)
-- [ ] Robust issue type changer (handle subtask/parent unlinking, field validation)
-- [ ] Clickable hyperlinks in terminal (OSC 8) for URLs in descriptions and comments
-- [x] Catppuccin Theming
-- [ ] Custom colors theming, date format, languages
-- [ ] Mouse support toggle
-- [ ] Show icons toggle
-- [ ] Cache with configurable TTL
-- [ ] Auto-refresh with configurable interval
-- [ ] Custom field type handling (select, multiselect, user)
-- [ ] Board ID per project
-- [ ] Rich text editing, colors, panels, media in ADF descriptions
-- [ ] Bulk operations, transition and assign multiple issues at once
-- [ ] Notifications, watch for issue updates
-- [ ] Offline mode, cached view when network is unavailable
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=textfuel%2Flazyjira&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=textfuel/lazyjira&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=textfuel/lazyjira&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=textfuel/lazyjira&type=date&legend=top-left" />
- </picture>
-</a>
+lazybitbucket is a fork of [textfuel/lazyjira](https://github.com/textfuel/lazyjira) (MIT). The Bubbletea shell — panels, layout, theming, keybinding config, custom commands — comes from there; the domain layer is Bitbucket-specific.
 
 ## License
 

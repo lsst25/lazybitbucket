@@ -1,5 +1,5 @@
 {
-  description = "Terminal UI for Jira";
+  description = "Terminal UI for Bitbucket Cloud pull requests";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
@@ -23,10 +23,10 @@
       in
       {
         packages = rec {
-          lazyjira = callPackage ./nix/package.nix {
+          lazybitbucket = callPackage ./nix/package.nix {
             version = self.shortRev or self.dirtyShortRev or "dev";
           };
-          default = lazyjira;
+          default = lazybitbucket;
         };
 
         devShells.default = pkgs.callPackage ./nix/shell.nix { };

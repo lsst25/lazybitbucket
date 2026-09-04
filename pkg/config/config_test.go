@@ -6,143 +6,524 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
 )
 
-func TestConfigDir_LazyJiraConfigDirPrecedence(t *testing.T) {
-	lazyjiraDir := t.TempDir()
-	xdgDir := t.TempDir()
+func pointerTo[T any](v T) *T { return &v }
 
-	t.Setenv("LAZYJIRA_CONFIG_DIR", lazyjiraDir)
-	t.Setenv("XDG_CONFIG_HOME", xdgDir)
-
-	if got := ConfigDir(); got != lazyjiraDir {
-		t.Errorf("ConfigDir() = %q, want %q", got, lazyjiraDir)
+// clearBitbucketEnv drops every BITBUCKET_* override so the ambient
+// environment cannot leak into Load. Callers point LAZYBITBUCKET_CONFIG_DIR at
+// a temp dir themselves, so paralleltest sees the t.Setenv call.
+func clearBitbucketEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{envWorkspace, envRepositories, envEmail, envToken, envAPIURL} {
+		t.Setenv(key, "")
 	}
 }
 
-func TestConfigDir_IgnoresLegacyConfigDir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("XDG_CONFIG_HOME precedence is not used on Windows")
-	}
-
-	legacyDir := t.TempDir()
-	xdgDir := t.TempDir()
-
-	t.Setenv("CONFIG_DIR", legacyDir)
-	t.Setenv("XDG_CONFIG_HOME", xdgDir)
-
-	want := filepath.Join(xdgDir, "lazyjira")
-	if got := ConfigDir(); got != want {
-		t.Errorf("ConfigDir() = %q, want %q", got, want)
+func writeConfigFile(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, configFileName), []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", configFileName, err)
 	}
 }
 
-func TestLoad_TLSEnvVars(t *testing.T) {
-	t.Setenv("LAZYJIRA_CONFIG_DIR", t.TempDir())
-	t.Setenv("JIRA_SERVER_TYPE", "server")
-	t.Setenv("JIRA_TLS_CERT", "/tmp/cert.pem")
-	t.Setenv("JIRA_TLS_KEY", "/tmp/key.pem")
-	t.Setenv("JIRA_TLS_CA", "/tmp/ca.pem")
-	t.Setenv("JIRA_TLS_INSECURE", "true")
-
+func loadOrFatal(t *testing.T) *Config {
+	t.Helper()
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Jira.ServerType != "server" {
-		t.Errorf("ServerType = %q, want server", cfg.Jira.ServerType)
+	return cfg
+}
+
+func TestConfigDir_EnvOverrideWinsOverXDG(t *testing.T) {
+	explicitDir := t.TempDir()
+	xdgDir := t.TempDir()
+
+	t.Setenv(envConfigDir, explicitDir)
+	t.Setenv("XDG_CONFIG_HOME", xdgDir)
+
+	testkit.AssertEqual(t, "ConfigDir", ConfigDir(), explicitDir)
+}
+
+func TestConfigDir_XDGConfigHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("XDG_CONFIG_HOME precedence is not used on Windows")
 	}
-	if cfg.Jira.TLS.CertFile != "/tmp/cert.pem" {
-		t.Errorf("CertFile = %q", cfg.Jira.TLS.CertFile)
+
+	xdgDir := t.TempDir()
+	t.Setenv(envConfigDir, "")
+	t.Setenv("XDG_CONFIG_HOME", xdgDir)
+
+	testkit.AssertEqual(t, "ConfigDir", ConfigDir(), filepath.Join(xdgDir, "lazybitbucket"))
+}
+
+func TestConfigDir_FallsBackToUserConfigDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("env fallback chain differs on Windows")
 	}
-	if cfg.Jira.TLS.KeyFile != "/tmp/key.pem" {
-		t.Errorf("KeyFile = %q", cfg.Jira.TLS.KeyFile)
+
+	t.Setenv(envConfigDir, "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	userConfigDir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatalf("os.UserConfigDir: %v", err)
 	}
-	if cfg.Jira.TLS.CAFile != "/tmp/ca.pem" {
-		t.Errorf("CAFile = %q", cfg.Jira.TLS.CAFile)
+	testkit.AssertEqual(t, "ConfigDir", ConfigDir(), filepath.Join(userConfigDir, "lazybitbucket"))
+}
+
+func TestConfigDir_FallsBackToDotConfigWithoutHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("env fallback chain differs on Windows")
 	}
-	if !cfg.Jira.TLS.Insecure {
-		t.Error("Insecure should be true")
+
+	t.Setenv(envConfigDir, "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+
+	testkit.AssertEqual(t, "ConfigDir", ConfigDir(), filepath.Join(".", ".config", "lazybitbucket"))
+}
+
+func TestConfigPath_JoinsConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+
+	testkit.AssertEqual(t, "ConfigPath", ConfigPath(), filepath.Join(dir, configFileName))
+}
+
+func TestDefaultConfig(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultConfig()
+
+	testkit.AssertEqual(t, "GUI.Theme", cfg.GUI.Theme, "default")
+	testkit.AssertEqual(t, "GUI.SidePanelWidth", cfg.GUI.SidePanelWidth, 40)
+	testkit.AssertEqual(t, "GUI.CollapsedPanelHeight", cfg.GUI.CollapsedPanelHeight, 5)
+	testkit.AssertSliceEqual(t, "GUI.PullRequestListFields", cfg.GUI.PullRequestListFields,
+		[]string{"repo", "id", "title", "approvals", "build", "author", "updated"})
+	testkit.AssertEqual(t, "RefreshInterval", cfg.RefreshInterval, "120s")
+	testkit.AssertEqual(t, "len(PullRequestTabs)", len(cfg.PullRequestTabs), 3)
+	if cfg.MaxResults != nil {
+		t.Errorf("default MaxResults should be nil (unset), got %d", *cfg.MaxResults)
 	}
+	testkit.AssertEqual(t, "ResolveGlobalMaxResults", cfg.ResolveGlobalMaxResults(), DefaultMaxResults)
+	testkit.AssertEqual(t, "ResolveBaseURL", cfg.ResolveBaseURL(), DefaultBaseURL)
+
+	interval, err := cfg.ResolveRefreshInterval()
+	if err != nil {
+		t.Fatalf("ResolveRefreshInterval: %v", err)
+	}
+	testkit.AssertEqual(t, "refresh interval", interval, 120*time.Second)
+}
+
+func TestDefaultPullRequestTabs(t *testing.T) {
+	t.Parallel()
+	tabs := DefaultPullRequestTabs()
+	if len(tabs) != 3 {
+		t.Fatalf("len(tabs) = %d, want 3", len(tabs))
+	}
+
+	names := make([]string, 0, len(tabs))
+	filters := make([]string, 0, len(tabs))
+	for _, tab := range tabs {
+		names = append(names, tab.Name)
+		filters = append(filters, tab.Filter)
+		testkit.AssertEqual(t, "state of tab "+tab.Name, tab.ResolveState(), "OPEN")
+	}
+	testkit.AssertSliceEqual(t, "names", names, []string{"Open", "Mine", "Reviewing"})
+	testkit.AssertSliceEqual(t, "filters", filters, []string{"all", "mine", "reviewing"})
+}
+
+func TestPullRequestListFieldNames(t *testing.T) {
+	t.Parallel()
+	want := []string{"repo", "id", "title", "author", "approvals", "build", "updated", "branch", "state"}
+	testkit.AssertSliceEqual(t, "PullRequestListFieldNames", PullRequestListFieldNames(), want)
+
+	// The caller gets a copy: mutating it must not affect the package state.
+	names := PullRequestListFieldNames()
+	names[0] = "mutated"
+	testkit.AssertEqual(t, "first field after mutation", PullRequestListFieldNames()[0], "repo")
+}
+
+func TestLoad_DefaultsWhenNoConfigFile(t *testing.T) {
+	t.Setenv(envConfigDir, t.TempDir())
+	clearBitbucketEnv(t)
+
+	cfg := loadOrFatal(t)
+	testkit.AssertEqual(t, "Bitbucket.Workspace", cfg.Bitbucket.Workspace, "")
+	testkit.AssertEqual(t, "len(Repositories)", len(cfg.Bitbucket.Repositories), 0)
+	testkit.AssertEqual(t, "GUI.Theme", cfg.GUI.Theme, "default")
+	testkit.AssertEqual(t, "len(PullRequestTabs)", len(cfg.PullRequestTabs), 3)
+}
+
+func TestLoad_ReadsBitbucketSectionFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, `bitbucket:
+  workspace: acme
+  repositories:
+    - api-gateway
+    - web-app
+  email: user@example.com
+  baseUrl: https://bitbucket.example.com/2.0/
+`)
+
+	cfg := loadOrFatal(t)
+	testkit.AssertEqual(t, "Workspace", cfg.Bitbucket.Workspace, testWorkspace)
+	testkit.AssertSliceEqual(t, "Repositories", cfg.Bitbucket.Repositories, []string{testRepo, "web-app"})
+	testkit.AssertEqual(t, "Email", cfg.Bitbucket.Email, testEmail)
+	testkit.AssertEqual(t, "Token", cfg.Bitbucket.Token, "")
+	testkit.AssertEqual(t, "ResolveBaseURL", cfg.ResolveBaseURL(), "https://bitbucket.example.com/2.0")
+}
+
+func TestLoad_TokenIsNeverReadFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, `bitbucket:
+  token: from-file
+`)
+
+	cfg := loadOrFatal(t)
+	testkit.AssertEqual(t, "Token", cfg.Bitbucket.Token, "")
+}
+
+func TestLoad_EnvOverridesWinOverFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, `bitbucket:
+  workspace: from-file
+  repositories: [from-file-repo]
+  email: file@example.com
+  baseUrl: https://file.example.com
+`)
+
+	t.Setenv(envWorkspace, testWorkspace)
+	t.Setenv(envRepositories, "api-gateway, web-app ,,infra")
+	t.Setenv(envEmail, testEmail)
+	t.Setenv(envToken, testToken)
+	t.Setenv(envAPIURL, "https://env.example.com/2.0")
+
+	cfg := loadOrFatal(t)
+	testkit.AssertEqual(t, "Workspace", cfg.Bitbucket.Workspace, testWorkspace)
+	testkit.AssertSliceEqual(t, "Repositories", cfg.Bitbucket.Repositories,
+		[]string{testRepo, "web-app", "infra"})
+	testkit.AssertEqual(t, "Email", cfg.Bitbucket.Email, testEmail)
+	testkit.AssertEqual(t, "Token", cfg.Bitbucket.Token, testToken)
+	testkit.AssertEqual(t, "ResolveBaseURL", cfg.ResolveBaseURL(), "https://env.example.com/2.0")
+}
+
+func TestLoad_EmptyRepositoriesEnvKeepsFileValue(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, `bitbucket:
+  repositories: [api-gateway]
+`)
+	t.Setenv(envRepositories, " , ")
+
+	cfg := loadOrFatal(t)
+	testkit.AssertSliceEqual(t, "Repositories", cfg.Bitbucket.Repositories, []string{testRepo})
+}
+
+func TestLoad_ReadsFullConfigFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, `gui:
+  theme: dracula
+  sidePanelWidth: 55
+  collapsedPanelHeight: 3
+  pullRequestListFields: [id, title, state, branch]
+  themeColors:
+    primary: "#ff00ff"
+keybinding:
+  universal:
+    quit: Q
+    focusPullRequests: "2"
+    focusBuilds: "3"
+    focusRepos: "4"
+  navigation:
+    halfPageDown: ctrl+d
+  pullRequests:
+    checkout: c
+    copyURL: y
+  detail:
+    back: backspace
+pullRequestTabs:
+  - name: Everything
+    state: merged
+    filter: all
+    query: 'title ~ "fix"'
+    maxResults: 10
+maxResults: 25
+refreshInterval: 45s
+git:
+  closeOnCheckout: true
+editor: vim
+rendererStyle: light
+`)
+
+	cfg := loadOrFatal(t)
+	testkit.AssertEqual(t, "GUI.Theme", cfg.GUI.Theme, "dracula")
+	testkit.AssertEqual(t, "GUI.SidePanelWidth", cfg.GUI.SidePanelWidth, 55)
+	testkit.AssertEqual(t, "GUI.CollapsedPanelHeight", cfg.GUI.CollapsedPanelHeight, 3)
+	testkit.AssertSliceEqual(t, "GUI.PullRequestListFields", cfg.GUI.PullRequestListFields,
+		[]string{"id", "title", "state", "branch"})
+	testkit.AssertEqual(t, "GUI.ThemeColors[primary]", cfg.GUI.ThemeColors["primary"], "#ff00ff")
+	testkit.AssertEqual(t, "Keybinding.Universal.Quit", cfg.Keybinding.Universal.Quit, "Q")
+	testkit.AssertEqual(t, "Keybinding.Universal.FocusPullRequests", cfg.Keybinding.Universal.FocusPullRequests, "2")
+	testkit.AssertEqual(t, "Keybinding.Universal.FocusBuilds", cfg.Keybinding.Universal.FocusBuilds, "3")
+	testkit.AssertEqual(t, "Keybinding.Universal.FocusRepos", cfg.Keybinding.Universal.FocusRepos, "4")
+	testkit.AssertEqual(t, "Keybinding.Navigation.HalfDown", cfg.Keybinding.Navigation.HalfDown, "ctrl+d")
+	testkit.AssertEqual(t, "Keybinding.PullRequests.Checkout", cfg.Keybinding.PullRequests.Checkout, "c")
+	testkit.AssertEqual(t, "Keybinding.PullRequests.CopyURL", cfg.Keybinding.PullRequests.CopyURL, "y")
+	testkit.AssertEqual(t, "Keybinding.Detail.Back", cfg.Keybinding.Detail.Back, "backspace")
+	testkit.AssertEqual(t, "len(PullRequestTabs)", len(cfg.PullRequestTabs), 1)
+
+	tab := cfg.PullRequestTabs[0]
+	testkit.AssertEqual(t, "tab.Name", tab.Name, "Everything")
+	testkit.AssertEqual(t, "tab.ResolveState", tab.ResolveState(), "MERGED")
+	testkit.AssertEqual(t, "tab.Query", tab.Query, `title ~ "fix"`)
+	testkit.AssertEqual(t, "ResolveMaxResults(tab)", cfg.ResolveMaxResults(tab), 10)
+	testkit.AssertEqual(t, "ResolveGlobalMaxResults", cfg.ResolveGlobalMaxResults(), 25)
+	testkit.AssertEqual(t, "Git.CloseOnCheckout", cfg.Git.CloseOnCheckout, true)
+	testkit.AssertEqual(t, "Editor", cfg.Editor, "vim")
+	testkit.AssertEqual(t, "RendererStyle", cfg.RendererStyle, RendererStyleLight)
+
+	interval, err := cfg.ResolveRefreshInterval()
+	if err != nil {
+		t.Fatalf("ResolveRefreshInterval: %v", err)
+	}
+	testkit.AssertEqual(t, "refresh interval", interval, 45*time.Second)
+}
+
+func TestLoad_RejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfgYAML string
+		wantErr string
+	}{
+		{
+			"unknown list field",
+			"gui:\n  pullRequestListFields: [repo, reviewers]\n",
+			`unknown field "reviewers"`,
+		},
+		{
+			"unknown tab state",
+			"pullRequestTabs:\n  - name: Bad\n    state: closed\n",
+			`unknown state "closed"`,
+		},
+		{
+			"invalid refresh interval",
+			"refreshInterval: soon\n",
+			`invalid refreshInterval "soon"`,
+		},
+		{
+			"negative refresh interval",
+			"refreshInterval: -30s\n",
+			"must not be negative",
+		},
+		{
+			"unknown renderer style",
+			"rendererStyle: solarized\n",
+			"solarized",
+		},
+		{
+			"invalid custom command template",
+			"customCommands:\n  - key: \"y\"\n    name: broken\n    command: \"echo {{.Unclosed\"\n",
+			"template parse error",
+		},
+		{
+			"unknown custom command context",
+			"customCommands:\n  - key: \"y\"\n    name: bad\n    command: echo\n    contexts: [issues]\n",
+			`unknown context "issues"`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv(envConfigDir, dir)
+			clearBitbucketEnv(t)
+			writeConfigFile(t, dir, tc.cfgYAML)
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("Load() should reject %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoad_AcceptsEveryListFieldAndTabState(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, `gui:
+  pullRequestListFields: [repo, id, title, author, approvals, build, updated, branch, state]
+pullRequestTabs:
+  - name: Open
+  - name: Merged
+    state: MERGED
+  - name: Declined
+    state: declined
+  - name: Superseded
+    state: Superseded
+refreshInterval: "off"
+`)
+
+	cfg := loadOrFatal(t)
+	testkit.AssertEqual(t, "len(PullRequestTabs)", len(cfg.PullRequestTabs), 4)
+
+	interval, err := cfg.ResolveRefreshInterval()
+	if err != nil {
+		t.Fatalf("ResolveRefreshInterval: %v", err)
+	}
+	testkit.AssertEqual(t, "refresh interval", interval, time.Duration(0))
 }
 
 func TestLoad_CustomCommandRefreshFromYAML(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("LAZYJIRA_CONFIG_DIR", dir)
-
-	cfgYAML := `customCommands:
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, `customCommands:
   - key: "y"
     name: "copy"
     command: "echo {{.Key}}"
     suspend: false
   - key: "w"
-    name: "log work"
+    name: "checkout"
     command: "echo {{.Key}}"
     refresh: true
-`
-	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(cfgYAML), 0o644); err != nil {
-		t.Fatal(err)
-	}
+`)
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	cfg := loadOrFatal(t)
 	if cfg.CustomCommands[0].Refresh {
 		t.Error("first command: Refresh should default to false")
+	}
+	if cfg.CustomCommands[0].ShouldSuspend() {
+		t.Error("first command: ShouldSuspend should be false when suspend: false")
 	}
 	if !cfg.CustomCommands[1].Refresh {
 		t.Error("second command: Refresh should be true")
 	}
 }
 
-func TestLoad_InvalidCustomCommandTemplate(t *testing.T) {
+func TestLoad_InvalidYAMLErrors(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("LAZYJIRA_CONFIG_DIR", dir)
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, "gui: [unclosed")
 
-	cfgYAML := `customCommands:
-  - key: "y"
-    name: "broken"
-    command: "echo {{.Unclosed"
-`
-	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(cfgYAML), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error for invalid template, got nil")
-	}
-	if !strings.Contains(err.Error(), "template parse error") {
-		t.Errorf("error = %q, want it to mention template parse error", err)
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() with invalid YAML should error")
 	}
 }
 
-func pointerTo[T any](v T) *T { return &v }
+func TestLoad_ReadErrorWhenConfigFileIsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	if err := os.Mkdir(filepath.Join(dir, configFileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() with unreadable config file should error")
+	}
+}
+
+func TestSave_RoundTripsWithoutToken(t *testing.T) {
+	t.Setenv(envConfigDir, t.TempDir())
+	clearBitbucketEnv(t)
+
+	cfg := DefaultConfig()
+	cfg.Bitbucket.Workspace = testWorkspace
+	cfg.Bitbucket.Repositories = []string{testRepo}
+	cfg.Bitbucket.Email = testEmail
+	cfg.Bitbucket.Token = testToken
+
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	written, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if strings.Contains(string(written), testToken) {
+		t.Error("saved config must not contain the API token")
+	}
+
+	loaded := loadOrFatal(t)
+	testkit.AssertEqual(t, "Workspace", loaded.Bitbucket.Workspace, testWorkspace)
+	testkit.AssertEqual(t, "Email", loaded.Bitbucket.Email, testEmail)
+	testkit.AssertEqual(t, "Token", loaded.Bitbucket.Token, "")
+	testkit.AssertSliceEqual(t, "Repositories", loaded.Bitbucket.Repositories, []string{testRepo})
+	testkit.AssertEqual(t, "len(PullRequestTabs)", len(loaded.PullRequestTabs), 3)
+}
+
+func TestSave_CreatesMissingConfigDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested", "lazybitbucket")
+	t.Setenv(envConfigDir, dir)
+
+	if err := Save(DefaultConfig()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := os.Stat(ConfigPath()); err != nil {
+		t.Errorf("config file missing after Save: %v", err)
+	}
+}
+
+func TestSave_FailsWhenConfigDirIsFile(t *testing.T) {
+	blockingFile := filepath.Join(t.TempDir(), "occupied")
+	if err := os.WriteFile(blockingFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envConfigDir, blockingFile)
+
+	if err := Save(DefaultConfig()); err == nil {
+		t.Fatal("Save() into a file path should error")
+	}
+}
+
+func TestSave_NilConfigErrors(t *testing.T) {
+	t.Setenv(envConfigDir, t.TempDir())
+
+	if err := Save(nil); err == nil {
+		t.Fatal("Save(nil) should error")
+	}
+}
 
 func TestResolveMaxResults(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name   string
 		global *int
-		tab    IssueTabConfig
+		tab    PullRequestTabConfig
 		want   int
 	}{
-		{"all unset → default", nil, IssueTabConfig{}, DefaultMaxResults},
-		{"global only", pointerTo(25), IssueTabConfig{}, 25},
-		{"tab overrides global", pointerTo(25), IssueTabConfig{MaxResults: pointerTo(75)}, 75},
-		{"negative global ignored", pointerTo(-5), IssueTabConfig{}, DefaultMaxResults},
-		{"zero tab falls back to global", pointerTo(40), IssueTabConfig{MaxResults: pointerTo(0)}, 40},
-		{"large global not clamped", pointerTo(500), IssueTabConfig{}, 500},
-		{"large tab override not clamped", pointerTo(50), IssueTabConfig{MaxResults: pointerTo(1000)}, 1000},
+		{"all unset → default", nil, PullRequestTabConfig{}, DefaultMaxResults},
+		{"global only", pointerTo(25), PullRequestTabConfig{}, 25},
+		{"tab overrides global", pointerTo(25), PullRequestTabConfig{MaxResults: pointerTo(75)}, 75},
+		{"negative global ignored", pointerTo(-5), PullRequestTabConfig{}, DefaultMaxResults},
+		{"zero tab falls back to global", pointerTo(40), PullRequestTabConfig{MaxResults: pointerTo(0)}, 40},
+		{"large global not clamped", pointerTo(500), PullRequestTabConfig{}, 500},
+		{"large tab override not clamped", pointerTo(50), PullRequestTabConfig{MaxResults: pointerTo(1000)}, 1000},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			c := &Config{MaxResults: tc.global}
-			if got := c.ResolveMaxResults(tc.tab); got != tc.want {
-				t.Errorf("ResolveMaxResults = %d, want %d", got, tc.want)
-			}
+			cfg := &Config{MaxResults: tc.global}
+			testkit.AssertEqual(t, "ResolveMaxResults", cfg.ResolveMaxResults(tc.tab), tc.want)
 		})
 	}
 }
@@ -162,193 +543,115 @@ func TestResolveGlobalMaxResults(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			c := &Config{MaxResults: tc.global}
-			if got := c.ResolveGlobalMaxResults(); got != tc.want {
-				t.Errorf("ResolveGlobalMaxResults = %d, want %d", got, tc.want)
-			}
+			cfg := &Config{MaxResults: tc.global}
+			testkit.AssertEqual(t, "ResolveGlobalMaxResults", cfg.ResolveGlobalMaxResults(), tc.want)
 		})
 	}
 }
 
-func TestDefaultConfig_MaxResults(t *testing.T) {
-	t.Parallel()
-	cfg := DefaultConfig()
-	if cfg.MaxResults != nil {
-		t.Errorf("default MaxResults should be nil (unset), got %d", *cfg.MaxResults)
-	}
-	if got := cfg.ResolveGlobalMaxResults(); got != DefaultMaxResults {
-		t.Errorf("ResolveGlobalMaxResults on defaults = %d, want %d", got, DefaultMaxResults)
-	}
-}
-
-func TestLoad_ProjectsAcceptsStringShorthand(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("LAZYJIRA_CONFIG_DIR", dir)
-
-	cfgYAML := `projects:
-  - ORCH
-  - key: DATA
-    boardId: 7
-`
-	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(cfgYAML), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got := len(cfg.Projects); got != 2 {
-		t.Fatalf("len(Projects) = %d, want 2", got)
-	}
-	if cfg.Projects[0].Key != "ORCH" || cfg.Projects[0].BoardID != 0 {
-		t.Errorf("Projects[0] = %+v, want {Key:ORCH BoardID:0}", cfg.Projects[0])
-	}
-	if cfg.Projects[1].Key != "DATA" || cfg.Projects[1].BoardID != 7 {
-		t.Errorf("Projects[1] = %+v, want {Key:DATA BoardID:7}", cfg.Projects[1])
-	}
-}
-
-func TestValidateConverter(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name    string
-		value   string
-		wantErr bool
-	}{
-		{"empty defaults to builtin", "", false},
-		{"explicit builtin", ConverterBuiltin, false},
-		{"adf-converter", ConverterAdfConverter, false},
-		{"unknown value errors", "foo", true},
-		{"typo errors", "adfconverter", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			err := validateConverter(tc.value)
-			if tc.wantErr && err == nil {
-				t.Errorf("validateConverter(%q) = nil, want error", tc.value)
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("validateConverter(%q) = %v, want nil", tc.value, err)
-			}
-			if tc.wantErr && err != nil && !strings.Contains(err.Error(), tc.value) {
-				t.Errorf("error %q should include the bad value %q", err.Error(), tc.value)
-			}
-		})
-	}
-}
-
-func TestValidateRenderer(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name    string
-		value   string
-		wantErr bool
-	}{
-		{"empty defaults to builtin", "", false},
-		{"explicit builtin", RendererBuiltin, false},
-		{"glamour", RendererGlamour, false},
-		{"unknown value errors", "foo", true},
-		{"typo errors", "glamor", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			err := validateRenderer(tc.value)
-			if tc.wantErr && err == nil {
-				t.Errorf("validateRenderer(%q) = nil, want error", tc.value)
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("validateRenderer(%q) = %v, want nil", tc.value, err)
-			}
-			if tc.wantErr && err != nil && !strings.Contains(err.Error(), tc.value) {
-				t.Errorf("error %q should include the bad value %q", err.Error(), tc.value)
-			}
-		})
-	}
-}
-
-func TestLoad_RejectsUnknownConverter(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("LAZYJIRA_CONFIG_DIR", dir)
-	cfgYAML := "converter: not-a-real-converter\n"
-	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(cfgYAML), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(); err == nil {
-		t.Fatal("Load() with unknown converter should error")
-	} else if !strings.Contains(err.Error(), "not-a-real-converter") {
-		t.Errorf("error should name the invalid value, got: %v", err)
-	}
-}
-
-func TestJiraConfig_IsCloud(t *testing.T) {
+func TestResolveRefreshInterval(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name       string
-		serverType string
-		want       bool
+		name    string
+		value   string
+		want    time.Duration
+		wantErr bool
 	}{
-		{"empty defaults to cloud", "", true},
-		{"explicit cloud", "cloud", true},
-		{"server", "server", false},
-		{"datacenter", "datacenter", false},
+		{"empty → 120s", "", 120 * time.Second, false},
+		{"whitespace → 120s", "  ", 120 * time.Second, false},
+		{"explicit duration", "30s", 30 * time.Second, false},
+		{"minutes", "5m", 5 * time.Minute, false},
+		{"zero disables", "0", 0, false},
+		{"off disables", "off", 0, false},
+		{"OFF is case-insensitive", "OFF", 0, false},
+		{"0s parses to zero", "0s", 0, false},
+		{"unparsable errors", "soon", 0, true},
+		{"bare number errors", "30", 0, true},
+		{"negative errors", "-1m", 0, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			jiraConfig := JiraConfig{ServerType: tc.serverType}
-			if got := jiraConfig.IsCloud(); got != tc.want {
-				t.Errorf("IsCloud() = %v, want %v", got, tc.want)
+			cfg := &Config{RefreshInterval: tc.value}
+			got, err := cfg.ResolveRefreshInterval()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ResolveRefreshInterval(%q) = %v, want error", tc.value, got)
+				}
+				return
 			}
+			if err != nil {
+				t.Fatalf("ResolveRefreshInterval(%q): %v", tc.value, err)
+			}
+			testkit.AssertEqual(t, "interval", got, tc.want)
 		})
 	}
 }
 
-func TestGUIConfig_TriStateDefaults(t *testing.T) {
+func TestResolveEditor(t *testing.T) {
+	tests := []struct {
+		name   string
+		editor string
+		visual string
+		envVar string
+		want   string
+	}{
+		{"config wins", "helix", "vim", "nano", "helix"},
+		{"VISUAL beats EDITOR", "", "vim", "nano", "vim"},
+		{"EDITOR when no VISUAL", "", "", "nano", "nano"},
+		{"default when nothing set", "", "", "", DefaultEditor},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("VISUAL", tc.visual)
+			t.Setenv("EDITOR", tc.envVar)
+
+			cfg := &Config{Editor: tc.editor}
+			testkit.AssertEqual(t, "ResolveEditor", cfg.ResolveEditor(), tc.want)
+		})
+	}
+}
+
+func TestResolveBaseURL(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name  string
-		value *bool
-		want  bool
+		value string
+		want  string
 	}{
-		{"nil defaults to true", nil, true},
-		{"explicit true", pointerTo(true), true},
-		{"explicit false", pointerTo(false), false},
+		{"empty → default", "", DefaultBaseURL},
+		{"whitespace → default", "   ", DefaultBaseURL},
+		{"explicit", "https://bb.example.com/2.0", "https://bb.example.com/2.0"},
+		{"trailing slash trimmed", "https://bb.example.com/2.0/", "https://bb.example.com/2.0"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			gui := GUIConfig{PrefillFromTab: tc.value, SelectCreatedIssue: tc.value}
-			if got := gui.ShouldPrefillFromTab(); got != tc.want {
-				t.Errorf("ShouldPrefillFromTab() = %v, want %v", got, tc.want)
-			}
-			if got := gui.ShouldSelectCreatedIssue(); got != tc.want {
-				t.Errorf("ShouldSelectCreatedIssue() = %v, want %v", got, tc.want)
-			}
+			cfg := &Config{Bitbucket: BitbucketConfig{BaseURL: tc.value}}
+			testkit.AssertEqual(t, "ResolveBaseURL", cfg.ResolveBaseURL(), tc.want)
 		})
 	}
 }
 
-func TestCustomCommandConfig_ShouldSuspend(t *testing.T) {
+func TestPullRequestTabConfig_ResolveState(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name    string
-		suspend *bool
-		want    bool
+		name  string
+		state string
+		want  string
 	}{
-		{"nil defaults to true", nil, true},
-		{"explicit true", pointerTo(true), true},
-		{"explicit false", pointerTo(false), false},
+		{"empty → OPEN", "", "OPEN"},
+		{"whitespace → OPEN", " ", "OPEN"},
+		{"already uppercase", "MERGED", "MERGED"},
+		{"lowercase uppercased", "declined", "DECLINED"},
+		{"mixed case uppercased", "Superseded", "SUPERSEDED"},
+		{"padded", " open ", "OPEN"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			command := CustomCommandConfig{Suspend: tc.suspend}
-			if got := command.ShouldSuspend(); got != tc.want {
-				t.Errorf("ShouldSuspend() = %v, want %v", got, tc.want)
-			}
+			tab := PullRequestTabConfig{State: tc.state}
+			testkit.AssertEqual(t, "ResolveState", tab.ResolveState(), tc.want)
 		})
 	}
 }
@@ -371,201 +674,38 @@ func TestValidateRendererStyle(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			err := validateRendererStyle(tc.value)
-			if tc.wantErr && err == nil {
-				t.Errorf("validateRendererStyle(%q) = nil, want error", tc.value)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("validateRendererStyle(%q) = nil, want error", tc.value)
+				}
+				if !strings.Contains(err.Error(), tc.value) {
+					t.Errorf("error %q should include the bad value %q", err, tc.value)
+				}
+				return
 			}
-			if !tc.wantErr && err != nil {
+			if err != nil {
 				t.Errorf("validateRendererStyle(%q) = %v, want nil", tc.value, err)
-			}
-			if tc.wantErr && err != nil && !strings.Contains(err.Error(), tc.value) {
-				t.Errorf("error %q should include the bad value %q", err.Error(), tc.value)
 			}
 		})
 	}
 }
 
-func TestConfigDir_FallsBackToUserConfigDir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("env fallback chain differs on Windows")
-	}
-
-	t.Setenv("LAZYJIRA_CONFIG_DIR", "")
-	t.Setenv("XDG_CONFIG_HOME", "")
-
-	userConfigDir, err := os.UserConfigDir()
-	if err != nil {
-		t.Fatalf("os.UserConfigDir: %v", err)
-	}
-	want := filepath.Join(userConfigDir, "lazyjira")
-	if got := ConfigDir(); got != want {
-		t.Errorf("ConfigDir() = %q, want %q", got, want)
-	}
-}
-
-func TestConfigDir_FallsBackToDotConfigWithoutHome(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("env fallback chain differs on Windows")
-	}
-
-	t.Setenv("LAZYJIRA_CONFIG_DIR", "")
-	t.Setenv("XDG_CONFIG_HOME", "")
-	t.Setenv("HOME", "")
-
-	want := filepath.Join(".", ".config", "lazyjira")
-	if got := ConfigDir(); got != want {
-		t.Errorf("ConfigDir() = %q, want %q", got, want)
-	}
-}
-
-func TestLoad_ReadErrorWhenConfigFileIsDirectory(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("LAZYJIRA_CONFIG_DIR", dir)
-
-	if err := os.Mkdir(filepath.Join(dir, "config.yml"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := Load(); err == nil {
-		t.Fatal("Load() with unreadable config file should error")
-	}
-}
-
-func TestLoad_InvalidYAMLErrors(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("LAZYJIRA_CONFIG_DIR", dir)
-
-	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte("gui: [unclosed"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := Load(); err == nil {
-		t.Fatal("Load() with invalid YAML should error")
-	}
-}
-
-func TestLoad_MigratesDeprecatedCustomFields(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("LAZYJIRA_CONFIG_DIR", dir)
-
-	cfgYAML := `customFields:
-  - id: "customfield_10015"
-    name: "Story Points"
-`
-	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(cfgYAML), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if len(cfg.Fields) != 1 || cfg.Fields[0].ID != "customfield_10015" {
-		t.Errorf("Fields = %+v, want the deprecated customFields entry migrated", cfg.Fields)
-	}
-	if cfg.DeprecatedFields != nil {
-		t.Errorf("DeprecatedFields = %+v, want nil after migration", cfg.DeprecatedFields)
-	}
-}
-
-func TestLoad_FieldsWinOverDeprecatedCustomFields(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("LAZYJIRA_CONFIG_DIR", dir)
-
-	cfgYAML := `fields:
-  - id: status
-customFields:
-  - id: "customfield_10015"
-`
-	if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(cfgYAML), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if len(cfg.Fields) != 1 || cfg.Fields[0].ID != "status" {
-		t.Errorf("Fields = %+v, want only the explicit fields list", cfg.Fields)
-	}
-}
-
-func TestLoad_RejectsUnknownRendererAndStyle(t *testing.T) {
+func TestCustomCommandConfig_ShouldSuspend(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
-		cfgYAML string
-		wantErr string
+		suspend *bool
+		want    bool
 	}{
-		{"unknown renderer", "renderer: not-a-renderer\n", "not-a-renderer"},
-		{"unknown rendererStyle", "rendererStyle: not-a-style\n", "not-a-style"},
+		{"nil defaults to true", nil, true},
+		{"explicit true", pointerTo(true), true},
+		{"explicit false", pointerTo(false), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			t.Setenv("LAZYJIRA_CONFIG_DIR", dir)
-			if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(tc.cfgYAML), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			_, err := Load()
-			if err == nil {
-				t.Fatal("Load() should reject the invalid value")
-			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Errorf("error should name the invalid value, got: %v", err)
-			}
+			t.Parallel()
+			command := CustomCommandConfig{Suspend: tc.suspend}
+			testkit.AssertEqual(t, "ShouldSuspend", command.ShouldSuspend(), tc.want)
 		})
-	}
-}
-
-func TestSave_RoundTripsWithoutToken(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("LAZYJIRA_CONFIG_DIR", dir)
-	t.Setenv("JIRA_HOST", "")
-
-	cfg := DefaultConfig()
-	cfg.Jira.Host = "https://example.atlassian.net"
-	cfg.Jira.Token = "super-secret-token"
-
-	if err := Save(cfg); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	written, err := os.ReadFile(ConfigPath())
-	if err != nil {
-		t.Fatalf("read saved config: %v", err)
-	}
-	if strings.Contains(string(written), "super-secret-token") {
-		t.Error("saved config must not contain the API token")
-	}
-
-	loaded, err := Load()
-	if err != nil {
-		t.Fatalf("Load after Save: %v", err)
-	}
-	if loaded.Jira.Host != "https://example.atlassian.net" {
-		t.Errorf("Host = %q, want the saved value", loaded.Jira.Host)
-	}
-}
-
-func TestSave_CreatesMissingConfigDir(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "nested", "lazyjira")
-	t.Setenv("LAZYJIRA_CONFIG_DIR", dir)
-
-	if err := Save(DefaultConfig()); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	if _, err := os.Stat(ConfigPath()); err != nil {
-		t.Errorf("config file missing after Save: %v", err)
-	}
-}
-
-func TestSave_FailsWhenConfigDirIsFile(t *testing.T) {
-	blockingFile := filepath.Join(t.TempDir(), "occupied")
-	if err := os.WriteFile(blockingFile, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("LAZYJIRA_CONFIG_DIR", blockingFile)
-
-	if err := Save(DefaultConfig()); err == nil {
-		t.Fatal("Save() into a file path should error")
 	}
 }
