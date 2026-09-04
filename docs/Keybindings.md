@@ -90,21 +90,61 @@ The first row is `All repositories`, which clears the filter. Selecting a reposi
 
 ## Detail panel `[0]`
 
-Showing a pull request or a repository:
+The detail panel shows one thing at a time. A pull request is split into four tabs — Overview, Files, Commits, Comments — and the Files tab drills into a single file's diff.
+
+Common keys, whatever is on screen:
 
 | Key | Action | Config key |
 |-----|--------|------------|
-| `j` / `k` | Scroll | `navigation.down`, `navigation.up` |
+| `j` / `k` | Move the cursor, or scroll in a text view | `navigation.down`, `navigation.up` |
 | `ctrl+d` / `ctrl+u` | Half page down / up | `navigation.halfPageDown`, `navigation.halfPageUp` |
-| `o` | Open in a browser | `pullRequests.browser` |
-| `u` | URL picker | `pullRequests.urlPicker` |
-| `y` | Copy the pull request URL | `pullRequests.copyURL` |
-| `h` / `left` / `esc` | Back to the left panels | `detail.focusLeft` |
-| `[` / `]` | Previous / next detail tab | `universal.prevTab`, `universal.nextTab` |
+| `g` / `G` | Jump to the top / bottom | `navigation.top`, `navigation.bottom` |
+| `h` / `left` / `esc` | Back one level, then out to the left panels | `detail.focusLeft` |
+| `backspace` | Back one level only: file diff → Files tab, step log → pipeline → pull request | `detail.back` |
+| `r` | Refresh the selected pull request, including the data of the active tab and the diff on screen | `universal.refresh` |
 
-The pull request view has a single tab today (Overview), so `[` / `]` there is a no-op until the Diff, Commits and Comments tabs land.
+### Pull request tabs
 
-Showing a pipeline run or a step log:
+| Key | Action | Config key |
+|-----|--------|------------|
+| `[` / `]` | Previous / next tab | `universal.prevTab`, `universal.nextTab` |
+| `i` | Overview tab | `detail.overviewTab` |
+| `d` | Files tab — the changed files | `detail.filesTab` |
+| `m` | Commits tab | `detail.commitsTab` |
+| `t` | Comments tab — the review threads | `detail.commentsTab` |
+
+A tab's data is fetched the first time you open it and cached per pull request, so nothing is requested for a tab you never visit. The tab label carries the item count once it is known (`Files (3)`), an ellipsis while the fetch is in flight. The four jump keys only act while the detail panel is focused; from a left panel they fall through to that panel. Pressed inside a file diff, they leave the diff and land on the tab.
+
+`enter` is the tab's own key, and does something different in each:
+
+| Tab | `enter` | Other keys |
+|-----|---------|------------|
+| Overview | — | `o` opens the pull request, `u` the URL picker, `y` copies its URL |
+| Files | Open the selected file's diff | `n` / `p` move to the next / previous file, `e` opens the file in your editor, `o` opens the pull request |
+| Commits | Expand the full commit message | `o` opens the commit in a browser, `y` copies its URL |
+| Comments | Expand the whole thread | `o` opens the thread in a browser, `y` copies its URL |
+
+The Files tab lists a status letter (`A` added, `M` modified, `D` removed, `R` renamed, plus a gray `B` for a binary file) and the `+added −removed` counts. The Comments tab shows each thread as `path:line` (or `General`), whether it is resolved and its replies.
+
+### File diff
+
+`enter` on the Files tab, or `n` / `p` from inside a diff, opens one file's syntax-highlighted diff. The cursor is a line cursor: it moves over context, added, removed and hunk-header lines.
+
+| Key | Action | Config key |
+|-----|--------|------------|
+| `j` / `k` | Move the line cursor | `navigation.down`, `navigation.up` |
+| `n` / `p` | Open the next / previous changed file; it stops at both ends rather than wrapping | `detail.nextFile`, `detail.prevFile` |
+| `e` | Open the file in your editor, at the cursor's line | `detail.openEditor` |
+| `enter` | Jump to the review thread on this line, when the line is marked with `●` | `pullRequests.open` |
+| `o` | Open the pull request's diff in a browser | `pullRequests.browser` |
+| `y` | Copy that URL | `pullRequests.copyURL` |
+| `backspace` | Back to the Files tab, with the cursor on the file you were reading | `detail.back` |
+
+A `●` in the marker column means the line carries at least one inline comment (a digit when there are several). Comment markers need the review threads, which are fetched alongside the diff, so they may appear a moment after the diff itself.
+
+`e` opens the new side of the diff: on an added or context line its own line, on a removed line the next line that still exists, on a hunk header the hunk's first line. Files are resolved against the git repository lazybitbucket was started in, which is never checked against the pull request's repository — when the checkout is on another branch the hint bar says so and the file still opens. See [Editor](Config.md#editor) for the editors that understand a line number.
+
+### Pipeline run and step log
 
 | Key | Action | Config key |
 |-----|--------|------------|

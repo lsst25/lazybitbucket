@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -707,5 +708,108 @@ func TestCustomCommandConfig_ShouldSuspend(t *testing.T) {
 			command := CustomCommandConfig{Suspend: tc.suspend}
 			testkit.AssertEqual(t, "ShouldSuspend", command.ShouldSuspend(), tc.want)
 		})
+	}
+}
+
+// detailKeysFixture is a fully-populated DetailKeys with a distinct value per
+// field, so a wrong or duplicated yaml tag shows up as a mismatch.
+func detailKeysFixture() DetailKeys {
+	return DetailKeys{
+		FocusLeft:    "h",
+		Back:         "esc",
+		ScrollDown:   "J",
+		ScrollUp:     "K",
+		HalfPageDown: "ctrl+f",
+		HalfPageUp:   "ctrl+b",
+		OverviewTab:  "i",
+		FilesTab:     "d",
+		CommitsTab:   "m",
+		CommentsTab:  "t",
+		NextFile:     "n",
+		PrevFile:     "p",
+		OpenEditor:   "e",
+	}
+}
+
+// detailKeyYAMLNames are the yaml keys of every keybinding.detail field, in
+// declaration order.
+var detailKeyYAMLNames = []string{
+	"focusLeft", "back", "scrollDown", "scrollUp", "halfPageDown", "halfPageUp",
+	"overviewTab", "filesTab", "commitsTab", "commentsTab",
+	"nextFile", "prevFile", "openEditor",
+}
+
+func TestLoad_ReadsDetailKeybindingsFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+
+	want := detailKeysFixture()
+	var body strings.Builder
+	body.WriteString("keybinding:\n  detail:\n")
+	for _, name := range detailKeyYAMLNames {
+		fmt.Fprintf(&body, "    %s: %q\n", name, detailKeyByYAMLName(t, want, name))
+	}
+	writeConfigFile(t, dir, body.String())
+
+	testkit.AssertEqual(t, "Keybinding.Detail", loadOrFatal(t).Keybinding.Detail, want)
+}
+
+func TestSave_RoundTripsDetailKeybindings(t *testing.T) {
+	t.Setenv(envConfigDir, t.TempDir())
+	clearBitbucketEnv(t)
+
+	cfg := DefaultConfig()
+	cfg.Keybinding.Detail = detailKeysFixture()
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	written, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	for _, name := range detailKeyYAMLNames {
+		if !strings.Contains(string(written), name+": ") {
+			t.Errorf("saved config is missing the %q detail key:\n%s", name, written)
+		}
+	}
+
+	testkit.AssertEqual(t, "Keybinding.Detail", loadOrFatal(t).Keybinding.Detail, detailKeysFixture())
+}
+
+// detailKeyByYAMLName maps a yaml key back to its DetailKeys field value.
+func detailKeyByYAMLName(t *testing.T, keys DetailKeys, name string) string {
+	t.Helper()
+	switch name {
+	case "focusLeft":
+		return keys.FocusLeft
+	case "back":
+		return keys.Back
+	case "scrollDown":
+		return keys.ScrollDown
+	case "scrollUp":
+		return keys.ScrollUp
+	case "halfPageDown":
+		return keys.HalfPageDown
+	case "halfPageUp":
+		return keys.HalfPageUp
+	case "overviewTab":
+		return keys.OverviewTab
+	case "filesTab":
+		return keys.FilesTab
+	case "commitsTab":
+		return keys.CommitsTab
+	case "commentsTab":
+		return keys.CommentsTab
+	case "nextFile":
+		return keys.NextFile
+	case "prevFile":
+		return keys.PrevFile
+	case "openEditor":
+		return keys.OpenEditor
+	default:
+		t.Fatalf("detailKeyByYAMLName: unknown yaml key %q", name)
+		return ""
 	}
 }

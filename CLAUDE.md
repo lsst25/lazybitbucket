@@ -13,8 +13,9 @@ integration, release packaging. What it does not have is any concept of a pull r
 
 ## Current status
 
-ROADMAP steps 0 and 1 are **implemented**. The domain layer is Bitbucket, `pkg/jira` is gone, and the
-binary, config dir and packaging are renamed.
+ROADMAP steps 0, 1 and 2 are **implemented**. The domain layer is Bitbucket, `pkg/jira` is gone, the
+binary, config dir and packaging are renamed, and the review surface — diff pane, editor hand-off,
+commits and review threads — is in.
 
 What exists:
 
@@ -22,14 +23,20 @@ What exists:
   concurrent multi-repo PR fetch), `pkg/bitbucket/bitbuckettest` (strict fake client) and
   `pkg/bitbucket/demo` (deterministic dataset + fake REST server, an ordinary untagged package used by
   `--demo` and by integration tests).
+- `pkg/diff` — a lenient unified-diff parser (files, hunks, per-side line numbers, renames, binary
+  files, `\ No newline at end of file`, quoted paths). Pure, stdlib only.
 - `pkg/config` — `bitbucket` (workspace, repositories, email, baseUrl), `pullRequestTabs`,
-  `gui.pullRequestListFields`, `refreshInterval`, custom command contexts
-  `pullrequests`/`builds`/`repos`/`detail`.
+  `gui.pullRequestListFields`, `refreshInterval`, `editor`, custom command contexts
+  `pullrequests`/`builds`/`repos`/`detail`/`diff`.
 - `pkg/tui` — panels Status `[1]`, Pull Requests `[2]`, Builds `[3]`, Repos `[4]`, Detail `[0]`. PR list
-  with Open/Mine/Reviewing tabs and configurable columns, detail pane with Markdown descriptions via
-  glamour, Builds panel with drill-down into a pipeline run, its steps and each step's log, repo filter,
-  `/` search, URL picker, copy URL, browser hand-off, source-branch checkout, custom commands, themes,
-  and a `refreshInterval` auto-refresh of the active tab.
+  with Open/Mine/Reviewing tabs and configurable columns, Builds panel with drill-down into a pipeline
+  run, its steps and each step's log, repo filter, `/` search, URL picker, copy URL, browser hand-off,
+  source-branch checkout, custom commands, themes, and a `refreshInterval` auto-refresh of the active
+  tab. The detail pane has four PR tabs — Overview (Markdown description via glamour), Files, Commits,
+  Comments — each fetched on first tab entry (`review.go`) and cached per PR key, stamped with the
+  source commit so a push invalidates it. Behind the Files tab is `ModeFileDiff`: a per-file unified
+  diff with a line cursor, chroma syntax highlighting, `●` markers on commented lines, `n`/`p` to walk
+  the files and `e` to open the file at the cursor's line in `config.ResolveEditor()` (`editor.go`).
 - `cmd/lazybitbucket` — CLI (`auth`, `logout`, `version`; `--demo --log --debug --workspace --repo`),
   credential wizard.
 
@@ -41,10 +48,10 @@ Hard constraints that still hold:
   tests use `pkg/bitbucket/demo`.
 - `pkg/bitbucket` and `pkg/bitbucket/demo` import nothing from `pkg/tui` or `pkg/config`.
 
-Not built yet (ROADMAP step 2+): diff pane, review threads, commits list, editor integration on files,
-and every write operation. The detail pane therefore has a single tab (Overview), and `config.Editor` /
-`ResolveEditor` are validated but unused — nothing opens an editor yet. ROADMAP step 2 still lists
-custom commands as unchecked; they are in fact implemented.
+Not built yet (ROADMAP step 3+): every write operation — merge, sync with target, editing title or
+description, reviewers, draft state, approving, posting or resolving comments, triggering pipelines —
+plus the richer search/saved filters and PR creation of step 4. Also not built: the activity feed,
+side-by-side diffs, whole-file views and conflict display (deliberate step-2 non-goals).
 
 ## Port plan (done)
 

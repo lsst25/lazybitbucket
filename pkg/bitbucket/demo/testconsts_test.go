@@ -24,3 +24,16 @@ const (
 	headerAuthorization = "Authorization"
 	demoAuthorization   = "Bearer demo-token"
 )
+
+// Review route segments and the members their envelopes carry.
+const (
+	segmentCommits  = "/commits"
+	segmentComments = "/comments"
+	segmentDiff     = "/diff"
+	segmentDiffStat = "/diffstat"
+
+	fieldPage = "page"
+
+	headerContentType = "Content-Type"
+	headerLocation    = "Location"
+)

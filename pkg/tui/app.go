@@ -14,6 +14,7 @@ import (
 
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/diff"
 	"github.com/lsst25/lazybitbucket/pkg/git"
 	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 	"github.com/lsst25/lazybitbucket/pkg/tui/theme"
@@ -120,6 +121,14 @@ type App struct {
 	statusCache   map[string]statusEntry
 	pipelineCache map[string]*pipelineEntry
 
+	// The review caches, all keyed by pull request key (the file diffs by key
+	// plus path) and all stamped with the source commit they describe, so a
+	// push drops them. See review.go.
+	diffStatCache map[string]reviewEntry[[]bitbucket.DiffStatEntry]
+	commitsCache  map[string]reviewEntry[[]bitbucket.Commit]
+	threadsCache  map[string]reviewEntry[[]bitbucket.Thread]
+	fileDiffCache map[string]reviewEntry[*diff.File]
+
 	// prefetchQueue is the remaining pull request keys to warm, head first.
 	// prefetchEpoch is bumped whenever the queue is refilled so that in-flight
 	// results from a superseded tab or repository filter are dropped.
@@ -140,7 +149,12 @@ type App struct {
 	// goroutine executes the command, and read in View.
 	rateLimit atomic.Int64
 
+	// gitRepoPath is the cwd when it is inside a repository; gitRepoRoot is
+	// that repository's working tree root, which is what a diff path has to be
+	// resolved against. Neither is checked against the pull request's own
+	// repository — nothing maps one to the other.
 	gitRepoPath   string
+	gitRepoRoot   string
 	gitBranch     string
 	gitAutoSelect bool
 
@@ -197,7 +211,10 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 	prList.SetTabs(cfg.PullRequestTabs)
 	prList.SetFocused(true)
 
-	renderer := views.MarkdownRenderer(views.GlamourRenderer{Style: views.ResolveGlamourStyle(cfg.RendererStyle)})
+	// One resolved style feeds both renderers: glamour for Markdown bodies and
+	// the chroma style it maps to for the diff view's code column.
+	glamourStyle := views.ResolveGlamourStyle(cfg.RendererStyle)
+	renderer := views.MarkdownRenderer(views.GlamourRenderer{Style: glamourStyle})
 
 	logPanel := views.NewLogPanel()
 	logFlag := new(atomic.Bool)
@@ -210,7 +227,7 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 		prList:        prList,
 		buildsPanel:   views.NewBuildsPanel(),
 		repoList:      views.NewRepoList(),
-		detailView:    views.NewDetailView(renderer),
+		detailView:    views.NewDetailView(renderer, views.ChromaStyleFor(glamourStyle)),
 		logPanel:      logPanel,
 		helpBar:       components.NewHelpBar(nil),
 		searchBar:     components.NewSearchBar(),
@@ -227,6 +244,10 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 		prCache:       make(map[string]*bitbucket.PullRequest),
 		statusCache:   make(map[string]statusEntry),
 		pipelineCache: make(map[string]*pipelineEntry),
+		diffStatCache: make(map[string]reviewEntry[[]bitbucket.DiffStatEntry]),
+		commitsCache:  make(map[string]reviewEntry[[]bitbucket.Commit]),
+		threadsCache:  make(map[string]reviewEntry[[]bitbucket.Thread]),
+		fileDiffCache: make(map[string]reviewEntry[*diff.File]),
 		renderer:      renderer,
 	}
 	// The callback runs on whatever goroutine executes the command, and several
@@ -286,6 +307,9 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 		cwd, _ := os.Getwd()
 		if git.IsRepo(cwd) {
 			app.gitRepoPath = cwd
+			if root, err := git.TopLevel(cwd); err == nil && root != "" {
+				app.gitRepoRoot = root
+			}
 			if branch, err := git.CurrentBranch(cwd); err == nil && branch != "" {
 				app.gitBranch = branch
 			}
@@ -442,6 +466,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handlePipelineLoaded(msg)
 	case stepLogLoadedMsg:
 		return a.handleStepLogLoaded(msg)
+	case diffStatLoadedMsg:
+		return a.handleDiffStatLoaded(msg)
+	case commitsLoadedMsg:
+		return a.handleCommitsLoaded(msg)
+	case threadsLoadedMsg:
+		return a.handleThreadsLoaded(msg)
+	case fileDiffLoadedMsg:
+		return a.handleFileDiffLoaded(msg)
 
 	case views.PullRequestSelectedMsg:
 		return a.handlePullRequestSelected(msg)
@@ -454,6 +486,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleStepSelected(msg)
 	case views.ExpandBlockMsg:
 		return a.handleExpandBlock(msg)
+	case views.FileSelectedMsg:
+		return a.handleFileSelected(msg)
+	case views.ThreadSelectedMsg:
+		return a.handleThreadSelected(msg)
 
 	case components.ModalSelectedMsg:
 		return a.handleModalSelected(msg)
@@ -462,6 +498,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case customCommandFinishedMsg:
 		return a.handleCustomCommandFinished(msg)
+	case editorFinishedMsg:
+		return a.handleEditorFinished(msg)
 
 	case gitCheckoutDoneMsg:
 		return a.handleGitBranchSwitch(msg.name)

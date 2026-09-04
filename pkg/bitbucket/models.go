@@ -787,3 +787,259 @@ func RollupStatuses(statuses []CommitStatus) CommitStatusState {
 		return StatusSuccessful
 	}
 }
+
+// Commit is one commit of a pull request, from
+// GET .../pullrequests/{id}/commits. Hash is the full 40-char SHA here, unlike
+// the 12-char abbreviations inside a PR payload — compare with SameCommit.
+type Commit struct {
+	Type       string          `json:"type"` // "commit"
+	Hash       string          `json:"hash"`
+	Date       time.Time       `json:"date"`    // second precision, no fraction
+	Message    string          `json:"message"` // full message; the API keeps the trailing newline
+	Author     CommitAuthor    `json:"author"`
+	Summary    RenderedContent `json:"summary"`
+	Parents    []CommitRef     `json:"parents"` // 2 entries on a merge commit, 0 on a root commit
+	Repository *RepositoryRef  `json:"repository"`
+	Links      CommitLinks     `json:"links"`
+}
+
+// CommitAuthor is a commit's authorship: always the git ident string, plus the
+// Bitbucket account when the ident's email matches one.
+type CommitAuthor struct {
+	Type string   `json:"type"` // "author"
+	Raw  string   `json:"raw"`  // git ident, "Name <email>"
+	User *Account `json:"user"` // nil when the ident matches no Bitbucket account
+}
+
+// CommitLinks are the links carried by a Commit.
+type CommitLinks struct {
+	Self     Link `json:"self"`
+	HTML     Link `json:"html"`
+	Diff     Link `json:"diff"`
+	Patch    Link `json:"patch"`
+	Comments Link `json:"comments"`
+	Statuses Link `json:"statuses"`
+}
+
+// ShortHash is the abbreviated hash the commit list shows: the first seven
+// characters, or the whole hash when it is shorter than that.
+func (c Commit) ShortHash() string {
+	if len(c.Hash) < minCommitPrefix {
+		return c.Hash
+	}
+	return c.Hash[:minCommitPrefix]
+}
+
+// Subject is the first line of the commit message, trimmed. Everything after
+// the first newline is the body, which only the expanded view shows.
+func (c Commit) Subject() string {
+	line, _, _ := strings.Cut(c.Message, "\n")
+	return strings.TrimSpace(line)
+}
+
+// AuthorName is the best human label for the commit's author: the Bitbucket
+// account name when the ident matched an account, else the name part of the
+// git ident ("Name <email>" → "Name"), else the ident verbatim.
+func (c Commit) AuthorName() string {
+	if c.Author.User != nil {
+		return c.Author.User.Name()
+	}
+	if name, _, found := strings.Cut(c.Author.Raw, "<"); found {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
+			return trimmed
+		}
+	}
+	return c.Author.Raw
+}
+
+// HTMLURL is the commit's page on bitbucket.org.
+func (c Commit) HTMLURL() string { return c.Links.HTML.Href }
+
+// Comment is one entry of GET .../pullrequests/{id}/comments. The collection is
+// flat and chronological: replies carry Parent, and the thread tree is built
+// client-side by BuildThreads.
+type Comment struct {
+	Type      string          `json:"type"` // "pullrequest_comment"
+	ID        int64           `json:"id"`   // large ints in the wild, hence int64
+	CreatedOn time.Time       `json:"created_on"`
+	UpdatedOn time.Time       `json:"updated_on"` // equals CreatedOn when never edited
+	Content   RenderedContent `json:"content"`
+	User      Account         `json:"user"`
+	Deleted   bool            `json:"deleted"`
+	Pending   bool            `json:"pending"` // an unpublished draft review comment
+	Parent    *CommentRef     `json:"parent"`  // nil for a thread root
+	Inline    *CommentInline  `json:"inline"`  // nil for a general (non-inline) comment
+	// Resolution may be an EMPTY object on an unresolved comment, so its
+	// presence means nothing on its own — ask Resolved().
+	Resolution *CommentResolution `json:"resolution"`
+	Links      CommentLinks       `json:"links"`
+}
+
+// CommentRef is the parent link of a reply. It is not an account-style stub:
+// there is no type member, only the id and the two links.
+type CommentRef struct {
+	ID    int64 `json:"id"`
+	Links struct {
+		Self Link `json:"self"`
+		HTML Link `json:"html"`
+	} `json:"links"`
+}
+
+// CommentInline is an inline comment's file and line anchor. The line numbers
+// are pointers because null is meaningful: it means "not anchored on that
+// side", and all four null means a file-level comment.
+type CommentInline struct {
+	Path      string `json:"path"`
+	From      *int   `json:"from"`       // old-side line (a removed or context line), else nil
+	To        *int   `json:"to"`         // new-side line (an added or context line), else nil
+	StartFrom *int   `json:"start_from"` // multi-line range start, old side
+	StartTo   *int   `json:"start_to"`   // multi-line range start, new side
+}
+
+// Line is the single line the comment is anchored to: the new-side line when
+// there is one (newSide true), else the old-side line. ok is false for a
+// file-level comment, which is anchored to a path and no line at all.
+func (in CommentInline) Line() (int, bool, bool) {
+	switch {
+	case in.To != nil:
+		return *in.To, true, true
+	case in.From != nil:
+		return *in.From, false, true
+	default:
+		return 0, false, false
+	}
+}
+
+// Range is the span a multi-line comment covers, on the side Line reports.
+// A single-line comment yields start == end; a file-level comment yields
+// ok false.
+func (in CommentInline) Range() (int, int, bool, bool) {
+	line, newSide, ok := in.Line()
+	if !ok {
+		return 0, 0, false, false
+	}
+
+	start := line
+	if newSide && in.StartTo != nil {
+		start = *in.StartTo
+	}
+	if !newSide && in.StartFrom != nil {
+		start = *in.StartFrom
+	}
+
+	end := line
+	if start > end {
+		start, end = end, start
+	}
+	return start, end, newSide, true
+}
+
+// CommentResolution is the "thread resolved" marker. Bitbucket also emits it as
+// an empty object on unresolved comments, so use Resolved rather than a nil
+// check.
+type CommentResolution struct {
+	Type      string    `json:"type"`
+	User      *Account  `json:"user"`
+	CreatedOn time.Time `json:"created_on"`
+}
+
+// Resolved reports whether the resolution object actually marks a resolution.
+// Both absent and empty ({}) mean unresolved.
+func (r *CommentResolution) Resolved() bool {
+	return r != nil && (r.User != nil || !r.CreatedOn.IsZero() || r.Type != "")
+}
+
+// CommentLinks are the links carried by a Comment. Code is present on inline
+// comments only: it is a diff URL that encodes the anchor independently.
+type CommentLinks struct {
+	Self Link `json:"self"`
+	HTML Link `json:"html"`
+	Code Link `json:"code"`
+}
+
+// HTMLURL is the comment's anchor on the pull request page.
+func (c Comment) HTMLURL() string { return c.Links.HTML.Href }
+
+// IsInline reports whether the comment is anchored to a file. A reply repeats
+// its parent's inline block verbatim, so this is true for replies inside an
+// inline thread too.
+func (c Comment) IsInline() bool { return c.Inline != nil && c.Inline.Path != "" }
+
+// Diffstat status values, as they appear in DiffStatEntry.Status. Open enum.
+const (
+	DiffStatAdded    = "added"
+	DiffStatRemoved  = "removed"
+	DiffStatModified = "modified"
+	DiffStatRenamed  = "renamed"
+)
+
+// attributeBinary is the CommitFile.Attributes value that marks a file Git
+// cannot diff as text.
+const attributeBinary = "binary"
+
+// DiffStatEntry is one changed file of GET .../pullrequests/{id}/diffstat
+// (followed through its 302). It is the file list of the diff pane: status plus
+// added/removed line counts, without any of the diff text.
+type DiffStatEntry struct {
+	Type         string      `json:"type"`   // "diffstat"
+	Status       string      `json:"status"` // added | removed | modified | renamed (open enum)
+	LinesAdded   int         `json:"lines_added"`
+	LinesRemoved int         `json:"lines_removed"`
+	Old          *CommitFile `json:"old"` // nil when the file was added
+	New          *CommitFile `json:"new"` // nil when the file was removed
+}
+
+// CommitFile is a file at a commit: the path plus its escaped form, which is
+// what the diff and the path= query parameter use.
+type CommitFile struct {
+	Type        string   `json:"type"` // "commit_file"
+	Path        string   `json:"path"`
+	EscapedPath string   `json:"escaped_path"` // equals Path when no escaping is needed
+	Attributes  []string `json:"attributes"`   // often absent; link|executable|subrepository|binary|lfs
+	Links       struct {
+		Self Link `json:"self"`
+	} `json:"links"`
+}
+
+// Path is the file's display path: the new side when it exists, else the old
+// side (a removed file has no new side).
+func (e DiffStatEntry) Path() string {
+	if e.New != nil {
+		return e.New.Path
+	}
+	if e.Old != nil {
+		return e.Old.Path
+	}
+	return ""
+}
+
+// OldPath is the pre-change path, "" when the file was added. It differs from
+// Path only on a rename.
+func (e DiffStatEntry) OldPath() string {
+	if e.Old != nil {
+		return e.Old.Path
+	}
+	return ""
+}
+
+// EscapedPath is the path to send as the diff endpoint's path= parameter,
+// falling back to the display path when the API sent no escaped form.
+func (e DiffStatEntry) EscapedPath() string {
+	for _, side := range []*CommitFile{e.New, e.Old} {
+		if side != nil && side.EscapedPath != "" {
+			return side.EscapedPath
+		}
+	}
+	return e.Path()
+}
+
+// IsBinary reports whether either side of the change is marked binary, which
+// means there is no textual diff to render.
+func (e DiffStatEntry) IsBinary() bool {
+	for _, side := range []*CommitFile{e.Old, e.New} {
+		if side != nil && slices.Contains(side.Attributes, attributeBinary) {
+			return true
+		}
+	}
+	return false
+}

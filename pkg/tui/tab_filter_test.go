@@ -175,12 +175,16 @@ func TestNextTab_PreviewsWhenTheTabIsCached(t *testing.T) {
 
 func TestPrevTab_OnTheDetailPanelWalksTheDetailTabs(t *testing.T) {
 	t.Parallel()
-	app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
+	fake := &bitbuckettest.FakeClient{T: t}
+	app := sizedApp(t, fake)
 	app.side = sideRight
 
-	_, cmd, handled := app.handleTabAction(ActPrevTab)
+	_, _, handled := app.handleTabAction(ActPrevTab)
 
-	if !handled || cmd != nil {
-		t.Error("tab keys on the detail panel are handled without a command")
+	if !handled {
+		t.Error("tab keys on the detail panel must be handled")
 	}
+	// The detail tabs now warm themselves, so the command is a review fetch at
+	// most — never a pull request list request.
+	testkit.AssertEqual(t, "list requests", fake.CallCount("ListPullRequests"), 0)
 }

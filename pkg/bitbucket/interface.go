@@ -51,6 +51,12 @@ type ClientInterface interface {
 	ListPullRequests(ctx context.Context, workspace, repoSlug string, opts ListPullRequestsOptions) ([]PullRequest, error)
 	GetPullRequest(ctx context.Context, workspace, repoSlug string, id int) (*PullRequest, error)
 	ListPullRequestStatuses(ctx context.Context, workspace, repoSlug string, id int) ([]CommitStatus, error)
+	// ListPullRequestCommits returns the commits newest first: that is the
+	// order the endpoint answers in, and it is passed on unchanged.
+	ListPullRequestCommits(ctx context.Context, workspace, repoSlug string, id int, opts ListOptions) ([]Commit, error)
+	ListPullRequestComments(ctx context.Context, workspace, repoSlug string, id int, opts ListOptions) ([]Comment, error)
+	ListPullRequestDiffStat(ctx context.Context, workspace, repoSlug string, id int) ([]DiffStatEntry, error)
+	GetPullRequestDiff(ctx context.Context, workspace, repoSlug string, id int, opts DiffOptions) (string, error)
 	ListPipelines(ctx context.Context, workspace, repoSlug string, opts ListPipelinesOptions) ([]Pipeline, error)
 	GetPipeline(ctx context.Context, workspace, repoSlug, pipelineRef string) (*Pipeline, error)
 	ListPipelineSteps(ctx context.Context, workspace, repoSlug, pipelineRef string) ([]PipelineStep, error)
@@ -78,6 +84,30 @@ type ListPullRequestsOptions struct {
 	// Fields defaults to "+values.reviewers,+values.participants" so list items
 	// carry review data. Set it to "-" to send no fields parameter.
 	Fields string
+}
+
+// ListOptions bounds a plain paginated sub-resource of a pull request — the
+// commit list and the comment list, neither of which has anything to filter on.
+type ListOptions struct {
+	MaxItems int // 0 → the method's own default; stops following next once reached
+}
+
+// DiffOptions narrows GET .../pullrequests/{id}/diff.
+type DiffOptions struct {
+	// Path limits the diff to one file; "" is the whole pull request diff. It
+	// is the API's escaped_path, i.e. DiffStatEntry.EscapedPath.
+	Path string
+	// Context is the number of context lines around each hunk; 0 means the
+	// API default of three.
+	Context int
+	// DiffURL is an optional pre-resolved diff link — PullRequest.Links.Diff.Href
+	// or the Location the /diff endpoint redirected to. When it is set and
+	// shares scheme and host with the client's BaseURL it is fetched instead of
+	// the /pullrequests/{id}/diff path, which keeps whatever undocumented query
+	// parameters (from_pullrequest_id, exclude_files) the API attached to it. A
+	// foreign-host link is ignored rather than followed, so credentials never
+	// reach a host the API chose.
+	DiffURL string
 }
 
 // ListPipelinesOptions narrows GET .../pipelines.

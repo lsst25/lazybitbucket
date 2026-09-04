@@ -80,6 +80,41 @@ func TestClient_AllMethodsPropagateHTTPErrors(t *testing.T) {
 			wantErr: "list statuses acme/api-gateway#101",
 		},
 		{
+			name: "ListPullRequestCommits",
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.ListPullRequestCommits(ctx, testWorkspace, testRepoSlug, 101,
+					ListOptions{MaxItems: 0})
+				return err
+			},
+			wantErr: "list commits acme/api-gateway#101",
+		},
+		{
+			name: "ListPullRequestComments",
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.ListPullRequestComments(ctx, testWorkspace, testRepoSlug, 101,
+					ListOptions{MaxItems: 0})
+				return err
+			},
+			wantErr: "list comments acme/api-gateway#101",
+		},
+		{
+			name: "ListPullRequestDiffStat",
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.ListPullRequestDiffStat(ctx, testWorkspace, testRepoSlug, 101)
+				return err
+			},
+			wantErr: "get diffstat acme/api-gateway#101",
+		},
+		{
+			name: "GetPullRequestDiff",
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.GetPullRequestDiff(ctx, testWorkspace, testRepoSlug, 101,
+					DiffOptions{Path: "", Context: 0, DiffURL: ""})
+				return err
+			},
+			wantErr: "get diff acme/api-gateway#101",
+		},
+		{
 			name: "ListPipelines",
 			invoke: func(ctx context.Context, client *Client) error {
 				_, err := client.ListPipelines(ctx, testWorkspace, testRepoSlug,

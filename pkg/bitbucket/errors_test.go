@@ -244,3 +244,53 @@ func TestAPIError_ErrorsAsRecoversFields(t *testing.T) {
 	testkit.AssertEqual(t, "Status", apiErr.Status, http.StatusNotFound)
 	testkit.AssertEqual(t, "ID", apiErr.ID, "deadbeef")
 }
+
+func TestParseAPIError_DiffTooLargeStatus(t *testing.T) {
+	t.Parallel()
+
+	// 555 is Bitbucket's own invention: net/http has no text for it, so the
+	// APIError has to supply one or the message reads as a bare number.
+	apiErr := parseAPIError(testMethod, testPath, StatusDiffTooLarge, http.Header{}, nil)
+
+	testkit.AssertEqual(t, "Status", apiErr.Status, 555)
+	testkit.AssertEqual(t, "Message", apiErr.Message, "Diff Too Large")
+	testkit.AssertEqual(t, "Error()", apiErr.Error(),
+		"GET /repositories/acme/api-gateway/pullrequests/9: status 555 Diff Too Large: Diff Too Large")
+}
+
+func TestIsDiffTooLarge(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "plain error", err: errors.New("boom"), want: false},
+		{
+			name: "another status",
+			err:  &APIError{Method: testMethod, Path: testPath, Status: http.StatusNotFound},
+			want: false,
+		},
+		{
+			name: "555",
+			err:  &APIError{Method: testMethod, Path: testPath, Status: StatusDiffTooLarge},
+			want: true,
+		},
+		{
+			name: "wrapped 555",
+			err: fmt.Errorf("get diff acme/api-gateway#9: %w",
+				&APIError{Method: testMethod, Path: testPath, Status: StatusDiffTooLarge}),
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			testkit.AssertEqual(t, "IsDiffTooLarge", IsDiffTooLarge(tt.err), tt.want)
+		})
+	}
+}

@@ -33,6 +33,28 @@ one are upstream lazyjira history, and their compare links still point at upstre
 - `refreshInterval` for a background refresh of the active tab
 - Pipeline drill-down reaches each step's log, and `backspace` walks back out (step log → pipeline →
   pull request)
+- Pull request detail is split into four tabs — Overview, Files, Commits, Comments — on `i`, `d`, `m`,
+  `t` and the `[` / `]` cycle. Each tab's data is fetched the first time it is opened and cached per
+  pull request, and dropped when the source branch moves
+- Diff pane: the changed files with status, `+/−` counts and binary marker, and a per-file unified
+  diff with a line cursor, syntax highlighting through chroma (`monokai` / `github`, following
+  `rendererStyle`), and `n` / `p` to walk the changed files
+- `e` opens the file under the cursor in `editor` (`$VISUAL`, `$EDITOR`, then `nvim`) at the
+  cursor's line, resolved against the git repository lazybitbucket was started in. Line numbers are
+  passed in the dialect the editor understands (`+LINE`, `--goto path:LINE`, `path:LINE`)
+- Commits tab: hash, author, age and subject per commit; `enter` expands the full message
+- Comments tab: pull request comments read as threads — root plus replies, anchored to a file and
+  line when inline, with resolved, pending and deleted states. Commented lines are marked `●` in the
+  diff, and `enter` on such a line jumps to its thread
+- `o` and `y` follow the active tab: the selected commit, the selected thread, or the pull request's
+  diff from inside a file diff. The URL picker gained Commits and Comments sections
+- `diff` custom command context, active on the Files tab and inside a file diff, with a `File` scope
+  (`{{.File.Path}}`, `{{.File.OldPath}}`, `{{.File.Status}}`, `{{.File.Line}}`)
+- `pkg/diff`: a lenient unified-diff parser (renames, added/removed files, binary files, missing
+  hunk counts, `\ No newline at end of file`, quoted paths)
+- `pkg/bitbucket`: `ListPullRequestCommits`, `ListPullRequestComments`, `ListPullRequestDiffStat` and
+  `GetPullRequestDiff`, thread building from the flat comment list, and `IsDiffTooLarge` for
+  Bitbucket's 555 "diff too large" answer
 - `--demo` (needs a `-tags demo` build), `--workspace` and the repeatable `--repo` flag
 
 ### Changed
@@ -44,11 +66,13 @@ one are upstream lazyjira history, and their compare links still point at upstre
 - Config schema replaced: `bitbucket` (workspace, repositories, email, baseUrl), `pullRequestTabs`,
   `gui.pullRequestListFields`, `refreshInterval`. Credentials are an API token or access token, in
   `auth.json` or `BITBUCKET_TOKEN`
-- Custom command contexts are now `pullrequests`, `builds`, `repos` and `detail`, with `PR`, `Repo`
-  and `Build` template scopes
-- Keybinding groups are `universal`, `navigation`, `pullRequests` and `detail`. There is no `repos`
-  group any more: the Repos and Builds panels reuse `pullRequests.select`, `pullRequests.open` and
-  `pullRequests.focusRight`, so those bindings can no longer be silently overwritten
+- Custom command contexts are now `pullrequests`, `builds`, `repos`, `detail` and `diff`, with `PR`,
+  `Repo`, `Build` and `File` template scopes
+- Keybinding groups are `universal`, `navigation`, `pullRequests` and `detail`; `detail` gained
+  `overviewTab`, `filesTab`, `commitsTab`, `commentsTab`, `nextFile`, `prevFile` and `openEditor`.
+  There is no `repos` group any more: the Repos and Builds panels reuse `pullRequests.select`,
+  `pullRequests.open` and `pullRequests.focusRight`, so those bindings can no longer be silently
+  overwritten
 - Panels are Status / Pull Requests / Builds / Repos on `1`–`4`, detail on `0`
 - Docs rewritten for the Bitbucket workflow; `docs/Custom_Fields.md` removed
 

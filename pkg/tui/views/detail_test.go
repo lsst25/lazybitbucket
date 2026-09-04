@@ -35,7 +35,7 @@ func navResolverForDetail(key string) components.NavAction {
 }
 
 func makeFocusedDetail() *DetailView {
-	view := NewDetailView(PlainRenderer{})
+	view := NewDetailView(PlainRenderer{}, "")
 	view.ResolveNav = navResolverForDetail
 	view.SetSize(80, 24)
 	view.SetFocused(true)
@@ -545,22 +545,21 @@ func TestSplashArt_FitsSixtyColumns(t *testing.T) {
 	}
 }
 
-func TestDetailView_Tabs_SingleTabHidesTheBar(t *testing.T) {
+func TestDetailView_Tabs_NoBarOutsideThePullRequestView(t *testing.T) {
 	t.Parallel()
-	view := makeFocusedDetail()
-	view.SetPullRequest(detailPR())
+	view := pipelineDetail(t)
 
 	title := stripANSI(view.buildTitle(70))
-	testkit.AssertEqual(t, "title is the mode title", title, "[0] #101 "+testRepo)
+	testkit.AssertEqual(t, "title is the mode title", title, "[0] Pipeline #42")
 
-	// With a single tab the tab bar is not drawn, so a click cannot move it.
-	view.ClickTab(30)
+	// With no tabs there are no zones, so a click cannot move the tab.
+	testkit.AssertEqual(t, "click is a no-op", view.ClickTab(30), false)
 	testkit.AssertEqual(t, "tab unchanged", view.ActiveTab(), TabOverview)
 
 	view.NextTab()
-	testkit.AssertEqual(t, "next tab wraps to itself", view.ActiveTab(), TabOverview)
+	testkit.AssertEqual(t, "next tab stays put", view.ActiveTab(), TabOverview)
 	view.PrevTab()
-	testkit.AssertEqual(t, "prev tab wraps to itself", view.ActiveTab(), TabOverview)
+	testkit.AssertEqual(t, "prev tab stays put", view.ActiveTab(), TabOverview)
 }
 
 func TestDetailView_ScrollBy_LineOffsetInTextModes(t *testing.T) {
@@ -592,16 +591,22 @@ func TestDetailView_Update_NavigationKeys(t *testing.T) {
 	testkit.AssertEqual(t, "up wraps to the last step", view.SelectedStep().UUID, testStepUUID2)
 }
 
-func TestDetailView_Update_TabKeyDoesNotPanicWithOneTab(t *testing.T) {
+func TestDetailView_Update_TabKeyDoesNotCycleTabs(t *testing.T) {
 	t.Parallel()
 	view := makeFocusedDetail()
 	view.SetPullRequest(detailPR())
 
-	got, cmd := view.Update(tea.KeyMsg{Type: tea.KeyTab})
-	if cmd != nil {
-		t.Error("switching tabs should emit nothing")
+	// Tab cycling belongs to the app, which pairs it with the review fetches
+	// the new tab needs. A "tab" reaching the view (universal.switchPanel
+	// rebound off it) must be inert rather than switch to a tab nobody has
+	// warmed.
+	for range 4 {
+		got, cmd := view.Update(tea.KeyMsg{Type: tea.KeyTab})
+		if cmd != nil {
+			t.Error("an unbound tab key should emit nothing")
+		}
+		testkit.AssertEqual(t, "tab", got.ActiveTab(), TabOverview)
 	}
-	testkit.AssertEqual(t, "tab", got.ActiveTab(), TabOverview)
 }
 
 func TestDetailView_ClickItem_SelectsTheClickedBlock(t *testing.T) {
@@ -663,14 +668,18 @@ func TestDetailView_ClickItem_IgnoredOutsideListModes(t *testing.T) {
 	}
 }
 
-func TestDetailView_SetFocused_ResetsTheBlockCursorOnBlur(t *testing.T) {
+func TestDetailView_SetFocused_KeepsTheBlockCursorAcrossABlur(t *testing.T) {
 	t.Parallel()
 	view := pipelineDetail(t)
 	view.ScrollBy(1)
 	testkit.AssertEqual(t, "cursor", view.SelectedStep().UUID, testStepUUID2)
 
+	// The app recomputes focus on every panel switch, unfocusing the detail
+	// panel even when it keeps focus, so a reset here would lose the reader's
+	// place in a diff or a thread on each visit to the left column.
 	view.SetFocused(false)
-	testkit.AssertEqual(t, "cursor reset", view.SelectedStep().UUID, testStepUUID)
+	view.SetFocused(true)
+	testkit.AssertEqual(t, "cursor kept", view.SelectedStep().UUID, testStepUUID2)
 }
 
 func TestDetailView_View_TinyHeightStillRenders(t *testing.T) {

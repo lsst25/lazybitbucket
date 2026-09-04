@@ -65,6 +65,41 @@ type ListPullRequestStatusesCall struct {
 	ID        int
 }
 
+// ListPullRequestCommitsCall records one ListPullRequestCommits call.
+type ListPullRequestCommitsCall struct {
+	Ctx       context.Context
+	Workspace string
+	RepoSlug  string
+	ID        int
+	Opts      bitbucket.ListOptions
+}
+
+// ListPullRequestCommentsCall records one ListPullRequestComments call.
+type ListPullRequestCommentsCall struct {
+	Ctx       context.Context
+	Workspace string
+	RepoSlug  string
+	ID        int
+	Opts      bitbucket.ListOptions
+}
+
+// ListPullRequestDiffStatCall records one ListPullRequestDiffStat call.
+type ListPullRequestDiffStatCall struct {
+	Ctx       context.Context
+	Workspace string
+	RepoSlug  string
+	ID        int
+}
+
+// GetPullRequestDiffCall records one GetPullRequestDiff call.
+type GetPullRequestDiffCall struct {
+	Ctx       context.Context
+	Workspace string
+	RepoSlug  string
+	ID        int
+	Opts      bitbucket.DiffOptions
+}
+
 // ListPipelinesCall records one ListPipelines call.
 type ListPipelinesCall struct {
 	Ctx       context.Context
@@ -123,6 +158,10 @@ type FakeClient struct {
 	ListPullRequestsFunc        func(ctx context.Context, workspace, repoSlug string, opts bitbucket.ListPullRequestsOptions) ([]bitbucket.PullRequest, error)
 	GetPullRequestFunc          func(ctx context.Context, workspace, repoSlug string, id int) (*bitbucket.PullRequest, error)
 	ListPullRequestStatusesFunc func(ctx context.Context, workspace, repoSlug string, id int) ([]bitbucket.CommitStatus, error)
+	ListPullRequestCommitsFunc  func(ctx context.Context, workspace, repoSlug string, id int, opts bitbucket.ListOptions) ([]bitbucket.Commit, error)
+	ListPullRequestCommentsFunc func(ctx context.Context, workspace, repoSlug string, id int, opts bitbucket.ListOptions) ([]bitbucket.Comment, error)
+	ListPullRequestDiffStatFunc func(ctx context.Context, workspace, repoSlug string, id int) ([]bitbucket.DiffStatEntry, error)
+	GetPullRequestDiffFunc      func(ctx context.Context, workspace, repoSlug string, id int, opts bitbucket.DiffOptions) (string, error)
 	ListPipelinesFunc           func(ctx context.Context, workspace, repoSlug string, opts bitbucket.ListPipelinesOptions) ([]bitbucket.Pipeline, error)
 	GetPipelineFunc             func(ctx context.Context, workspace, repoSlug, pipelineRef string) (*bitbucket.Pipeline, error)
 	ListPipelineStepsFunc       func(ctx context.Context, workspace, repoSlug, pipelineRef string) ([]bitbucket.PipelineStep, error)
@@ -138,6 +177,10 @@ type FakeClient struct {
 	ListPullRequestsCalls        []ListPullRequestsCall
 	GetPullRequestCalls          []GetPullRequestCall
 	ListPullRequestStatusesCalls []ListPullRequestStatusesCall
+	ListPullRequestCommitsCalls  []ListPullRequestCommitsCall
+	ListPullRequestCommentsCalls []ListPullRequestCommentsCall
+	ListPullRequestDiffStatCalls []ListPullRequestDiffStatCall
+	GetPullRequestDiffCalls      []GetPullRequestDiffCall
 	ListPipelinesCalls           []ListPipelinesCall
 	GetPipelineCalls             []GetPipelineCall
 	ListPipelineStepsCalls       []ListPipelineStepsCall
@@ -178,6 +221,14 @@ func (f *FakeClient) CallCount(method string) int {
 		return len(f.GetPullRequestCalls)
 	case "ListPullRequestStatuses":
 		return len(f.ListPullRequestStatusesCalls)
+	case "ListPullRequestCommits":
+		return len(f.ListPullRequestCommitsCalls)
+	case "ListPullRequestComments":
+		return len(f.ListPullRequestCommentsCalls)
+	case "ListPullRequestDiffStat":
+		return len(f.ListPullRequestDiffStatCalls)
+	case "GetPullRequestDiff":
+		return len(f.GetPullRequestDiffCalls)
 	case "ListPipelines":
 		return len(f.ListPipelinesCalls)
 	case "GetPipeline":
@@ -292,6 +343,66 @@ func (f *FakeClient) ListPullRequestStatuses(ctx context.Context, workspace, rep
 		return nil, nil
 	}
 	return fn(ctx, workspace, repoSlug, id)
+}
+
+// ListPullRequestCommits records the call and dispatches ListPullRequestCommitsFunc.
+func (f *FakeClient) ListPullRequestCommits(ctx context.Context, workspace, repoSlug string, id int, opts bitbucket.ListOptions) ([]bitbucket.Commit, error) {
+	f.mu.Lock()
+	f.ListPullRequestCommitsCalls = append(f.ListPullRequestCommitsCalls,
+		ListPullRequestCommitsCall{Ctx: ctx, Workspace: workspace, RepoSlug: repoSlug, ID: id, Opts: opts})
+	fn := f.ListPullRequestCommitsFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("ListPullRequestCommits")
+		return nil, nil
+	}
+	return fn(ctx, workspace, repoSlug, id, opts)
+}
+
+// ListPullRequestComments records the call and dispatches ListPullRequestCommentsFunc.
+func (f *FakeClient) ListPullRequestComments(ctx context.Context, workspace, repoSlug string, id int, opts bitbucket.ListOptions) ([]bitbucket.Comment, error) {
+	f.mu.Lock()
+	f.ListPullRequestCommentsCalls = append(f.ListPullRequestCommentsCalls,
+		ListPullRequestCommentsCall{Ctx: ctx, Workspace: workspace, RepoSlug: repoSlug, ID: id, Opts: opts})
+	fn := f.ListPullRequestCommentsFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("ListPullRequestComments")
+		return nil, nil
+	}
+	return fn(ctx, workspace, repoSlug, id, opts)
+}
+
+// ListPullRequestDiffStat records the call and dispatches ListPullRequestDiffStatFunc.
+func (f *FakeClient) ListPullRequestDiffStat(ctx context.Context, workspace, repoSlug string, id int) ([]bitbucket.DiffStatEntry, error) {
+	f.mu.Lock()
+	f.ListPullRequestDiffStatCalls = append(f.ListPullRequestDiffStatCalls,
+		ListPullRequestDiffStatCall{Ctx: ctx, Workspace: workspace, RepoSlug: repoSlug, ID: id})
+	fn := f.ListPullRequestDiffStatFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("ListPullRequestDiffStat")
+		return nil, nil
+	}
+	return fn(ctx, workspace, repoSlug, id)
+}
+
+// GetPullRequestDiff records the call and dispatches GetPullRequestDiffFunc.
+func (f *FakeClient) GetPullRequestDiff(ctx context.Context, workspace, repoSlug string, id int, opts bitbucket.DiffOptions) (string, error) {
+	f.mu.Lock()
+	f.GetPullRequestDiffCalls = append(f.GetPullRequestDiffCalls,
+		GetPullRequestDiffCall{Ctx: ctx, Workspace: workspace, RepoSlug: repoSlug, ID: id, Opts: opts})
+	fn := f.GetPullRequestDiffFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("GetPullRequestDiff")
+		return "", nil
+	}
+	return fn(ctx, workspace, repoSlug, id, opts)
 }
 
 // ListPipelines records the call and dispatches ListPipelinesFunc.

@@ -51,6 +51,17 @@ const (
 	ActDetailScrollUp   Action = "detailScrollUp"
 	ActDetailHalfDown   Action = "detailHalfPageDown"
 	ActDetailHalfUp     Action = "detailHalfPageUp"
+
+	// The review actions: the four tab jumps, stepping through the changed
+	// files and opening the file under the cursor in an editor. They only act
+	// while the detail panel is focused.
+	ActDetailOverview Action = "detailOverview"
+	ActDetailFiles    Action = "detailFiles"
+	ActDetailCommits  Action = "detailCommits"
+	ActDetailComments Action = "detailComments"
+	ActNextFile       Action = "nextFile"
+	ActPrevFile       Action = "prevFile"
+	ActOpenEditor     Action = "openEditor"
 )
 
 // Keymap maps actions to key strings. Several keys may trigger one action.
@@ -96,6 +107,14 @@ func DefaultKeymap() Keymap {
 		ActDetailScrollUp:   {"K"},
 		ActDetailHalfDown:   {"ctrl+f"},
 		ActDetailHalfUp:     {"ctrl+b"},
+
+		ActDetailOverview: {"i"},
+		ActDetailFiles:    {"d"},
+		ActDetailCommits:  {"m"},
+		ActDetailComments: {"t"},
+		ActNextFile:       {"n"},
+		ActPrevFile:       {"p"},
+		ActOpenEditor:     {"e"},
 	}
 }
 
@@ -140,6 +159,13 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	set(ActDetailScrollUp, kcfg.Detail.ScrollUp)
 	set(ActDetailHalfDown, kcfg.Detail.HalfPageDown)
 	set(ActDetailHalfUp, kcfg.Detail.HalfPageUp)
+	set(ActDetailOverview, kcfg.Detail.OverviewTab)
+	set(ActDetailFiles, kcfg.Detail.FilesTab)
+	set(ActDetailCommits, kcfg.Detail.CommitsTab)
+	set(ActDetailComments, kcfg.Detail.CommentsTab)
+	set(ActNextFile, kcfg.Detail.NextFile)
+	set(ActPrevFile, kcfg.Detail.PrevFile)
+	set(ActOpenEditor, kcfg.Detail.OpenEditor)
 
 	set(ActNavDown, kcfg.Navigation.Down)
 	set(ActNavUp, kcfg.Navigation.Up)

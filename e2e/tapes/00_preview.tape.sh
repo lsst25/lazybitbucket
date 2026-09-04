@@ -62,9 +62,30 @@ Sleep 300ms
 @back
 @wait 500
 
-# back to the left panels
-Type "h"
-Sleep 300ms
+# === Files and the diff ===
+# focus the detail panel and jump to the Files tab of #103: a modified Go file,
+# its new test file and a Markdown doc
+@panel 0
+@files
+@wait 600
+
+# open the first file's diff — highlighted Go, with review comments marked on
+# two of its lines
+@confirm
+@wait 800
+
+# read down the hunk
+@down 4
+@wait 400
+
+# on to the next changed file (the added test), then back out to the file list
+# and out to the left panels
+@next_file
+@wait 800
+@back
+@wait 600
+@back
+@wait 400
 
 # === Repos [4] ===
 @panel 4

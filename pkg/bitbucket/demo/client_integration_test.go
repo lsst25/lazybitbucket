@@ -358,6 +358,292 @@ func TestClientFetchPullRequestsAcrossRepositories(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
+// Review data
+// -----------------------------------------------------------------------------
+
+func TestClientListPullRequestCommits(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+
+	commits, err := client.ListPullRequestCommits(t.Context(), Workspace, repoAPIGateway, 103,
+		bitbucket.ListOptions{MaxItems: 0})
+	if err != nil {
+		t.Fatalf("ListPullRequestCommits: %v", err)
+	}
+
+	testkit.AssertEqual(t, "len(commits)", len(commits), 3)
+	testkit.AssertEqual(t, "commits[0].Hash", commits[0].Hash, hashPR103)
+	testkit.AssertEqual(t, "commits[0].ShortHash()", commits[0].ShortHash(), hashPR103[:7])
+	testkit.AssertEqual(t, "commits[0].AuthorName()", commits[0].AuthorName(), "Linus Torvalds")
+	testkit.AssertEqual(t, "commits[0].Subject()", commits[0].Subject(),
+		"upstream: derive a fresh deadline per retry attempt")
+	if !strings.Contains(commits[0].Message, "Fixes INC-4471.") {
+		t.Errorf("commits[0].Message = %q, want the body after the subject", commits[0].Message)
+	}
+	testkit.AssertEqual(t, "commits[0].HTMLURL()", commits[0].HTMLURL(),
+		htmlBase+"/"+Workspace+"/"+repoAPIGateway+"/commits/"+hashPR103)
+
+	// A merged pull request has no source branch left, so the list is empty
+	// rather than an error.
+	merged, err := client.ListPullRequestCommits(t.Context(), Workspace, repoAPIGateway, 98,
+		bitbucket.ListOptions{MaxItems: 0})
+	if err != nil {
+		t.Fatalf("ListPullRequestCommits(#98): %v", err)
+	}
+	testkit.AssertEqual(t, "len(merged commits)", len(merged), 0)
+}
+
+// TestClientListPullRequestCommitsFollowsTheOpaqueNext is the iterator
+// pagination path: the envelope has no size and its next link carries a token,
+// so the client can only get the second page by following the link.
+func TestClientListPullRequestCommitsFollowsTheOpaqueNext(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	server.SetMaxPageLen(2)
+	client := newDemoClient(t, server)
+
+	requests := 0
+	client.SetOnRequest(func(_ bitbucket.RequestLog) { requests++ })
+
+	commits, err := client.ListPullRequestCommits(t.Context(), Workspace, repoWebApp, 40,
+		bitbucket.ListOptions{MaxItems: 0})
+	if err != nil {
+		t.Fatalf("ListPullRequestCommits: %v", err)
+	}
+
+	testkit.AssertEqual(t, "len(commits)", len(commits), 4)
+	testkit.AssertEqual(t, "requests", requests, 2)
+	testkit.AssertEqual(t, "commits[0].Hash", commits[0].Hash, hashPR40)
+	testkit.AssertEqual(t, "commits[3].AuthorName()", commits[3].AuthorName(), "Barbara Liskov")
+}
+
+func TestClientListPullRequestCommentsAndThreads(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+
+	comments, err := client.ListPullRequestComments(t.Context(), Workspace, repoAPIGateway, 103,
+		bitbucket.ListOptions{MaxItems: 0})
+	if err != nil {
+		t.Fatalf("ListPullRequestComments: %v", err)
+	}
+	testkit.AssertEqual(t, "len(comments)", len(comments), 9)
+
+	threads := bitbucket.BuildThreads(comments)
+	testkit.AssertEqual(t, "len(threads)", len(threads), 5)
+
+	// Inline threads first, down the file: the resolved one on line 13, then the
+	// unresolved one on line 16 with its reply, then the pending draft.
+	testkit.AssertEqual(t, "threads[0].Resolved()", threads[0].Resolved(), true)
+	testkit.AssertEqual(t, "threads[1].Path()", threads[1].Path(), pathRetryGo)
+	testkit.AssertEqual(t, "threads[1] replies", len(threads[1].Replies), 1)
+	testkit.AssertEqual(t, "threads[1] reply author",
+		threads[1].Replies[0].User.Nickname, "linus")
+	testkit.AssertEqual(t, "threads[2].Root.Pending", threads[2].Root.Pending, true)
+	testkit.AssertEqual(t, "threads[3].Root.Deleted", threads[3].Root.Deleted, true)
+	testkit.AssertEqual(t, "threads[4] replies", len(threads[4].Replies), 2)
+	if threads[4].LastActivity().Before(threads[4].Root.CreatedOn) {
+		t.Errorf("thread LastActivity() = %v, older than its root", threads[4].LastActivity())
+	}
+
+	// The markers the diff view draws, keyed by new-side line number.
+	lines := bitbucket.CommentedLines(threads)
+	testkit.AssertEqual(t, "threads on retry.go:16", lines[pathRetryGo][16], 1)
+	testkit.AssertEqual(t, "threads on retry.go:13", lines[pathRetryGo][13], 1)
+
+	// The file-level anchor on another pull request lands under line 0.
+	fileLevel, err := client.ListPullRequestComments(t.Context(), Workspace, repoWebApp, 40,
+		bitbucket.ListOptions{MaxItems: 0})
+	if err != nil {
+		t.Fatalf("ListPullRequestComments(#40): %v", err)
+	}
+	testkit.AssertEqual(t, "file-level marker",
+		bitbucket.CommentedLines(bitbucket.BuildThreads(fileLevel))[pathThemeTS][0], 1)
+}
+
+// TestClientListPullRequestDiffStat goes through the 302: the client asks the
+// pull request endpoint and the response it decodes comes from the repository
+// revspec resource, whose own next links it then follows.
+func TestClientListPullRequestDiffStat(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+
+	entries, err := client.ListPullRequestDiffStat(t.Context(), Workspace, repoAPIGateway, 103)
+	if err != nil {
+		t.Fatalf("ListPullRequestDiffStat: %v", err)
+	}
+
+	testkit.AssertSliceEqual(t, "paths", pathsOf(entries),
+		[]string{pathRetryGo, pathRetryTestGo, "docs/rfc-014.md"})
+	testkit.AssertEqual(t, "entries[0].Status", entries[0].Status, bitbucket.DiffStatModified)
+	testkit.AssertEqual(t, "entries[0].LinesAdded", entries[0].LinesAdded, 6)
+	testkit.AssertEqual(t, "entries[0].LinesRemoved", entries[0].LinesRemoved, 3)
+	testkit.AssertEqual(t, "entries[1].Status", entries[1].Status, bitbucket.DiffStatAdded)
+	testkit.AssertEqual(t, "entries[1].OldPath()", entries[1].OldPath(), "")
+	testkit.AssertEqual(t, "LastAuthorization()", server.LastAuthorization(), demoAuthorization)
+
+	// The rename and the binary file live on other pull requests.
+	renamed, err := client.ListPullRequestDiffStat(t.Context(), Workspace, repoAPIGateway, 102)
+	if err != nil {
+		t.Fatalf("ListPullRequestDiffStat(#102): %v", err)
+	}
+	testkit.AssertEqual(t, "renamed status", renamed[0].Status, bitbucket.DiffStatRenamed)
+	testkit.AssertEqual(t, "renamed old path", renamed[0].OldPath(), "internal/auth/token.go")
+	testkit.AssertEqual(t, "renamed new path", renamed[0].Path(), "internal/auth/introspect.go")
+
+	binary, err := client.ListPullRequestDiffStat(t.Context(), Workspace, repoWebApp, 40)
+	if err != nil {
+		t.Fatalf("ListPullRequestDiffStat(#40): %v", err)
+	}
+	last := binary[len(binary)-1]
+	testkit.AssertEqual(t, "binary path", last.Path(), "public/screenshots/dark.png")
+	testkit.AssertEqual(t, "binary IsBinary()", last.IsBinary(), true)
+	testkit.AssertEqual(t, "binary LinesAdded", last.LinesAdded, 0)
+}
+
+// TestClientListPullRequestDiffStatPaginatesThroughTheRedirect makes the target
+// hand back more than one page, so the paginator has to follow a next link that
+// points at the redirected-to resource rather than at the pull request.
+func TestClientListPullRequestDiffStatPaginatesThroughTheRedirect(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	server.SetMaxPageLen(1)
+	client := newDemoClient(t, server)
+
+	entries, err := client.ListPullRequestDiffStat(t.Context(), Workspace, repoAPIGateway, 103)
+	if err != nil {
+		t.Fatalf("ListPullRequestDiffStat: %v", err)
+	}
+	testkit.AssertSliceEqual(t, "paths", pathsOf(entries),
+		[]string{pathRetryGo, pathRetryTestGo, "docs/rfc-014.md"})
+}
+
+// TestClientGetPullRequestDiffUsesTheSameOriginLink covers the shortcut the app
+// takes: the pull request payload's diff link is same-origin, so the client
+// requests it directly and merges path= into whatever it already carries.
+func TestClientGetPullRequestDiffUsesTheSameOriginLink(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+	pullRequest := demoPullRequest(t, server, repoAPIGateway, 103)
+
+	whole, err := client.GetPullRequestDiff(t.Context(), Workspace, repoAPIGateway, 103,
+		bitbucket.DiffOptions{Path: "", Context: 0, DiffURL: pullRequest.Links.Diff.Href})
+	if err != nil {
+		t.Fatalf("GetPullRequestDiff: %v", err)
+	}
+	testkit.AssertEqual(t, "diff", whole, server.Data.Diffs[reviewKey(repoAPIGateway, 103)])
+
+	oneFile, err := client.GetPullRequestDiff(t.Context(), Workspace, repoAPIGateway, 103,
+		bitbucket.DiffOptions{Path: pathRetryGo, Context: 0, DiffURL: pullRequest.Links.Diff.Href})
+	if err != nil {
+		t.Fatalf("GetPullRequestDiff(path): %v", err)
+	}
+	testkit.AssertEqual(t, "sections", strings.Count(oneFile, "diff --git "), 1)
+	if !strings.Contains(oneFile, pathRetryGo) {
+		t.Fatalf("per-file diff does not mention %s:\n%s", pathRetryGo, oneFile)
+	}
+}
+
+// TestClientGetPullRequestDiffFiltersByPathThroughTheRedirect is the case a
+// followed redirect got wrong: the Location carries only the server's own
+// parameters, so path= has to be merged onto it by the client or the second hop
+// answers with every file in the pull request.
+func TestClientGetPullRequestDiffFiltersByPathThroughTheRedirect(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+	const routerGo = "internal/router/router.go"
+
+	whole, err := client.GetPullRequestDiff(t.Context(), Workspace, repoAPIGateway, 101,
+		bitbucket.DiffOptions{Path: "", Context: 0, DiffURL: ""})
+	if err != nil {
+		t.Fatalf("GetPullRequestDiff: %v", err)
+	}
+	if strings.Count(whole, "diff --git ") < 2 {
+		t.Fatalf("the fixture is not the multi-file diff this test needs:\n%s", whole)
+	}
+
+	oneFile, err := client.GetPullRequestDiff(t.Context(), Workspace, repoAPIGateway, 101,
+		bitbucket.DiffOptions{Path: routerGo, Context: 0, DiffURL: ""})
+	if err != nil {
+		t.Fatalf("GetPullRequestDiff(path): %v", err)
+	}
+
+	testkit.AssertEqual(t, "sections", strings.Count(oneFile, "diff --git "), 1)
+	if !strings.Contains(oneFile, routerGo) {
+		t.Fatalf("per-file diff does not mention %s:\n%s", routerGo, oneFile)
+	}
+}
+
+// TestClientGetPullRequestDiffFollowsTheRedirect is the same fetch without the
+// link: the pull request endpoint 302s and the Authorization header has to
+// survive the hop, or the target would answer as an anonymous request.
+func TestClientGetPullRequestDiffFollowsTheRedirect(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+
+	whole, err := client.GetPullRequestDiff(t.Context(), Workspace, repoAPIGateway, 101,
+		bitbucket.DiffOptions{Path: "", Context: 0, DiffURL: ""})
+	if err != nil {
+		t.Fatalf("GetPullRequestDiff: %v", err)
+	}
+	testkit.AssertEqual(t, "diff", whole, server.Data.Diffs[reviewKey(repoAPIGateway, 101)])
+	testkit.AssertEqual(t, "LastAuthorization()", server.LastAuthorization(), demoAuthorization)
+
+	// A diff link on another host is refused, and the request falls back to the
+	// pull request endpoint instead of leaking the token.
+	foreign, err := client.GetPullRequestDiff(t.Context(), Workspace, repoAPIGateway, 101,
+		bitbucket.DiffOptions{
+			Path:    "",
+			Context: 0,
+			DiffURL: apiBase + "/repositories/" + Workspace + "/" + repoAPIGateway + "/diff/whatever",
+		})
+	if err != nil {
+		t.Fatalf("GetPullRequestDiff(foreign link): %v", err)
+	}
+	testkit.AssertEqual(t, "diff via fallback", foreign, whole)
+}
+
+// TestClientDiffTooLargeIsToldApart is the 555: not a transient 5xx, and both
+// diff methods report it the same way.
+func TestClientDiffTooLargeIsToldApart(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+	pullRequest := demoPullRequest(t, server, repoAPIGateway, 98)
+
+	_, err := client.ListPullRequestDiffStat(t.Context(), Workspace, repoAPIGateway, 98)
+	if !bitbucket.IsDiffTooLarge(err) {
+		t.Fatalf("ListPullRequestDiffStat(#98) error = %v, want a diff-too-large error", err)
+	}
+
+	_, err = client.GetPullRequestDiff(t.Context(), Workspace, repoAPIGateway, 98,
+		bitbucket.DiffOptions{Path: "", Context: 0, DiffURL: pullRequest.Links.Diff.Href})
+	if !bitbucket.IsDiffTooLarge(err) {
+		t.Fatalf("GetPullRequestDiff(#98) error = %v, want a diff-too-large error", err)
+	}
+
+	_, err = client.GetPullRequestDiff(t.Context(), Workspace, repoAPIGateway, 98,
+		bitbucket.DiffOptions{Path: "", Context: 0, DiffURL: ""})
+	if !bitbucket.IsDiffTooLarge(err) {
+		t.Fatalf("GetPullRequestDiff(#98, via redirect) error = %v, want a diff-too-large error", err)
+	}
+}
+
+// -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
 

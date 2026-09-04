@@ -11,7 +11,12 @@
 #   @panel N              → Type "N" + Sleep (focus panel 0-4)
 #   @open                 → Type "l" + Sleep (focus the next panel; on the left side it cycles)
 #   @select               → Space + Sleep (open/activate the highlighted row)
-#   @back                 → Backspace + Sleep (step log → pipeline → pull request)
+#   @back                 → Backspace + Sleep (file diff → files, step log → pipeline → pull request)
+#   @files                → Type "d" + Sleep (detail panel: jump to the Files tab)
+#   @commits              → Type "m" + Sleep (detail panel: jump to the Commits tab)
+#   @comments             → Type "t" + Sleep (detail panel: jump to the Comments tab)
+#   @next_file [N]        → Type "n" + Sleep (next changed file)
+#   @prev_file [N]        → Type "p" + Sleep (previous changed file)
 #   @browse               → Type "o" + Sleep (open the selection in the browser)
 #   @search TEXT          → Type "/" + Sleep + Type "TEXT" + Enter + Sleep
 #   @help                 → Type "?" + Sleep ... Escape + Sleep
@@ -105,6 +110,23 @@ process_line() {
             ;;
         @back)
             printf 'Backspace\nSleep %sms\n' "$LONG_SLEEP"
+            ;;
+        @files)
+            printf 'Type "d"\nSleep %sms\n' "$LONG_SLEEP"
+            ;;
+        @commits)
+            printf 'Type "m"\nSleep %sms\n' "$LONG_SLEEP"
+            ;;
+        @comments)
+            printf 'Type "t"\nSleep %sms\n' "$LONG_SLEEP"
+            ;;
+        @next_file*)
+            local n="${line#@next_file}"; n="${n// /}"; n="${n:-1}"
+            repeat "$n" printf 'Type "n"\nSleep %sms\n' "$LONG_SLEEP"
+            ;;
+        @prev_file*)
+            local n="${line#@prev_file}"; n="${n// /}"; n="${n:-1}"
+            repeat "$n" printf 'Type "p"\nSleep %sms\n' "$LONG_SLEEP"
             ;;
         @browse)
             printf 'Type "o"\nSleep %sms\n' "$LONG_SLEEP"

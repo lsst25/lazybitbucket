@@ -59,8 +59,11 @@ type Config struct {
 	RefreshInterval string                 `yaml:"refreshInterval"`
 	Git             GitConfig              `yaml:"git"`
 	CustomCommands  []CustomCommandConfig  `yaml:"customCommands"`
-	Editor          string                 `yaml:"editor"`
-	RendererStyle   string                 `yaml:"rendererStyle"`
+	// Editor is the command the diff view's open-in-editor key runs to open the
+	// selected file at the cursor's line. Resolved through ResolveEditor, which
+	// falls back to $VISUAL, $EDITOR and DefaultEditor.
+	Editor        string `yaml:"editor"`
+	RendererStyle string `yaml:"rendererStyle"`
 }
 
 // BitbucketConfig holds the connection settings. Token is never persisted to
@@ -209,6 +212,9 @@ type PullRequestKeys struct {
 	Checkout   string `yaml:"checkout"`
 }
 
+// DetailKeys are the keys active while the detail panel is focused: panel
+// navigation, the four pull request tabs (Overview, Files, Commits, Comments)
+// and the diff view's file stepping and open-in-editor keys.
 type DetailKeys struct {
 	FocusLeft    string `yaml:"focusLeft"`
 	Back         string `yaml:"back"`
@@ -216,6 +222,16 @@ type DetailKeys struct {
 	ScrollUp     string `yaml:"scrollUp"`
 	HalfPageDown string `yaml:"halfPageDown"`
 	HalfPageUp   string `yaml:"halfPageUp"`
+	// Tab jumps: switch the detail panel straight to one pull request tab.
+	OverviewTab string `yaml:"overviewTab"`
+	FilesTab    string `yaml:"filesTab"`
+	CommitsTab  string `yaml:"commitsTab"`
+	CommentsTab string `yaml:"commentsTab"`
+	// Diff view: step through the changed files and open the selected file in
+	// Config.Editor at the cursor's line.
+	NextFile   string `yaml:"nextFile"`
+	PrevFile   string `yaml:"prevFile"`
+	OpenEditor string `yaml:"openEditor"`
 }
 
 type GUIConfig struct {
@@ -291,8 +307,9 @@ func (c *Config) ResolveRefreshInterval() (time.Duration, error) {
 	return interval, nil
 }
 
-// ResolveEditor returns the editor command: `editor` from the config file,
-// then $VISUAL, then $EDITOR, then DefaultEditor.
+// ResolveEditor returns the editor command used by the diff view's
+// open-in-editor key: `editor` from the config file, then $VISUAL, then
+// $EDITOR, then DefaultEditor.
 func (c *Config) ResolveEditor() string {
 	if c.Editor != "" {
 		return c.Editor

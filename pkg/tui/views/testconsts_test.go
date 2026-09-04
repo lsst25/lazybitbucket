@@ -14,6 +14,11 @@ const (
 	testAuthor    = "Grace Hopper"
 	testReviewer  = "Ada Lovelace"
 
+	// Review-tab fixtures: one changed file, one commit and one anchor line
+	// shared by the Files, Commits, Comments and file-diff tests.
+	testDiffPath   = "pkg/tui/app.go"
+	testCommitHash = "abc1234def5678901234567890123456789abcde"
+
 	testPipelineUUID = "{11111111-1111-1111-1111-111111111111}"
 	testStepUUID     = "{22222222-2222-2222-2222-222222222222}"
 	testStepUUID2    = "{33333333-3333-3333-3333-333333333333}"

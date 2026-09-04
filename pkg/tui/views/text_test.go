@@ -74,6 +74,9 @@ func TestTimeAgo(t *testing.T) {
 		{"hours", now.Add(-3 * time.Hour), "3h"},
 		{"days", now.Add(-48 * time.Hour), "2d"},
 		{"months", now.Add(-70 * 24 * time.Hour), "2mo"},
+		// A timestamp ahead of the clock (skew, or the shifted demo dataset)
+		// reads as "just now", never as a negative age.
+		{"future", now.Add(30 * time.Minute), "0m"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -130,7 +133,7 @@ func TestExtractURLs_GroupsBySection(t *testing.T) {
 	pr.Description = "docs at https://docs.example.com/auth and https://docs.example.com/auth again"
 	pr.Links.HTML.Href = "https://bitbucket.org/acme/api-gateway/pull-requests/101"
 
-	groups := ExtractURLs(&pr, testStatuses())
+	groups := ExtractURLs(&pr, testStatuses(), nil, nil)
 	if len(groups) != 3 {
 		t.Fatalf("len(groups) = %d, want 3", len(groups))
 	}
@@ -150,12 +153,12 @@ func TestExtractURLs_GroupsBySection(t *testing.T) {
 
 func TestExtractURLs_SkipsEmptySectionsAndNilPullRequest(t *testing.T) {
 	t.Parallel()
-	if got := ExtractURLs(nil, nil); got != nil {
-		t.Errorf("ExtractURLs(nil, nil) = %v, want nil", got)
+	if got := ExtractURLs(nil, nil, nil, nil); got != nil {
+		t.Errorf("ExtractURLs(nil, …) = %v, want nil", got)
 	}
 
 	pr := newPR(101, testRepo, testPRTitle)
-	groups := ExtractURLs(&pr, []bitbucket.CommitStatus{{Key: "no-url"}})
+	groups := ExtractURLs(&pr, []bitbucket.CommitStatus{{Key: "no-url"}}, nil, nil)
 	if len(groups) != 1 {
 		t.Fatalf("len(groups) = %d, want only the fallback pull request URL", len(groups))
 	}

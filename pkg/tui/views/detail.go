@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -12,17 +13,21 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
+	"github.com/lsst25/lazybitbucket/pkg/diff"
 	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 	"github.com/lsst25/lazybitbucket/pkg/tui/theme"
 )
 
-// DetailTab is a tab within the pull request view. Step 1 has a single one;
-// step 2 adds Diff, Commits and Comments, at which point the tab bar appears.
+// DetailTab is a tab within the pull request view: the four faces of one pull
+// request, each backed by its own request.
 type DetailTab int
 
 // Tabs of the pull request view.
 const (
 	TabOverview DetailTab = iota
+	TabFiles
+	TabCommits
+	TabComments
 )
 
 // MainMode is what the right-hand panel is showing. Unlike lazyjira's
@@ -37,6 +42,24 @@ const (
 	ModeStepLog
 	ModeRepo
 	ModeSplash
+	ModeFileDiff
+)
+
+// listKind is which block list the panel is drawing, resolved from the mode and
+// the active tab together. It is the single place the two axes meet: every
+// body, cursor, activation and hit-test decision switches on this rather than
+// re-deriving the combination.
+type listKind int
+
+// The block lists the detail panel can draw. listNone means the body is
+// scrolling text rather than a list.
+const (
+	listNone listKind = iota
+	listSteps
+	listFiles
+	listCommits
+	listThreads
+	listDiffLines
 )
 
 // maxBlockLines is how many lines of a block are shown before it is collapsed
@@ -92,6 +115,11 @@ type DetailView struct {
 	stepLogLoading bool
 	stepLogErr     string
 
+	files    tabData[bitbucket.DiffStatEntry]
+	commits  tabData[bitbucket.Commit]
+	threads  tabData[bitbucket.Thread]
+	fileDiff fileDiffState
+
 	repo   *RepoItem
 	splash SplashInfo
 
@@ -102,6 +130,14 @@ type DetailView struct {
 	blocks     [][]string
 	blockKeys  []string
 	dblClick   components.DblClickDetector
+	// blockCache memoises the rendered blocks of the active list. Rendering a
+	// diff runs a syntax highlighter and a thread runs glamour, neither of
+	// which may happen once per keystroke.
+	blockCache blockCache
+	// tabZones is where each tab label landed in the title the last View drew,
+	// so a click hit-tests against what is on screen rather than against a
+	// recomputed guess.
+	tabZones []tabZone
 
 	width   int
 	height  int
@@ -109,13 +145,145 @@ type DetailView struct {
 	theme   *theme.Theme
 
 	renderer MarkdownRenderer
+	// codeStyle is the chroma style name the diff's code column is highlighted
+	// with, "" to leave it plain. See ChromaStyleFor.
+	codeStyle string
 	// ResolveNav is assigned by the app; the view is keyboard-inert until it is.
 	ResolveNav components.NavResolver
 }
 
-// NewDetailView constructs a detail view rendering Markdown with renderer.
-func NewDetailView(renderer MarkdownRenderer) *DetailView {
-	return &DetailView{theme: theme.Default, mode: ModePullRequest, renderer: renderer}
+// tabData is one review tab's payload plus the three states it can be in
+// before the payload arrives, which the tab label and the body both read.
+type tabData[T any] struct {
+	items   []T
+	loaded  bool
+	loading bool
+	errMsg  string
+}
+
+// set stores a loaded payload, clearing the loading and error states.
+func (t *tabData[T]) set(items []T) {
+	t.items = items
+	t.loaded = true
+	t.loading = false
+	t.errMsg = ""
+}
+
+// setLoading marks a fetch in flight without discarding what is on screen.
+func (t *tabData[T]) setLoading() {
+	t.loading = true
+	t.errMsg = ""
+}
+
+// setError records a failed fetch.
+func (t *tabData[T]) setError(msg string) {
+	t.errMsg = msg
+	t.loading = false
+}
+
+// reset forgets everything, which is what selecting another pull request does.
+func (t *tabData[T]) reset() { *t = tabData[T]{items: nil, loaded: false, loading: false, errMsg: ""} }
+
+// fileDiffState is the ModeFileDiff payload: the file whose diff is on screen,
+// the parsed diff, the comment markers per line and the rendered line list the
+// cursor indexes.
+type fileDiffState struct {
+	path    string
+	file    *diff.File
+	markers map[int]int
+	loading bool
+	errMsg  string
+	// lines is one entry per rendered row, hunk headers included, so the
+	// cursor can be resolved to a diff line before the first View call.
+	lines []diff.Line
+	// highlighter is built once per file, in SetFileDiff.
+	highlighter *highlighter
+}
+
+// tabZone is one tab label's column span in the rendered title.
+type tabZone struct {
+	tab   DetailTab
+	start int
+	end   int
+}
+
+// blockCache memoises one list rendering. A cache entry is only valid for the
+// list kind and width it was built at.
+type blockCache struct {
+	blocks [][]string
+	kind   listKind
+	width  int
+	valid  bool
+	// rendered marks which blocks of a lazily built list already carry their
+	// text. It is nil for the lists that are rendered whole.
+	rendered []bool
+	// renderRow builds block i of a lazily built list, which is always a
+	// single line. nil when the list was rendered whole.
+	renderRow func(i int) string
+}
+
+// blockOverscan is how many blocks either side of the visible window a lazily
+// built list renders anyway, so a scroll clamp a line either way cannot leave
+// a blank row on screen.
+const blockOverscan = 4
+
+// NewDetailView constructs a detail view rendering Markdown with renderer and
+// highlighting diff code with the chroma style codeStyle names; "" leaves the
+// diff unhighlighted. See ChromaStyleFor for the mapping from the configured
+// renderer style.
+func NewDetailView(renderer MarkdownRenderer, codeStyle string) *DetailView {
+	return &DetailView{
+		theme:     theme.Default,
+		mode:      ModePullRequest,
+		renderer:  renderer,
+		codeStyle: codeStyle,
+	}
+}
+
+// listKind reports which block list the panel is drawing.
+func (d *DetailView) listKind() listKind {
+	switch d.mode {
+	case ModePipeline:
+		return listSteps
+	case ModeFileDiff:
+		return listDiffLines
+	case ModePullRequest:
+		if d.pr == nil {
+			return listNone
+		}
+		switch d.activeTab {
+		case TabFiles:
+			return listFiles
+		case TabCommits:
+			return listCommits
+		case TabComments:
+			return listThreads
+		case TabOverview:
+			return listNone
+		default:
+			return listNone
+		}
+	case ModeStepLog, ModeRepo, ModeSplash:
+		return listNone
+	default:
+		return listNone
+	}
+}
+
+// invalidateBlocks drops the rendered-block cache. Every mutation that can
+// change what a block says must call it, or the panel keeps drawing the old
+// list.
+func (d *DetailView) invalidateBlocks() { d.blockCache.valid = false }
+
+// invalidateBlocksFor drops the cache only when what it holds is one of kinds.
+// The cache keys on the list kind anyway, so another kind's entry is rebuilt
+// the moment it is asked for; dropping it early only throws away work — a
+// review fetch landing while the reader is inside a file diff would re-run the
+// highlighter over that diff for nothing.
+func (d *DetailView) invalidateBlocksFor(kinds ...listKind) {
+	if slices.Contains(kinds, d.blockCache.kind) {
+		d.invalidateBlocks()
+	}
 }
 
 // Mode reports what the panel is currently showing.
@@ -128,20 +296,32 @@ func (d *DetailView) PullRequestKey() string {
 		return ""
 	}
 	switch d.mode {
-	case ModePullRequest, ModePipeline, ModeStepLog:
+	case ModePullRequest, ModePipeline, ModeStepLog, ModeFileDiff:
 		return d.pr.Key()
 	default:
 		return ""
 	}
 }
 
-// SetPullRequest shows a pull request. Scroll and tab are only reset when the
-// key changes, so a background refresh does not yank the user's place.
+// SetPullRequest shows a pull request. Scroll, tab, mode and the per-tab data
+// are only reset when the key changes, so a background refresh does not yank
+// the user out of a file diff or a pipeline they are reading.
 func (d *DetailView) SetPullRequest(pr *bitbucket.PullRequest) {
-	changed := d.adoptPullRequest(pr)
-	d.mode = ModePullRequest
-	if changed {
+	if d.adoptPullRequest(pr) {
+		d.mode = ModePullRequest
 		d.resetPullRequestView()
+		return
+	}
+	// Same pull request. The repository and splash screens are not this pull
+	// request's own drill-down — the app calls SetPullRequest there precisely
+	// to come back — so they return to the overview, while a pipeline, a step
+	// log or a file diff is left alone: not yanking a reader out of what they
+	// are reading is the whole point of the guard.
+	switch d.mode {
+	case ModeRepo, ModeSplash:
+		d.mode = ModePullRequest
+		d.resetPullRequestView()
+	case ModePullRequest, ModePipeline, ModeStepLog, ModeFileDiff:
 	}
 }
 
@@ -173,6 +353,10 @@ func (d *DetailView) resetPullRequestView() {
 	d.activeTab = TabOverview
 	d.statuses = nil
 	d.statusesLoaded = false
+	d.files.reset()
+	d.commits.reset()
+	d.threads.reset()
+	d.clearFileDiff()
 	d.clearPipeline()
 }
 
@@ -182,7 +366,18 @@ func (d *DetailView) clearPipeline() {
 	d.pipelineBuild = 0
 	d.pipelineLoading = false
 	d.pipelineErr = ""
+	d.invalidateBlocks()
 	d.clearStepLog()
+}
+
+// clearFileDiff forgets the file diff, so a response that lands after the user
+// walked out of ModeFileDiff cannot pull them back into it.
+func (d *DetailView) clearFileDiff() {
+	d.fileDiff = fileDiffState{
+		path: "", file: nil, markers: nil, loading: false, errMsg: "",
+		lines: nil, highlighter: nil,
+	}
+	d.invalidateBlocks()
 }
 
 func (d *DetailView) clearStepLog() {
@@ -209,6 +404,7 @@ func (d *DetailView) SetPipelineLoading(key string, buildNumber int) {
 		return
 	}
 	d.clearPipeline()
+	d.clearFileDiff()
 	d.mode = ModePipeline
 	d.pipelineBuild = buildNumber
 	d.pipelineLoading = true
@@ -223,6 +419,7 @@ func (d *DetailView) SetPipeline(key string, p *bitbucket.Pipeline, steps []bitb
 		return
 	}
 	d.clearStepLog()
+	d.clearFileDiff()
 	d.mode = ModePipeline
 	d.pipeline = p
 	d.steps = steps
@@ -241,10 +438,12 @@ func (d *DetailView) SetPipelineError(key, msg string) {
 	if d.pr == nil || d.pr.Key() != key {
 		return
 	}
+	d.clearFileDiff()
 	d.mode = ModePipeline
 	d.pipelineErr = msg
 	d.pipelineLoading = false
 	d.scrollY = 0
+	d.invalidateBlocks()
 }
 
 // SetStepLogLoading switches to the step log view with a placeholder body. A
@@ -317,14 +516,25 @@ func (d *DetailView) SelectedStep() *bitbucket.PipelineStep {
 	return &d.steps[d.listCursor]
 }
 
-// Back walks one step out of the drill-down: step log to pipeline, pipeline to
+// Back walks one step out of the drill-down: file diff to the Files tab (with
+// the cursor left on the file just read), step log to pipeline, pipeline to
 // pull request. It reports whether the mode changed.
 func (d *DetailView) Back() bool {
 	switch d.mode {
+	case ModeFileDiff:
+		path := d.fileDiff.path
+		d.clearFileDiff()
+		d.mode = ModePullRequest
+		d.activeTab = TabFiles
+		d.scrollY = 0
+		d.listCursor = max(d.fileIndex(path), 0)
+		d.invalidateBlocks()
+		return true
 	case ModeStepLog:
 		d.clearStepLog()
 		d.mode = ModePipeline
 		d.scrollY = 0
+		d.invalidateBlocks()
 		return true
 	case ModePipeline:
 		d.clearPipeline()
@@ -342,6 +552,7 @@ func (d *DetailView) SetRepo(repo *RepoItem) {
 	d.repo = repo
 	d.mode = ModeRepo
 	d.scrollY = 0
+	d.invalidateBlocks()
 }
 
 // SetSplash shows the startup screen.
@@ -349,27 +560,41 @@ func (d *DetailView) SetSplash(info SplashInfo) {
 	d.splash = info
 	d.mode = ModeSplash
 	d.scrollY = 0
+	d.invalidateBlocks()
 }
 
-// SetSize records the panel geometry; it must precede View.
-func (d *DetailView) SetSize(w, h int) { d.width = w; d.height = h }
-
-// SetFocused toggles focus, resetting the block cursor when focus is lost.
-func (d *DetailView) SetFocused(focused bool) {
-	if d.focused && !focused {
-		d.listCursor = 0
+// SetSize records the panel geometry; it must precede View. A width change
+// invalidates the rendered blocks, which are laid out for one width.
+func (d *DetailView) SetSize(w, h int) {
+	if w != d.width {
+		d.invalidateBlocks()
 	}
-	d.focused = focused
+	d.width = w
+	d.height = h
 }
+
+// SetFocused toggles focus. The block cursor is deliberately kept across a
+// blur: the cursor bar is only drawn while the panel is focused, so there is
+// nothing to hide, and the app recomputes focus on every panel switch — which
+// used to throw away the reader's place in a diff or a comment thread each
+// time the detail panel merely kept focus.
+func (d *DetailView) SetFocused(focused bool) { d.focused = focused }
 
 // ActiveTab returns the tab in view.
 func (d *DetailView) ActiveTab() DetailTab { return d.activeTab }
 
-// SetActiveTab switches tabs and rewinds the body.
+// SetActiveTab switches tabs and rewinds the body. It leaves ModeFileDiff
+// first, so a tab key pressed inside a diff lands on the tab rather than on a
+// diff wearing another tab's title.
 func (d *DetailView) SetActiveTab(tab DetailTab) {
+	if d.mode == ModeFileDiff {
+		d.clearFileDiff()
+		d.mode = ModePullRequest
+	}
 	d.activeTab = tab
 	d.scrollY = 0
 	d.listCursor = 0
+	d.invalidateBlocks()
 }
 
 // NextTab moves to the following visible tab.
@@ -404,41 +629,55 @@ func (d *DetailView) visibleTabs() []DetailTab {
 type tabLabel struct {
 	tab   DetailTab
 	label string
+	// short is the label without its count, which is what the title falls back
+	// to when the bar does not fit.
+	short string
 }
 
-// tabLabels is the tab set for the current mode. With a single tab the bar is
-// not drawn at all, so the title stays the plain mode title until step 2 adds
-// Diff, Commits and Comments here.
+// tabLabels is the tab set for the current mode: the four pull request tabs,
+// each carrying the item count once its data has arrived. Every other mode has
+// no tabs, so the title stays the plain mode title.
 func (d *DetailView) tabLabels() []tabLabel {
 	if d.mode != ModePullRequest || d.pr == nil {
 		return nil
 	}
-	return []tabLabel{{tab: TabOverview, label: "Overview"}}
+	return []tabLabel{
+		{tab: TabOverview, label: "Overview", short: "Overview"},
+		countedTab(TabFiles, "Files", d.files.loading, d.files.loaded, len(d.files.items)),
+		countedTab(TabCommits, "Commits", d.commits.loading, d.commits.loaded, len(d.commits.items)),
+		countedTab(TabComments, "Comments", d.threads.loading, d.threads.loaded, len(d.threads.items)),
+	}
 }
 
-// ClickTab switches tabs from a click on the title bar. It is a no-op while the
-// tab bar is not drawn.
-func (d *DetailView) ClickTab(x int) {
-	labels := d.tabLabels()
-	if len(labels) < 2 {
-		return
+// countedTab builds a tab label that shows its item count once known, an
+// ellipsis while the fetch is in flight and the bare name before either.
+func countedTab(tab DetailTab, name string, loading, loaded bool, count int) tabLabel {
+	label := name
+	switch {
+	case loading:
+		label = name + " (…)"
+	case loaded:
+		label = name + " (" + strconv.Itoa(count) + ")"
 	}
-	const sepW = 3 // " - "
-	pos := lipgloss.Width(d.titlePrefix()) + sepW
-	if x < pos {
-		return
-	}
-	for i, tl := range labels {
-		zoneEnd := pos + len(tl.label) + sepW
-		if i == len(labels)-1 {
-			zoneEnd = pos + len(tl.label) + 10
+	return tabLabel{tab: tab, label: label, short: name}
+}
+
+// ClickTab switches tabs from a click on the title bar and reports whether the
+// tab changed. It hit-tests against the zones the last View recorded, so a
+// click always lands on the label the user could see; before the first View, or
+// with no tab bar drawn, there is nothing to hit and it is a no-op.
+func (d *DetailView) ClickTab(x int) bool {
+	for _, zone := range d.tabZones {
+		if x < zone.start || x >= zone.end {
+			continue
 		}
-		if x >= pos && x < zoneEnd {
-			d.SetActiveTab(tl.tab)
-			return
+		if zone.tab == d.activeTab {
+			return false
 		}
-		pos = zoneEnd
+		d.SetActiveTab(zone.tab)
+		return true
 	}
+	return false
 }
 
 // ScrollBy moves the block cursor in list modes and the line offset otherwise.
@@ -450,8 +689,9 @@ func (d *DetailView) ScrollBy(delta int) {
 	d.scrollY = max(d.scrollY+delta, 0)
 }
 
-// ClickItem selects the block under relY. A double-click on a truncated block
-// expands it.
+// ClickItem selects the block under relY. A double-click activates it, exactly
+// as Enter would: it opens a file diff, a step log, or expands a block that is
+// too long to show whole.
 func (d *DetailView) ClickItem(relY int) tea.Cmd {
 	if !d.IsListTab() {
 		return nil
@@ -472,28 +712,67 @@ func (d *DetailView) ClickItem(relY int) tea.Cmd {
 		displayH := displayBlockHeight(block)
 		if clickedLine >= linePos && clickedLine < linePos+displayH {
 			d.listCursor = i
-			if d.dblClick.Click(i) && len(block) > maxBlockLines {
-				return func() tea.Msg {
-					return ExpandBlockMsg{Title: "Details", Lines: block}
-				}
+			if !d.dblClick.Click(i) {
+				return nil
 			}
-			return nil
+			// handleActivation reads the block list, which a click can reach
+			// before the first View of a resized panel has filled it in.
+			d.blocks = blocks
+			d.blockKeys = d.buildBlockKeys(blocks)
+			_, cmd := d.handleActivation()
+			return cmd
 		}
-		linePos += displayH + 1
+		linePos += displayH + d.blockGap()
 	}
 	return nil
 }
 
 // IsListTab reports whether the panel is a block list rather than scrolling
-// text. Only the pipeline view is.
-func (d *DetailView) IsListTab() bool { return d.mode == ModePipeline }
+// text.
+func (d *DetailView) IsListTab() bool { return d.listKind() != listNone }
 
-// listTabItemCount is the number of blocks in list mode, 0 in text modes.
+// listTabItemCount is the number of blocks in list mode, 0 in text modes. It is
+// counted from the data rather than from the rendered blocks, so moving the
+// cursor never renders a diff or a Markdown body.
 func (d *DetailView) listTabItemCount() int {
-	if d.mode != ModePipeline {
+	switch d.listKind() {
+	case listNone:
+		return 0
+	case listSteps:
+		return len(d.steps)
+	case listFiles:
+		return placeholderOr(d.filesPlaceholder, len(d.files.items))
+	case listCommits:
+		return placeholderOr(d.commitsPlaceholder, len(d.commits.items))
+	case listThreads:
+		return placeholderOr(d.threadsPlaceholder, len(d.threads.items))
+	case listDiffLines:
+		return placeholderOr(d.fileDiffPlaceholder, len(d.fileDiff.lines))
+	default:
 		return 0
 	}
-	return len(d.steps)
+}
+
+// placeholderOr is the block count of a review list: one, when the list is
+// standing in a loading, error or empty state, and otherwise the item count.
+func placeholderOr(placeholder func() (string, bool), count int) int {
+	if _, ok := placeholder(); ok {
+		return 1
+	}
+	return count
+}
+
+// blockGap is the number of separator rows drawn after each block. A file diff
+// has none: its blocks are single lines that must sit directly under one
+// another to read as a diff. The file list is one line per file too, so it
+// reads as a plain list; multi-line blocks (steps, commits, threads) keep the
+// rule between them.
+func (d *DetailView) blockGap() int {
+	switch d.listKind() { //nolint:exhaustive // every other kind keeps the separator
+	case listDiffLines, listFiles:
+		return 0
+	}
+	return 1
 }
 
 // VisibleRows is the number of body lines the panel can show.
@@ -513,10 +792,9 @@ func (d *DetailView) Update(msg tea.Msg) (*DetailView, tea.Cmd) {
 	}
 	key := km.String()
 
-	if key == "tab" {
-		d.NextTab()
-		return d, nil
-	}
+	// Tab cycling is the app's: ActNextTab/ActPrevTab pair it with the review
+	// fetches the new tab needs, which a view-local cycle would skip. A "tab"
+	// that reaches here (universal.switchPanel rebound elsewhere) is inert.
 	if key == "enter" || key == " " {
 		return d.handleActivation()
 	}
@@ -584,18 +862,17 @@ func (d *DetailView) handleHalfPage(delta int) {
 	d.scrollY = max(d.scrollY+delta, 0)
 }
 
-// handleActivation implements the Enter precedence in the pipeline view: a step
-// with a UUID opens its log, otherwise a truncated block expands.
+// handleActivation implements Enter for every list: the cursor's own action
+// first — open a step log, open a file diff, expand a commit message or a
+// thread, jump to the thread on a commented diff line — and a truncated block
+// expansion when the list has no action to offer.
 func (d *DetailView) handleActivation() (*DetailView, tea.Cmd) {
-	if !d.IsListTab() || d.listCursor < 0 || d.listCursor >= len(d.blocks) {
+	kind := d.listKind()
+	if kind == listNone || d.listCursor < 0 || d.listCursor >= len(d.blocks) {
 		return d, nil
 	}
-	if d.listCursor < len(d.blockKeys) && d.blockKeys[d.listCursor] != "" && d.pipeline != nil {
-		pipelineUUID := d.pipeline.UUID
-		stepUUID := d.blockKeys[d.listCursor]
-		return d, func() tea.Msg {
-			return StepSelectedMsg{PipelineUUID: pipelineUUID, StepUUID: stepUUID}
-		}
+	if cmd := d.activateBlock(kind); cmd != nil {
+		return d, cmd
 	}
 	block := d.blocks[d.listCursor]
 	if len(block) > maxBlockLines {
@@ -604,6 +881,48 @@ func (d *DetailView) handleActivation() (*DetailView, tea.Cmd) {
 		}
 	}
 	return d, nil
+}
+
+// Activate runs the focused list's activation, exactly as Enter does: open a
+// file's diff, expand a commit message or a thread, jump to the thread on a
+// marked diff line, open a pipeline step's log. It is the app's entry point, so
+// the configured activation key resolves through ActOpen/ActSelect rather than
+// through the literals Update matches.
+func (d *DetailView) Activate() tea.Cmd {
+	_, cmd := d.handleActivation()
+	return cmd
+}
+
+// activateBlock is the cursor block's own Enter action, nil when it has none.
+func (d *DetailView) activateBlock(kind listKind) tea.Cmd {
+	switch kind {
+	case listSteps:
+		return d.activateStep()
+	case listFiles:
+		return d.activateFile()
+	case listCommits:
+		return d.activateCommit()
+	case listThreads:
+		return d.activateThread()
+	case listDiffLines:
+		return d.activateDiffLine()
+	case listNone:
+		return nil
+	default:
+		return nil
+	}
+}
+
+// activateStep opens the cursor step's log.
+func (d *DetailView) activateStep() tea.Cmd {
+	if d.listCursor >= len(d.blockKeys) || d.blockKeys[d.listCursor] == "" || d.pipeline == nil {
+		return nil
+	}
+	pipelineUUID := d.pipeline.UUID
+	stepUUID := d.blockKeys[d.listCursor]
+	return func() tea.Msg {
+		return StepSelectedMsg{PipelineUUID: pipelineUUID, StepUUID: stepUUID}
+	}
 }
 
 // View renders the panel for the current mode.
@@ -624,7 +943,7 @@ func (d *DetailView) View() string {
 			return components.RenderPanel(d.buildTitle(titleBudget(contentWidth)),
 				clampLine(placeholder, contentWidth), d.width, innerH, d.focused)
 		}
-	case ModePipeline, ModeStepLog:
+	case ModePipeline, ModeStepLog, ModeFileDiff:
 	}
 
 	visible := d.VisibleRows()
@@ -665,13 +984,26 @@ func clampLines(lines []string, width int) []string {
 }
 
 func (d *DetailView) bodyLines(contentWidth, visible int) []string {
-	switch d.mode {
-	case ModePipeline:
+	switch d.listKind() {
+	case listSteps:
 		header := d.listModeHeader(contentWidth)
 		if d.pipelineLoading || d.pipelineErr != "" || d.pipeline == nil {
 			return header
 		}
 		return append(header, d.renderBlockList(contentWidth, visible, len(header))...)
+	case listFiles, listCommits, listThreads, listDiffLines:
+		header := d.listModeHeader(contentWidth)
+		return append(header, d.renderBlockList(contentWidth, visible, len(header))...)
+	case listNone:
+		return d.textBodyLines(contentWidth)
+	default:
+		return d.textBodyLines(contentWidth)
+	}
+}
+
+// textBodyLines is the body of the scrolling-text modes.
+func (d *DetailView) textBodyLines(contentWidth int) []string {
+	switch d.mode {
 	case ModeStepLog:
 		return d.renderStepLog(contentWidth)
 	case ModePullRequest, ModeRepo, ModeSplash:
@@ -693,6 +1025,8 @@ func (d *DetailView) titlePrefix() string {
 		return "[0] Pipeline #" + strconv.Itoa(d.pipelineBuild)
 	case ModeStepLog:
 		return "[0] Pipeline #" + strconv.Itoa(d.pipelineBuild) + " · " + d.currentStepName()
+	case ModeFileDiff:
+		return "[0] " + d.fileDiff.path
 	case ModeRepo:
 		if d.repo == nil {
 			return "[0] Repo"
@@ -705,28 +1039,112 @@ func (d *DetailView) titlePrefix() string {
 	}
 }
 
-// buildTitle appends the tab bar to the mode title, but only once there are at
-// least two tabs to choose between.
+// tabBarSep separates the mode title from the tab bar and the labels from each
+// other.
+const tabBarSep = " - "
+
+// buildTitle appends the tab bar to the mode title, within maxWidth display
+// columns. Room is made in the order that costs the least information: the item
+// counts go first, then the repository slug, and only a title still too wide
+// for the border is truncated. It records where each label landed, so ClickTab
+// hit-tests what was drawn.
 func (d *DetailView) buildTitle(maxWidth int) string {
 	prefix := d.titlePrefix()
 	labels := d.tabLabels()
 	if len(labels) < 2 {
+		d.tabZones = nil
 		return components.TruncateEnd(prefix, maxWidth)
 	}
 
-	activeStyle := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
-	inactiveStyle := lipgloss.NewStyle().Foreground(theme.ColorWhite)
-	sep := lipgloss.NewStyle().Foreground(theme.ColorGray).Render(" - ")
-
-	parts := make([]string, 0, len(labels))
-	for _, t := range labels {
-		if t.tab == d.activeTab {
-			parts = append(parts, activeStyle.Render(t.label))
-		} else {
-			parts = append(parts, inactiveStyle.Render(t.label))
+	candidates := []struct {
+		head  string
+		texts []string
+	}{
+		{head: prefix, texts: tabTexts(labels, false)},
+		{head: prefix, texts: tabTexts(labels, true)},
+		{head: d.shortTitlePrefix(), texts: tabTexts(labels, true)},
+	}
+	pick := candidates[len(candidates)-1]
+	for _, candidate := range candidates {
+		if titleWidth(candidate.head, candidate.texts) <= maxWidth {
+			pick = candidate
+			break
 		}
 	}
+	title := d.renderTabBar(labels, pick.head, pick.texts)
+	d.clipTabZones(titleBorderW + maxWidth)
+	return components.TruncateEnd(title, maxWidth)
+}
+
+// tabTexts is the label text of every tab, with or without its item count.
+func tabTexts(labels []tabLabel, short bool) []string {
+	texts := make([]string, len(labels))
+	for i, t := range labels {
+		texts[i] = t.label
+		if short {
+			texts[i] = t.short
+		}
+	}
+	return texts
+}
+
+// titleWidth is how many display columns a title of prefix plus these labels
+// occupies, separators included.
+func titleWidth(prefix string, texts []string) int {
+	total := lipgloss.Width(prefix)
+	for _, text := range texts {
+		total += len(tabBarSep) + lipgloss.Width(text)
+	}
+	return total
+}
+
+// shortTitlePrefix is the mode title with the least informative part dropped —
+// for a pull request, the repository slug, which the [2] panel also shows.
+func (d *DetailView) shortTitlePrefix() string {
+	if d.mode == ModePullRequest && d.pr != nil {
+		return "[0] #" + strconv.Itoa(d.pr.ID)
+	}
+	return d.titlePrefix()
+}
+
+// renderTabBar styles the labels onto prefix and records their column spans.
+func (d *DetailView) renderTabBar(labels []tabLabel, prefix string, texts []string) string {
+	activeStyle := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
+	inactiveStyle := lipgloss.NewStyle().Foreground(theme.ColorWhite)
+	sep := lipgloss.NewStyle().Foreground(theme.ColorGray).Render(tabBarSep)
+
+	// The top border prepends "╭─" before the title, so the first title column
+	// is titleBorderW in from the panel's left edge.
+	pos := titleBorderW + lipgloss.Width(prefix)
+	zones := make([]tabZone, 0, len(labels))
+	parts := make([]string, 0, len(labels))
+	for i, t := range labels {
+		style := inactiveStyle
+		if t.tab == d.activeTab {
+			style = activeStyle
+		}
+		parts = append(parts, style.Render(texts[i]))
+		start := pos + len(tabBarSep)
+		end := start + lipgloss.Width(texts[i]) + len(tabBarSep)
+		zones = append(zones, tabZone{tab: t.tab, start: start, end: end})
+		pos = end - len(tabBarSep)
+	}
+	d.tabZones = zones
 	return prefix + sep + strings.Join(parts, sep)
+}
+
+// clipTabZones drops the zones the title had no room to draw, so a click past
+// the end of the bar selects nothing.
+func (d *DetailView) clipTabZones(limit int) {
+	kept := d.tabZones[:0]
+	for _, zone := range d.tabZones {
+		if zone.start >= limit {
+			continue
+		}
+		zone.end = min(zone.end, limit)
+		kept = append(kept, zone)
+	}
+	d.tabZones = kept
 }
 
 func (d *DetailView) currentStepName() string {
@@ -860,8 +1278,41 @@ func (d *DetailView) renderDescription(width int) []string {
 // ---------------------------------------------------------------------------
 
 // listModeHeader is the fixed preamble drawn above the block list. Its height
-// is what the block hit-test and auto-scroll offset by.
+// is what the block hit-test and auto-scroll offset by. A review list has none
+// until a refetch fails over data already on screen: its loading, error and
+// empty states are the single block instead.
 func (d *DetailView) listModeHeader(width int) []string {
+	switch d.listKind() {
+	case listSteps:
+		return d.pipelineHeader(width)
+	case listDiffLines:
+		return d.fileDiffHeader(width)
+	case listFiles:
+		return d.reviewHeader(d.files.errMsg, len(d.files.items), width)
+	case listCommits:
+		return d.reviewHeader(d.commits.errMsg, len(d.commits.items), width)
+	case listThreads:
+		return d.reviewHeader(d.threads.errMsg, len(d.threads.items), width)
+	case listNone:
+		return nil
+	default:
+		return nil
+	}
+}
+
+// reviewHeader is the error line drawn above a review list whose refetch failed
+// while an earlier result is still on screen. Keeping the list means the
+// failure has nowhere else to go — with nothing loaded the error is the list's
+// placeholder instead, and there is no header.
+func (d *DetailView) reviewHeader(errMsg string, count, width int) []string {
+	if errMsg == "" || count == 0 {
+		return nil
+	}
+	return []string{" " + d.theme.ErrorText.Render(components.TruncateEnd(errMsg, max(width-2, 8)))}
+}
+
+// pipelineHeader is the run summary drawn above the step list.
+func (d *DetailView) pipelineHeader(width int) []string {
 	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
 
 	if d.pipelineErr != "" {
@@ -1116,21 +1567,93 @@ func (d *DetailView) renderSplash(contentWidth, innerH int) string {
 // Block list engine
 // ---------------------------------------------------------------------------
 
-// renderActiveBlocks dispatches block rendering for the current mode.
+// renderActiveBlocks dispatches block rendering for the active list, memoising
+// the result: chroma and glamour are far too expensive to re-run for every
+// cursor move, and the blocks only depend on the list kind, the data and the
+// width.
 func (d *DetailView) renderActiveBlocks(width int) [][]string {
-	if d.mode != ModePipeline {
-		return nil
+	kind := d.listKind()
+	if d.blockCache.valid && d.blockCache.kind == kind && d.blockCache.width == width {
+		return d.blockCache.blocks
 	}
-	return d.renderStepBlocks(width)
+
+	var (
+		blocks    [][]string
+		rendered  []bool
+		renderRow func(i int) string
+	)
+	switch kind {
+	case listNone:
+	case listSteps:
+		blocks = d.renderStepBlocks(width)
+	case listFiles:
+		blocks = d.renderFileBlocks(width)
+	case listCommits:
+		blocks = d.renderCommitBlocks(width)
+	case listThreads:
+		blocks = d.renderThreadBlocks(width)
+	case listDiffLines:
+		blocks, rendered, renderRow = d.newDiffLineBlocks(width)
+	default:
+	}
+
+	d.blockCache = blockCache{
+		blocks:    blocks,
+		kind:      kind,
+		width:     width,
+		valid:     true,
+		rendered:  rendered,
+		renderRow: renderRow,
+	}
+	return blocks
 }
 
-// buildBlockKeys pairs each block with the step it renders, so activating a
-// block can name the step to fetch a log for.
+// fillVisibleBlocks builds the text of a lazily rendered list's blocks inside
+// the window the panel can draw, and leaves the rest empty: syntax-highlighting
+// a whole file costs the best part of a second on a big one, and no more than a
+// screenful of it is ever visible. Lists rendered whole are a no-op.
+func (d *DetailView) fillVisibleBlocks(start, visible int) {
+	if d.blockCache.renderRow == nil {
+		return
+	}
+	from := max(start-blockOverscan, 0)
+	to := min(start+visible+blockOverscan, len(d.blockCache.rendered))
+	for i := from; i < to; i++ {
+		if d.blockCache.rendered[i] {
+			continue
+		}
+		d.blockCache.blocks[i][0] = d.blockCache.renderRow(i)
+		d.blockCache.rendered[i] = true
+	}
+}
+
+// buildBlockKeys pairs each block with the thing it renders — a step UUID, a
+// file path, a commit hash, a thread root id, a diff line index — so activating
+// a block can name its subject without re-deriving the cursor.
 func (d *DetailView) buildBlockKeys(blocks [][]string) []string {
 	keys := make([]string, len(blocks))
 	for i := range blocks {
-		if i < len(d.steps) {
-			keys[i] = d.steps[i].UUID
+		switch d.listKind() {
+		case listNone:
+		case listSteps:
+			if i < len(d.steps) {
+				keys[i] = d.steps[i].UUID
+			}
+		case listFiles:
+			if i < len(d.files.items) {
+				keys[i] = d.files.items[i].Path()
+			}
+		case listCommits:
+			if i < len(d.commits.items) {
+				keys[i] = d.commits.items[i].Hash
+			}
+		case listThreads:
+			if i < len(d.threads.items) {
+				keys[i] = strconv.FormatInt(d.threads.items[i].Root.ID, 10)
+			}
+		case listDiffLines:
+			keys[i] = "L" + strconv.Itoa(i)
+		default:
 		}
 	}
 	return keys
@@ -1147,9 +1670,15 @@ func (d *DetailView) renderBlockList(contentWidth, visible, headerLines int) []s
 	d.blocks = blocks
 	d.blockKeys = d.buildBlockKeys(blocks)
 
+	// Auto-scroll before rendering: it only needs the block heights, and the
+	// window it settles on is the one a lazily rendered list has to fill in.
+	d.autoScrollToBlock(blocks, visible, headerLines)
+	d.fillVisibleBlocks(max(d.scrollY-headerLines, 0), visible)
+
 	bar := lipgloss.NewStyle().Foreground(theme.ColorBlue).Render("▎")
 	ellipsis := lipgloss.NewStyle().Foreground(theme.ColorGray).Render("    ...")
 	sep := strings.Repeat("─", max(blockWidth, 1))
+	gap := d.blockGap()
 
 	var lines []string
 	for i, block := range blocks {
@@ -1169,12 +1698,11 @@ func (d *DetailView) renderBlockList(contentWidth, visible, headerLines int) []s
 		if truncated {
 			lines = append(lines, prefix+ellipsis)
 		}
-		if i < len(blocks)-1 {
+		if gap > 0 && i < len(blocks)-1 {
 			lines = append(lines, " "+sep)
 		}
 	}
 
-	d.autoScrollToBlock(blocks, visible, headerLines)
 	return lines
 }
 
@@ -1192,9 +1720,10 @@ func (d *DetailView) autoScrollToBlock(blocks [][]string, visible, headerLines i
 	if len(blocks) == 0 {
 		return
 	}
+	gap := d.blockGap()
 	lineStart := headerLines
 	for i := 0; i < d.listCursor && i < len(blocks); i++ {
-		lineStart += displayBlockHeight(blocks[i]) + 1
+		lineStart += displayBlockHeight(blocks[i]) + gap
 	}
 	margin := 1
 	if visible <= 3 {

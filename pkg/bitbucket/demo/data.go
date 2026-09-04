@@ -113,7 +113,9 @@ func shortHash(hash string) string {
 }
 
 // Dataset is the whole demo world: one workspace, three repositories and the
-// pull requests, build statuses, pipeline runs, steps and logs hanging off them.
+// pull requests, build statuses, pipeline runs, steps and logs hanging off
+// them, plus the review data of each pull request — its commits, its comments
+// and its diff.
 type Dataset struct {
 	User         bitbucket.Account
 	Workspace    bitbucket.Workspace
@@ -123,20 +125,33 @@ type Dataset struct {
 	Pipelines    map[string][]bitbucket.Pipeline     // repo slug → runs, newest first
 	Steps        map[string][]bitbucket.PipelineStep // pipeline UUID → steps, in run order
 	Logs         map[string]string                   // step UUID → log text
+
+	// The review half of the world, all keyed by bitbucket.PullRequestKey.
+	Commits   map[string][]bitbucket.Commit        // commits, newest first; empty for a closed PR
+	Comments  map[string][]bitbucket.Comment       // flat comment list, oldest first
+	Diffs     map[string]string                    // whole-pull-request unified diff
+	DiffStats map[string][]bitbucket.DiffStatEntry // derived from Diffs, in diff order
+	// TooLargeDiffs are the pull requests whose diff and diffstat answer 555.
+	TooLargeDiffs map[string]bool
 }
 
 // NewDataset builds the demo dataset. It allocates a fresh copy every call, so a
 // caller may mutate the result without disturbing anyone else.
 func NewDataset() *Dataset {
 	data := &Dataset{
-		User:         demoUser(),
-		Workspace:    demoWorkspace(),
-		Repositories: demoRepositories(),
-		PullRequests: map[string][]bitbucket.PullRequest{},
-		Statuses:     map[string][]bitbucket.CommitStatus{},
-		Pipelines:    map[string][]bitbucket.Pipeline{},
-		Steps:        map[string][]bitbucket.PipelineStep{},
-		Logs:         map[string]string{},
+		User:          demoUser(),
+		Workspace:     demoWorkspace(),
+		Repositories:  demoRepositories(),
+		PullRequests:  map[string][]bitbucket.PullRequest{},
+		Statuses:      map[string][]bitbucket.CommitStatus{},
+		Pipelines:     map[string][]bitbucket.Pipeline{},
+		Steps:         map[string][]bitbucket.PipelineStep{},
+		Logs:          map[string]string{},
+		Commits:       map[string][]bitbucket.Commit{},
+		Comments:      map[string][]bitbucket.Comment{},
+		Diffs:         map[string]string{},
+		DiffStats:     map[string][]bitbucket.DiffStatEntry{},
+		TooLargeDiffs: map[string]bool{},
 	}
 
 	for _, spec := range pullRequestSpecs() {
@@ -151,6 +166,23 @@ func NewDataset() *Dataset {
 		data.Pipelines[spec.repo] = append(data.Pipelines[spec.repo], pipeline)
 		data.Steps[pipeline.UUID] = steps
 		maps.Copy(data.Logs, logs)
+	}
+	for _, spec := range commitSpecs() {
+		key := reviewKey(spec.repo, spec.pullRequest)
+		data.Commits[key] = append(data.Commits[key], newPullRequestCommit(spec))
+	}
+	for _, spec := range commentSpecs() {
+		key := reviewKey(spec.repo, spec.pullRequest)
+		data.Comments[key] = append(data.Comments[key], newComment(spec))
+	}
+	for _, spec := range diffSpecs() {
+		key := reviewKey(spec.repo, spec.pullRequest)
+		if spec.tooLarge {
+			data.TooLargeDiffs[key] = true
+			continue
+		}
+		data.Diffs[key] = spec.text
+		data.DiffStats[key] = newDiffStat(spec)
 	}
 	return data
 }
@@ -222,6 +254,23 @@ func (d *Dataset) Shift(delta time.Duration) {
 		for index := range steps {
 			shiftTime(&steps[index].StartedOn, delta)
 			shiftTime(&steps[index].CompletedOn, delta)
+		}
+	}
+
+	for _, commits := range d.Commits {
+		for index := range commits {
+			shiftTime(&commits[index].Date, delta)
+		}
+	}
+
+	for _, comments := range d.Comments {
+		for index := range comments {
+			comment := &comments[index]
+			shiftTime(&comment.CreatedOn, delta)
+			shiftTime(&comment.UpdatedOn, delta)
+			if comment.Resolution != nil {
+				shiftTime(&comment.Resolution.CreatedOn, delta)
+			}
 		}
 	}
 }

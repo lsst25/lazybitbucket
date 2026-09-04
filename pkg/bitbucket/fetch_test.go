@@ -80,6 +80,30 @@ func (s *stubClient) ListPullRequestStatuses(
 	return nil, nil
 }
 
+func (s *stubClient) ListPullRequestCommits(
+	context.Context, string, string, int, ListOptions,
+) ([]Commit, error) {
+	return nil, nil
+}
+
+func (s *stubClient) ListPullRequestComments(
+	context.Context, string, string, int, ListOptions,
+) ([]Comment, error) {
+	return nil, nil
+}
+
+func (s *stubClient) ListPullRequestDiffStat(
+	context.Context, string, string, int,
+) ([]DiffStatEntry, error) {
+	return nil, nil
+}
+
+func (s *stubClient) GetPullRequestDiff(
+	context.Context, string, string, int, DiffOptions,
+) (string, error) {
+	return "", nil
+}
+
 func (s *stubClient) ListPipelines(context.Context, string, string, ListPipelinesOptions) ([]Pipeline, error) {
 	return nil, nil
 }

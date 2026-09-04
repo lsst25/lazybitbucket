@@ -9,6 +9,7 @@ import (
 
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
+	"github.com/lsst25/lazybitbucket/pkg/diff"
 	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
 	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
@@ -352,6 +353,97 @@ func TestUpdate_RoutesEveryBranch(t *testing.T) {
 			wantCmd: true,
 		},
 		{
+			name: "a changed-file list reaches the Files tab",
+			setup: func(app *App, _ *bitbuckettest.FakeClient) {
+				routingSelect(app)
+				app.detailView.SetActiveTab(views.TabFiles)
+			},
+			msg: diffStatLoadedMsg{
+				key: testPRKey, entries: testDiffStat(), hash: testSourceHash, err: nil,
+			},
+			wantCmd: false,
+			assert: func(t *testing.T, app *App) {
+				t.Helper()
+				testkit.AssertEqual(t, "changed files", len(app.detailView.DiffStat()), 2)
+			},
+		},
+		{
+			name: "a commit list reaches the Commits tab",
+			setup: func(app *App, _ *bitbuckettest.FakeClient) {
+				routingSelect(app)
+				app.detailView.SetActiveTab(views.TabCommits)
+			},
+			msg: commitsLoadedMsg{
+				key: testPRKey, commits: testCommits(), hash: testSourceHash, err: nil,
+			},
+			wantCmd: false,
+			assert: func(t *testing.T, app *App) {
+				t.Helper()
+				testkit.AssertEqual(t, "commits", len(app.detailView.Commits()), 1)
+			},
+		},
+		{
+			name: "review threads reach the Comments tab",
+			setup: func(app *App, _ *bitbuckettest.FakeClient) {
+				routingSelect(app)
+				app.detailView.SetActiveTab(views.TabComments)
+			},
+			msg: threadsLoadedMsg{
+				key: testPRKey, threads: testThreads(), hash: testSourceHash, err: nil,
+			},
+			wantCmd: false,
+			assert: func(t *testing.T, app *App) {
+				t.Helper()
+				testkit.AssertEqual(t, "threads", len(app.detailView.Threads()), 1)
+			},
+		},
+		{
+			name: "a parsed file diff reaches the diff view",
+			setup: func(app *App, _ *bitbuckettest.FakeClient) {
+				routingSelect(app)
+				app.detailView.SetFileDiffLoading(testPRKey, testFileGo)
+			},
+			msg:     routingFileDiffMsg(),
+			wantCmd: false,
+			assert: func(t *testing.T, app *App) {
+				t.Helper()
+				testkit.AssertEqual(t, "file on screen", app.detailView.FileDiffPath(), testFileGo)
+			},
+		},
+		{
+			name: "a file selection opens its diff",
+			setup: func(app *App, fake *bitbuckettest.FakeClient) {
+				stubDiff(fake)
+				stubComments(fake)
+				routingSelect(app)
+				app.detailView.SetDiffStat(testPRKey, testDiffStat())
+			},
+			msg:     views.FileSelectedMsg{PullRequestKey: testPRKey, Path: testFileGo},
+			wantCmd: true,
+			assert: func(t *testing.T, app *App) {
+				t.Helper()
+				testkit.AssertEqual(t, "mode", app.detailView.Mode(), views.ModeFileDiff)
+			},
+		},
+		{
+			name: "a thread selection jumps to the Comments tab",
+			setup: func(app *App, _ *bitbuckettest.FakeClient) {
+				routingSelect(app)
+				app.detailView.SetThreads(testPRKey, testThreads())
+			},
+			msg:     views.ThreadSelectedMsg{PullRequestKey: testPRKey, RootID: testThreadRoot},
+			wantCmd: false,
+			assert: func(t *testing.T, app *App) {
+				t.Helper()
+				testkit.AssertEqual(t, "tab", app.detailView.ActiveTab(), views.TabComments)
+			},
+		},
+		{
+			name:    "a finished editor re-arms the mouse",
+			msg:     editorFinishedMsg{err: nil},
+			wantCmd: true,
+		},
+		{
 			name: "an unclaimed key falls through to the focused panel",
 			setup: func(app *App, _ *bitbuckettest.FakeClient) {
 				app.prList.SetPullRequests([]bitbucket.PullRequest{
@@ -371,6 +463,28 @@ func TestUpdate_RoutesEveryBranch(t *testing.T) {
 			},
 		},
 	})
+}
+
+// routingSelect points the detail panel at one pull request, which is what the
+// review messages are addressed to.
+func routingSelect(app *App) {
+	pr := withSource(withAuthor(newPR(testRepo, 101, testTitle), testUserUUID), testSourceHash)
+	app.merged[testFetchKey] = []bitbucket.PullRequest{pr}
+	app.prList.SetPullRequests(app.merged[testFetchKey])
+	app.prCache[pr.Key()] = &pr
+	app.previewKey = pr.Key()
+	app.detailView.SetPullRequest(&pr)
+	app.side = sideRight
+	app.updateFocusState()
+}
+
+// routingFileDiffMsg is one file of the fixture diff, parsed.
+func routingFileDiffMsg() fileDiffLoadedMsg {
+	files, _ := diff.Parse(testDiffText)
+	return fileDiffLoadedMsg{
+		key: testPRKey, path: testFileGo, file: pickDiffFile(files, testFileGo),
+		hash: testSourceHash, err: nil,
+	}
 }
 
 func TestUpdate_SearchBarSwallowsTypingButNotArrows(t *testing.T) {

@@ -17,11 +17,11 @@ Details live in issues/PRs, not here.
 
 ## 2. Review
 
-- [ ] Diff pane: file list + syntax-highlighted per-file diff, jump between files
-- [ ] Open the selected file (at the hunk line) in the configured editor, nvim by default
+- [x] Diff pane: file list + syntax-highlighted per-file diff, jump between files
+- [x] Open the selected file (at the hunk line) in the configured editor, nvim by default
 - [x] Custom commands on a PR (reuse lazyjira's custom-command infra), e.g. `tmux-pr-sessionizer` to start a Claude review session
-- [ ] Commits list per PR
-- [ ] Review threads: read inline comments anchored to file and line
+- [x] Commits list per PR
+- [x] Review threads: read inline comments anchored to file and line
 
 ## 3. Act on PRs
 

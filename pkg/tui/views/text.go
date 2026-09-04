@@ -102,6 +102,41 @@ func padRight(s string, w int) string {
 	return s + strings.Repeat(" ", w-vis)
 }
 
+// padLeft pads s with spaces to w columns using ANSI-aware display width,
+// which right-aligns it in a fixed column.
+func padLeft(s string, w int) string {
+	vis := lipgloss.Width(s)
+	if vis >= w {
+		return s
+	}
+	return strings.Repeat(" ", w-vis) + s
+}
+
+// expandTabs replaces tabs with spaces up to the next multiple-of-width tab
+// stop. Diff rows are laid out in fixed columns and hard-truncated, so a
+// literal tab would leave the terminal to decide where the code column starts.
+func expandTabs(s string, width int) string {
+	if !strings.Contains(s, "\t") {
+		return s
+	}
+	if width <= 0 {
+		width = 1
+	}
+	var b strings.Builder
+	col := 0
+	for _, r := range s {
+		if r == '\t' {
+			pad := width - col%width
+			b.WriteString(strings.Repeat(" ", pad))
+			col += pad
+			continue
+		}
+		b.WriteRune(r)
+		col += lipgloss.Width(string(r))
+	}
+	return b.String()
+}
+
 // urlStyle is the style applied to URLs found in rendered text.
 func urlStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(theme.ColorCyan).Underline(true)
@@ -190,7 +225,9 @@ func timeAgo(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	d := time.Since(t)
+	// Clock skew or a timestamp that has not happened yet (the demo dataset is
+	// shifted relative to now) must never print a negative age.
+	d := max(time.Since(t), 0)
 	switch {
 	case d < time.Hour:
 		return fmt.Sprintf("%dm", int(d.Minutes()))
@@ -211,7 +248,14 @@ type URLGroup struct {
 
 // ExtractURLs collects the URLs reachable from a pull request, grouped by where
 // they came from. Duplicates are dropped across groups, first occurrence wins.
-func ExtractURLs(pr *bitbucket.PullRequest, statuses []bitbucket.CommitStatus) []URLGroup {
+// commits and threads are the review tabs' data, which is nil until the user
+// has opened them; the groups they feed are then simply absent.
+func ExtractURLs(
+	pr *bitbucket.PullRequest,
+	statuses []bitbucket.CommitStatus,
+	commits []bitbucket.Commit,
+	threads []bitbucket.Thread,
+) []URLGroup {
 	if pr == nil {
 		return nil
 	}
@@ -245,6 +289,22 @@ func ExtractURLs(pr *bitbucket.PullRequest, statuses []bitbucket.CommitStatus) [
 	}
 	if len(builds) > 0 {
 		groups = append(groups, URLGroup{Section: "Builds", URLs: builds})
+	}
+
+	var commitURLs []string
+	for _, commit := range commits {
+		add(&commitURLs, commit.HTMLURL())
+	}
+	if len(commitURLs) > 0 {
+		groups = append(groups, URLGroup{Section: "Commits", URLs: commitURLs})
+	}
+
+	var threadURLs []string
+	for _, thread := range threads {
+		add(&threadURLs, thread.Root.HTMLURL())
+	}
+	if len(threadURLs) > 0 {
+		groups = append(groups, URLGroup{Section: "Comments", URLs: threadURLs})
 	}
 
 	return groups

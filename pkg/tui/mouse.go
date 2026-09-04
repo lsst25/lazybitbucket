@@ -165,7 +165,11 @@ func (a *App) mouseClick(panel panelID, relY, x int) (tea.Model, tea.Cmd) {
 			if !a.isVerticalLayout() {
 				relX = x - a.panelSideW
 			}
-			a.detailView.ClickTab(relX)
+			// A click that actually changes the tab warms it, exactly as the
+			// tab keys do.
+			if a.detailView.ClickTab(relX) {
+				return a, a.onDetailTabChanged()
+			}
 			return a, nil
 		}
 		if cmd := a.detailView.ClickItem(relY); cmd != nil {

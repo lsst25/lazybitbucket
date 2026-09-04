@@ -42,3 +42,23 @@ const contentTypeJSON = "application/json"
 
 // emptyPage is a last-page envelope with no values.
 const emptyPage = `{"pagelen": 10, "page": 1, "size": 0, "values": []}`
+
+// Review sub-resource paths, all on pull request 9 — the same pull request
+// testPath names, so an APIError path and a request path stay comparable.
+const (
+	testPRID           = 9
+	testCommitsPath    = testPath + "/commits"
+	testCommentsPath   = testPath + "/comments"
+	testDiffPath       = testPath + "/diff"
+	testDiffStatPath   = testPath + "/diffstat"
+	testDiffTarget     = testRepoPath + "/diff/spec"
+	testDiffStatTarget = testRepoPath + "/diffstat/spec"
+)
+
+const contentTypeText = "text/plain"
+
+// authorizationHeader is the header the same-host redirect must preserve.
+const authorizationHeader = "Authorization"
+
+// testDiffFilePath is the file the inline comment and diff fixtures anchor to.
+const testDiffFilePath = "pkg/tui/app.go"

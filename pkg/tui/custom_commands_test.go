@@ -384,7 +384,7 @@ func TestHandleCustomCommandFinished(t *testing.T) {
 func TestQuitReachableWarning(t *testing.T) {
 	t.Parallel()
 
-	every := []string{"pullrequests", "builds", "repos", "detail"}
+	every := []string{"pullrequests", "builds", "repos", "detail", "diff"}
 	cases := []struct {
 		name     string
 		commands []config.CustomCommandConfig
@@ -455,3 +455,71 @@ func TestInitCustomCommands_SurfacesResolutionErrors(t *testing.T) {
 func boolPtr(v bool) *bool { return &v }
 
 func ptr(pr bitbucket.PullRequest) *bitbucket.PullRequest { return &pr }
+
+func TestBuildCommandData_FileScopeFollowsTheDiffView(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	stubDiff(fake)
+	stubComments(fake)
+	app := fileDiffApp(t, fake)
+	app.cfg.CustomCommands = []config.CustomCommandConfig{
+		{Key: "x", Name: "blame", Command: "git blame -L{{.File.Line}} {{.File.Path}}", Contexts: []string{"diff"}},
+	}
+	app.initCustomCommands()
+	runAll(t, app, app.openFileDiff(testFileGo))
+	_ = app.detailView.View()
+	app.detailView.ScrollBy(4) // the first added line, new-side 12
+
+	data, _, ok := app.buildCommandData(app.customCmds[0], config.CtxDiff)
+
+	if !ok {
+		t.Fatal("the diff view is a file source; buildCommandData should have succeeded")
+	}
+	if data.File == nil {
+		t.Fatal("a diff-context command must be given the file scope")
+	}
+	testkit.AssertEqual(t, "path", data.File.Path, testFileGo)
+	testkit.AssertEqual(t, "line", data.File.Line, 12)
+	testkit.AssertEqual(t, "status", data.File.Status, bitbucket.DiffStatModified)
+	testkit.AssertEqual(t, "old path", data.File.OldPath, testFileGo)
+}
+
+func TestBuildCommandData_FileScopeReportsMissingWithNoFileOnScreen(t *testing.T) {
+	t.Parallel()
+	app := reviewApp(t, &bitbuckettest.FakeClient{T: t})
+	app.cfg.CustomCommands = []config.CustomCommandConfig{
+		{Key: "x", Name: "blame", Command: "echo {{.File.Path}}", Contexts: []string{"diff"}},
+	}
+	app.initCustomCommands()
+
+	_, missing, ok := app.buildCommandData(app.customCmds[0], config.CtxDiff)
+
+	if ok {
+		t.Fatal("the Overview tab names no file")
+	}
+	testkit.AssertEqual(t, "missing scope", missing, config.ScopeFile)
+	testkit.AssertEqual(t, "noun", scopeNoun(config.ScopeFile), "file")
+}
+
+func TestHandleCustomCommand_DiffContextWinsOverDetail(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	stubDiff(fake)
+	stubComments(fake)
+	app := fileDiffApp(t, fake)
+	app.cfg.CustomCommands = []config.CustomCommandConfig{
+		{Key: "x", Name: "diff one", Command: "true", Contexts: []string{"diff"}},
+		{Key: "x", Name: "detail one", Command: "true", Contexts: []string{"detail"}},
+	}
+	app.initCustomCommands()
+	runAll(t, app, app.openFileDiff(testFileGo))
+
+	contexts := app.activeContexts()
+
+	if len(contexts) != 2 || contexts[0] != config.CtxDiff {
+		t.Fatalf("contexts = %v, want the diff context first", contexts)
+	}
+	if _, _, ok := app.handleCustomCommand("x"); !ok {
+		t.Error("the key must be consumed by the diff-context command")
+	}
+}

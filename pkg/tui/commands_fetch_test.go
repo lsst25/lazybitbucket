@@ -262,9 +262,149 @@ func TestFetchCommands_AreNilWithoutAPullRequest(t *testing.T) {
 	if app.fetchStatuses(nil, 0) != nil ||
 		app.fetchPullRequestDetail(nil, 0) != nil ||
 		app.fetchPipeline(nil, 1) != nil ||
-		app.fetchStepLog(nil, "a", "b") != nil {
+		app.fetchStepLog(nil, "a", "b") != nil ||
+		app.fetchDiffStat(nil) != nil ||
+		app.fetchCommits(nil) != nil ||
+		app.fetchThreads(nil) != nil ||
+		app.fetchFileDiff(nil, "a", "a") != nil {
 		t.Error("every per-pull-request fetch must be nil without one")
 	}
+}
+
+func TestFetchDiffStat_CarriesTheKeyAndTheSourceHash(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.ListPullRequestDiffStatFunc = func(_ context.Context, workspace, slug string, id int,
+	) ([]bitbucket.DiffStatEntry, error) {
+		testkit.AssertEqual(t, "workspace", workspace, testWorkspace)
+		testkit.AssertEqual(t, "repo", slug, testRepo)
+		testkit.AssertEqual(t, "id", id, 101)
+		return testDiffStat(), nil
+	}
+	app := newAppWithFake(t, fake)
+	pr := withSource(newPR(testRepo, 101, testTitle), testSourceHash)
+
+	msg, ok := app.fetchDiffStat(&pr)().(diffStatLoadedMsg)
+
+	if !ok {
+		t.Fatal("expected a diffStatLoadedMsg")
+	}
+	testkit.AssertEqual(t, "key", msg.key, testPRKey)
+	testkit.AssertEqual(t, "source hash", msg.hash, testSourceHash)
+	testkit.AssertEqual(t, "entries", len(msg.entries), 2)
+}
+
+func TestFetchCommits_CarriesTheCommits(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	stubCommits(fake)
+	app := newAppWithFake(t, fake)
+	pr := withSource(newPR(testRepo, 101, testTitle), testSourceHash)
+
+	msg, ok := app.fetchCommits(&pr)().(commitsLoadedMsg)
+
+	if !ok {
+		t.Fatal("expected a commitsLoadedMsg")
+	}
+	testkit.AssertEqual(t, "commits", len(msg.commits), 1)
+	testkit.AssertEqual(t, "hash", msg.commits[0].ShortHash(), testCommitShort)
+}
+
+func TestFetchThreads_GroupsTheFlatCommentList(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	root := testThreads()[0].Root
+	reply := root
+	reply.ID = root.ID + 1
+	reply.Parent = &bitbucket.CommentRef{ID: root.ID}
+	fake.ListPullRequestCommentsFunc = func(context.Context, string, string, int,
+		bitbucket.ListOptions,
+	) ([]bitbucket.Comment, error) {
+		return []bitbucket.Comment{root, reply}, nil
+	}
+	app := newAppWithFake(t, fake)
+	pr := withSource(newPR(testRepo, 101, testTitle), testSourceHash)
+
+	msg, ok := app.fetchThreads(&pr)().(threadsLoadedMsg)
+
+	if !ok {
+		t.Fatal("expected a threadsLoadedMsg")
+	}
+	testkit.AssertEqual(t, "threads", len(msg.threads), 1)
+	testkit.AssertEqual(t, "replies", len(msg.threads[0].Replies), 1)
+}
+
+func TestFetchThreads_TheErrorIsCarried(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.ListPullRequestCommentsFunc = func(context.Context, string, string, int,
+		bitbucket.ListOptions,
+	) ([]bitbucket.Comment, error) {
+		return nil, errors.New(testBoom)
+	}
+	app := newAppWithFake(t, fake)
+	pr := withSource(newPR(testRepo, 101, testTitle), testSourceHash)
+
+	msg, ok := app.fetchThreads(&pr)().(threadsLoadedMsg)
+
+	if !ok || msg.err == nil {
+		t.Fatalf("msg = %+v, want the comment error carried", msg)
+	}
+	if msg.threads != nil {
+		t.Error("a failed fetch must not report threads")
+	}
+}
+
+func TestFetchFileDiff_AsksForTheEscapedPathAndParsesTheAnswer(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.GetPullRequestDiffFunc = func(_ context.Context, _, _ string, _ int,
+		opts bitbucket.DiffOptions,
+	) (string, error) {
+		testkit.AssertEqual(t, "escaped path", opts.Path, "docs/rate%20limits.md")
+		testkit.AssertEqual(t, "diff url", opts.DiffURL, "https://api.bitbucket.org/diff/spec")
+		testkit.AssertEqual(t, "context lines", opts.Context, 0)
+		return testDiffText, nil
+	}
+	app := newAppWithFake(t, fake)
+	pr := withSource(newPR(testRepo, 101, testTitle), testSourceHash)
+	pr.Links.Diff = bitbucket.Link{Href: "https://api.bitbucket.org/diff/spec"}
+
+	msg, ok := app.fetchFileDiff(&pr, testFileMD, "docs/rate%20limits.md")().(fileDiffLoadedMsg)
+
+	if !ok {
+		t.Fatal("expected a fileDiffLoadedMsg")
+	}
+	testkit.AssertEqual(t, "display path", msg.path, testFileMD)
+	if msg.file == nil {
+		t.Fatal("the parsed file should be the one that was asked for")
+	}
+	testkit.AssertEqual(t, "parsed path", msg.file.Path(), testFileMD)
+}
+
+func TestFetchFileDiff_ParseFailureIsCarried(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.GetPullRequestDiffFunc = func(_ context.Context, _, _ string, _ int,
+		_ bitbucket.DiffOptions,
+	) (string, error) {
+		return "@@ -1,1 +1,1 @@\n-a\n+b\n", nil
+	}
+	app := newAppWithFake(t, fake)
+	pr := withSource(newPR(testRepo, 101, testTitle), testSourceHash)
+
+	msg, ok := app.fetchFileDiff(&pr, testFileGo, testFileGo)().(fileDiffLoadedMsg)
+
+	if !ok || msg.err == nil {
+		t.Fatalf("msg = %+v, want the parse failure carried", msg)
+	}
+}
+
+func TestFileDiffKey_JoinsThePullRequestAndThePath(t *testing.T) {
+	t.Parallel()
+
+	testkit.AssertEqual(t, "cache key", fileDiffKey(testPRKey, testFileGo),
+		testPRKey+"\x00"+testFileGo)
 }
 
 func TestListOptionsForKey_UsesTheTabBehindTheKey(t *testing.T) {

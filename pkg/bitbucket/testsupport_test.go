@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -138,8 +139,11 @@ func writeJSON(t *testing.T, w http.ResponseWriter, status int, body string) {
 func selfNextPage(t *testing.T, r *http.Request, scheme, path string, values []any) []byte {
 	t.Helper()
 
+	// nil means one anonymous value rather than none: a page with no values
+	// ends the walk before its next link is ever followed, and every caller of
+	// this helper is testing what happens when the link is followed.
 	if values == nil {
-		values = []any{}
+		values = []any{map[string]any{}}
 	}
 	body, err := json.Marshal(map[string]any{
 		"pagelen": 100,
@@ -151,4 +155,60 @@ func selfNextPage(t *testing.T, r *http.Request, scheme, path string, values []a
 		return []byte(`{"values":[]}`)
 	}
 	return body
+}
+
+// recorder collects the requests a handler-built client issued. The review
+// endpoint tests cannot use testkit's stub servers — they need request-derived
+// pagination links, redirects and non-JSON bodies — so they record here and
+// assert on the snapshot once the client has returned.
+type recorder struct {
+	mu       sync.Mutex
+	requests []testkit.RecordedRequest
+	targets  []string
+}
+
+func (rec *recorder) add(r *http.Request) {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+
+	rec.requests = append(rec.requests, testkit.RecordedRequest{
+		Method: r.Method,
+		Path:   r.URL.Path,
+		Query:  r.URL.Query(),
+		Header: r.Header.Clone(),
+		Body:   nil,
+	})
+	rec.targets = append(rec.targets, r.URL.RequestURI())
+}
+
+// snapshot is the requests recorded so far, safe to read while the server is
+// still running.
+func (rec *recorder) snapshot() []testkit.RecordedRequest {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+
+	return slices.Clone(rec.requests)
+}
+
+// requestTargets is the path-plus-query of every recorded request, still
+// escaped exactly as it went on the wire — testkit.RecordedRequest keeps the
+// query decoded, and the diff redirect asserts on the escaping itself.
+func (rec *recorder) requestTargets() []string {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+
+	return slices.Clone(rec.targets)
+}
+
+// writeText answers with a text/plain body, the way the diff endpoints do.
+func writeText(w http.ResponseWriter, status int, body string) {
+	w.Header().Set("Content-Type", contentTypeText)
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
+}
+
+// errorEnvelope is Bitbucket's standard error body, as the 555 responses carry
+// it.
+func errorEnvelope(message string) string {
+	return `{"type": "error", "error": {"message": ` + strconv.Quote(message) + `}}`
 }

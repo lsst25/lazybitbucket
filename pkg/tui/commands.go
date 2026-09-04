@@ -11,6 +11,7 @@ import (
 
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/diff"
 	"github.com/lsst25/lazybitbucket/pkg/git"
 )
 
@@ -90,6 +91,47 @@ type stepLogLoadedMsg struct {
 	stepUUID     string
 	text         string
 	err          error
+}
+
+// The four review messages carry no epoch. A response is correct for the pull
+// request it names, so the handler caches it unconditionally and the view
+// setter drops it when the user has walked off. Each carries the source commit
+// hash the request described, which is what stamps the cache entry.
+
+// diffStatLoadedMsg carries the changed files of a pull request.
+type diffStatLoadedMsg struct {
+	key     string
+	entries []bitbucket.DiffStatEntry
+	hash    string
+	err     error
+}
+
+// commitsLoadedMsg carries the commits of a pull request.
+type commitsLoadedMsg struct {
+	key     string
+	commits []bitbucket.Commit
+	hash    string
+	err     error
+}
+
+// threadsLoadedMsg carries the review conversation of a pull request, already
+// grouped into threads.
+type threadsLoadedMsg struct {
+	key     string
+	threads []bitbucket.Thread
+	hash    string
+	err     error
+}
+
+// fileDiffLoadedMsg carries one file's parsed diff. Parsing happens in the
+// command rather than the handler, so a large diff is walked off the event
+// loop.
+type fileDiffLoadedMsg struct {
+	key  string
+	path string
+	file *diff.File
+	hash string
+	err  error
 }
 
 // errorMsg is a failure worth interrupting the user for: it opens the error
@@ -319,4 +361,101 @@ func (a *App) fetchStepLog(pr *bitbucket.PullRequest, pipelineUUID, stepUUID str
 			bitbucket.StepLogOptions{TailBytes: stepLogTailBytes})
 		return stepLogLoadedMsg{pipelineUUID: pipelineUUID, stepUUID: stepUUID, text: text, err: err}
 	}
+}
+
+// fetchDiffStat lists the files a pull request changes, with their statuses and
+// +/- counts. It is the Files tab's only request; the per-file diffs come
+// separately, one file at a time.
+func (a *App) fetchDiffStat(pr *bitbucket.PullRequest) tea.Cmd {
+	if pr == nil {
+		return nil
+	}
+	ctx, client := a.context(), a.client
+	workspace, slug, id := pr.Workspace(), pr.RepoSlug(), pr.ID
+	key, hash := pr.Key(), sourceHash(pr)
+	a.logFlag.Store(true)
+	return func() tea.Msg {
+		entries, err := client.ListPullRequestDiffStat(ctx, workspace, slug, id)
+		return diffStatLoadedMsg{key: key, entries: entries, hash: hash, err: err}
+	}
+}
+
+// fetchCommits lists a pull request's commits.
+func (a *App) fetchCommits(pr *bitbucket.PullRequest) tea.Cmd {
+	if pr == nil {
+		return nil
+	}
+	ctx, client := a.context(), a.client
+	workspace, slug, id := pr.Workspace(), pr.RepoSlug(), pr.ID
+	key, hash := pr.Key(), sourceHash(pr)
+	a.logFlag.Store(true)
+	return func() tea.Msg {
+		commits, err := client.ListPullRequestCommits(ctx, workspace, slug, id, bitbucket.ListOptions{MaxItems: 0})
+		return commitsLoadedMsg{key: key, commits: commits, hash: hash, err: err}
+	}
+}
+
+// fetchThreads reads a pull request's comments and groups them into threads.
+// The API returns one flat list, so the grouping is client-side and belongs off
+// the event loop with the request.
+func (a *App) fetchThreads(pr *bitbucket.PullRequest) tea.Cmd {
+	if pr == nil {
+		return nil
+	}
+	ctx, client := a.context(), a.client
+	workspace, slug, id := pr.Workspace(), pr.RepoSlug(), pr.ID
+	key, hash := pr.Key(), sourceHash(pr)
+	a.logFlag.Store(true)
+	return func() tea.Msg {
+		comments, err := client.ListPullRequestComments(ctx, workspace, slug, id, bitbucket.ListOptions{MaxItems: 0})
+		if err != nil {
+			return threadsLoadedMsg{key: key, threads: nil, hash: hash, err: err}
+		}
+		return threadsLoadedMsg{key: key, threads: bitbucket.BuildThreads(comments), hash: hash, err: nil}
+	}
+}
+
+// fetchFileDiff reads and parses one file's diff. escaped is the diffstat's
+// escaped_path, which is what the endpoint's path= parameter wants; path is the
+// display path the view is showing and the parsed file is matched against.
+func (a *App) fetchFileDiff(pr *bitbucket.PullRequest, path, escaped string) tea.Cmd {
+	if pr == nil {
+		return nil
+	}
+	ctx, client := a.context(), a.client
+	workspace, slug, id := pr.Workspace(), pr.RepoSlug(), pr.ID
+	key, hash := pr.Key(), sourceHash(pr)
+	opts := bitbucket.DiffOptions{Path: escaped, Context: 0, DiffURL: pr.Links.Diff.Href}
+	a.logFlag.Store(true)
+	return func() tea.Msg {
+		msg := fileDiffLoadedMsg{key: key, path: path, file: nil, hash: hash, err: nil}
+		text, err := client.GetPullRequestDiff(ctx, workspace, slug, id, opts)
+		if err != nil {
+			msg.err = err
+			return msg
+		}
+		files, parseErr := diff.Parse(text)
+		if parseErr != nil {
+			msg.err = parseErr
+			return msg
+		}
+		msg.file = pickDiffFile(files, path)
+		return msg
+	}
+}
+
+// pickDiffFile is the parsed file the view should show. The endpoint is asked
+// for one path but answers with a whole diff document, and a rename or an
+// escaped path can make the header disagree with what was asked for, so the
+// first file is the fallback.
+func pickDiffFile(files []diff.File, path string) *diff.File {
+	for index := range files {
+		if files[index].Path() == path {
+			return &files[index]
+		}
+	}
+	if len(files) > 0 {
+		return &files[0]
+	}
+	return nil
 }

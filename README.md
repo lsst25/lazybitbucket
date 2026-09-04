@@ -25,14 +25,18 @@ make build-demo
 
 - **One list, many repositories** — open pull requests across all configured repos, with repo, id, title, author, approval state, build result and last-update time as columns
 - **Tabs** — Open / Mine / Reviewing out of the box, configurable per state and filter
-- **Detail pane** — branches, author, reviewers with approval state, and the description rendered from Markdown
+- **Detail pane** — four tabs per PR: Overview (branches, author, reviewers with approval state, Markdown description), Files, Commits and Comments. A tab is fetched the first time you open it, so a PR you only skim costs one request
+- **Diff pane** — the changed files with status and `+/−` counts, and a syntax-highlighted per-file unified diff with a line cursor; `n` / `p` walk the files, `enter` opens one
+- **Open in your editor** — `e` opens the file under the cursor at that line in `$EDITOR` (`nvim` by default), in your local checkout
+- **Commits** — hash, author, age and subject per commit; `enter` expands the full message
+- **Review threads** — inline comments read as threads anchored to a file and line, with replies and resolved state; commented lines are marked `●` in the diff and `enter` jumps to the thread
 - **Builds** — the commit statuses of the selected PR, with drill-down into the pipeline run, its steps and each step's log
 - **Repo filter** — narrow the list to a single repository from the Repos panel
 - **Search** — `/` filters the focused list as you type
-- **Browser hand-off** — `o` opens what you are looking at, `y` copies the PR URL, `u` opens a picker of every URL the PR reaches (branches, commits, builds, links in the description)
+- **Browser hand-off** — `o` opens what you are looking at (the PR, a commit, a thread, the diff), `y` copies that URL, `u` opens a picker of every URL the PR reaches (builds, links in the description, plus commits and threads once those tabs have been opened)
 - **Read-only** — the client has no write methods at all. lazybitbucket never merges, approves, comments or edits
 - **Git integration** — check out the source branch of the selected PR; the PR matching your current branch is selected at startup
-- **Custom commands** — bind shell commands to keys with template access to the focused PR, repo or build
+- **Custom commands** — bind shell commands to keys with template access to the focused PR, repo, build, or the changed file and line under the cursor
 - **Themes** — default ANSI palette plus all four Catppuccin flavors (Latte, Frappé, Macchiato, Mocha)
 - **Adaptive** — side-by-side or stacked layout, mouse support
 
@@ -123,7 +127,7 @@ A token without scopes does not work. lazybitbucket only reads, so the five read
 | Scope | Needed for |
 |-------|------------|
 | `read:pullrequest:bitbucket` | the pull request list and detail |
-| `read:repository:bitbucket` | repository metadata and commit statuses |
+| `read:repository:bitbucket` | repository metadata, commit statuses, and the diff, diffstat and commits of a pull request |
 | `read:pipeline:bitbucket` | pipeline runs, steps and step logs |
 | `read:user:bitbucket` | who you are — the Mine / Reviewing tabs |
 | `read:workspace:bitbucket` | the workspace itself (used by the connection test) |
@@ -212,7 +216,10 @@ Press `?` inside the app for all keybindings.
 | `u` | URL picker |
 | `y` | Copy the pull request URL |
 | `c` | Check out the source branch |
-| `backspace` | Back out of the step log / pipeline view |
+| `i` `d` `m` `t` | Jump to the Overview / Files / Commits / Comments tab of the PR |
+| `n` / `p` | Next / previous changed file |
+| `e` | Open the file under the cursor in your editor |
+| `backspace` | Back out of the file diff / step log / pipeline view |
 | `r` / `R` | Refresh the selection / the whole tab |
 | `?` | Help |
 | `q` | Quit |
@@ -221,7 +228,7 @@ Full list, including everything remappable: [Keybindings](docs/Keybindings.md).
 
 ## Documentation
 
-- [Configuration](docs/Config.md) — config file, tabs, list columns, keybindings, themes, git, custom commands
+- [Configuration](docs/Config.md) — config file, tabs, list columns, keybindings, editor, themes, git, custom commands
 - [Keybindings](docs/Keybindings.md) — full list of default keys
 - [Roadmap](ROADMAP.md) — what is built and what is next
 

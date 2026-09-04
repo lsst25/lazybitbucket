@@ -186,34 +186,49 @@ func (c *Client) notify(entry RequestLog) {
 func (c *Client) request(
 	ctx context.Context, fullURL, relPath, accept string, extraHeaders http.Header,
 ) ([]byte, int, error) {
+	resp, err := c.do(ctx, c.httpClient, fullURL, relPath, accept, extraHeaders)
+	if err != nil {
+		return resp.body, resp.status, err
+	}
+	return resp.body, resp.status, c.statusError(relPath, resp)
+}
+
+// rawResponse is one completed exchange whose status has not been judged yet.
+// The diff redirect probe needs the response headers, and needs a 3xx not to be
+// an error until it has looked at the Location.
+type rawResponse struct {
+	body   []byte
+	status int
+	header http.Header
+}
+
+// do performs one GET through httpClient and reports the exchange. Its error is
+// reserved for a request that produced no answer at all — an unbuildable
+// request, a transport failure, an unreadable body — so an HTTP error status is
+// the caller's to judge with statusError.
+func (c *Client) do(
+	ctx context.Context, httpClient *http.Client, fullURL, relPath, accept string, extraHeaders http.Header,
+) (rawResponse, error) {
 	start := time.Now()
 	c.log("%s %s %s\n", start.Format(time.TimeOnly), http.MethodGet, fullURL)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+	req, err := c.newRequest(ctx, fullURL, relPath, accept, extraHeaders)
 	if err != nil {
-		return nil, 0, fmt.Errorf("create request %s %s: %w", http.MethodGet, relPath, err)
-	}
-	if c.authHeader != "" {
-		req.Header.Set("Authorization", c.authHeader)
-	}
-	req.Header.Set("Accept", accept)
-	req.Header.Set("User-Agent", c.userAgent)
-	for name, values := range extraHeaders {
-		for _, value := range values {
-			req.Header.Add(name, value)
-		}
+		return rawResponse{body: nil, status: 0, header: nil}, err
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		c.log("  ERROR: %v\n", err)
-		return nil, 0, fmt.Errorf("execute request %s %s: %w", http.MethodGet, relPath, err)
+		return rawResponse{body: nil, status: 0, header: nil},
+			fmt.Errorf("execute request %s %s: %w", http.MethodGet, relPath, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("read response body for %s %s: %w", http.MethodGet, relPath, err)
+		return rawResponse{body: nil, status: resp.StatusCode, header: resp.Header},
+			fmt.Errorf("read response body for %s %s: %w", http.MethodGet, relPath, err)
 	}
 
 	elapsed := time.Since(start)
@@ -226,13 +241,43 @@ func (c *Client) request(
 		RateLimitRemaining: rateLimitRemaining(resp.Header),
 	})
 
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		c.log("  BODY: %s\n", string(body))
-		apiErr := parseAPIError(http.MethodGet, pathWithoutQuery(relPath), resp.StatusCode, resp.Header, body)
-		apiErr.AuthMethod = c.authMethod
-		return body, resp.StatusCode, apiErr
+	return rawResponse{body: body, status: resp.StatusCode, header: resp.Header}, nil
+}
+
+// newRequest builds the GET with the client's standard headers on it.
+func (c *Client) newRequest(
+	ctx context.Context, fullURL, relPath, accept string, extraHeaders http.Header,
+) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request %s %s: %w", http.MethodGet, relPath, err)
 	}
-	return body, resp.StatusCode, nil
+	if c.authHeader != "" {
+		req.Header.Set("Authorization", c.authHeader)
+	}
+	req.Header.Set("Accept", accept)
+	req.Header.Set("User-Agent", c.userAgent)
+	for name, values := range extraHeaders {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
+	return req, nil
+}
+
+// statusError is the *APIError an HTTP status deserves, or nil when the status
+// is a 2xx. A 3xx counts as an error: every request but the diff redirect probe
+// has already had its redirects followed by net/http, so a redirect status
+// reaching here is one nothing is going to resolve.
+func (c *Client) statusError(relPath string, resp rawResponse) error {
+	if resp.status >= http.StatusOK && resp.status < http.StatusMultipleChoices {
+		return nil
+	}
+
+	c.log("  BODY: %s\n", string(resp.body))
+	apiErr := parseAPIError(http.MethodGet, pathWithoutQuery(relPath), resp.status, resp.header, resp.body)
+	apiErr.AuthMethod = c.authMethod
+	return apiErr
 }
 
 // getJSON fetches path (with query appended) and unmarshals the body into out.
@@ -338,9 +383,17 @@ type page[T any] struct {
 	Values   []T    `json:"values"`
 }
 
+// maxPages bounds how many pages one collection walk will fetch. maxItems <= 0
+// means "every value", which the diffstat and status lists ask for, and a next
+// link that repeats itself — a server bug, a caching proxy, an iterator token
+// that never advances — would otherwise spin forever behind a loading pane.
+// Reaching the cap returns what was collected instead of an error: a partial
+// list still renders.
+const maxPages = 200
+
 // getAll fetches path?query and then follows next until the collection is
 // exhausted or maxItems values have been collected, truncating a final page
-// that overshoots. maxItems <= 0 means "no bound".
+// that overshoots. maxItems <= 0 means "no bound" other than maxPages.
 func getAll[T any](ctx context.Context, client *Client, path string, query url.Values, maxItems int) ([]T, error) {
 	values, _, err := getAllCounted[T](ctx, client, path, query, maxItems)
 	return values, err
@@ -369,7 +422,10 @@ func getAllCounted[T any](
 		if maxItems > 0 && len(all) >= maxItems {
 			return all[:maxItems], pages, nil
 		}
-		if envelope.Next == "" {
+		// Three ways to be done: the collection says so, the walk has stopped
+		// making progress, or it has followed enough links to conclude the
+		// next chain does not terminate.
+		if envelope.Next == "" || len(envelope.Values) == 0 || pages >= maxPages {
 			return all, pages, nil
 		}
 

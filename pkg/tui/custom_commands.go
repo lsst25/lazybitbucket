@@ -70,12 +70,23 @@ type BuildScopeData struct {
 	BuildNumber int
 }
 
+// FileScopeData is the template data of a file-scoped command: the changed
+// file the detail panel is showing and the line the cursor is on. Path is
+// repository-relative, as it is in the diff.
+type FileScopeData struct {
+	Path    string
+	OldPath string
+	Status  string
+	Line    int
+}
+
 // CommandData is what a custom command template is executed against. Only the
 // scopes the command declared are populated; the rest stay nil.
 type CommandData struct {
 	PR          *PullRequestScopeData
 	Repo        *RepoScopeData
 	Build       *BuildScopeData
+	File        *FileScopeData
 	Workspace   string
 	GitRepoPath string
 	GitBranch   string
@@ -99,7 +110,16 @@ func (a *App) activeContexts() []config.Context {
 	var out []config.Context
 	if a.side == sideRight {
 		switch a.detailView.Mode() {
-		case views.ModePullRequest, views.ModePipeline, views.ModeStepLog:
+		case views.ModeFileDiff:
+			// The diff context is the more specific one; detail commands keep
+			// working inside a file diff because it is still a pull request.
+			out = append(out, config.CtxDiff, config.CtxDetail)
+		case views.ModePullRequest:
+			if a.detailView.ActiveTab() == views.TabFiles {
+				out = append(out, config.CtxDiff)
+			}
+			out = append(out, config.CtxDetail)
+		case views.ModePipeline, views.ModeStepLog:
 			out = append(out, config.CtxDetail)
 		case views.ModeRepo:
 			out = append(out, config.CtxRepos)
@@ -151,6 +171,8 @@ func scopeNoun(scope config.ScopeMask) string {
 		return "repository"
 	case config.ScopeBuild:
 		return "build"
+	case config.ScopeFile:
+		return "file"
 	default:
 		return "selection"
 	}
@@ -165,6 +187,7 @@ func (a *App) buildCommandData(rc config.ResolvedCustomCommand, ctx config.Conte
 		PR:          nil,
 		Repo:        nil,
 		Build:       nil,
+		File:        nil,
 		Workspace:   a.workspace,
 		GitRepoPath: a.gitRepoPath,
 		GitBranch:   a.gitBranch,
@@ -195,7 +218,34 @@ func (a *App) buildCommandData(rc config.ResolvedCustomCommand, ctx config.Conte
 		data.Build = buildScopeData(status)
 	}
 
+	if rc.Scopes&config.ScopeFile != 0 {
+		file := a.buildFileScopeData()
+		if file == nil {
+			return data, config.ScopeFile, false
+		}
+		data.File = file
+	}
+
 	return data, 0, true
+}
+
+// buildFileScopeData describes the changed file the detail panel is on: the
+// file diff on screen, or the Files tab's cursor. The line is the same one the
+// editor key would open, so {{.File.Line}} and `e` always agree.
+func (a *App) buildFileScopeData() *FileScopeData {
+	path, line, ok := a.editorTarget()
+	if !ok {
+		return nil
+	}
+	data := &FileScopeData{Path: path, OldPath: "", Status: "", Line: line}
+	for _, entry := range a.detailView.DiffStat() {
+		if entry.Path() != path {
+			continue
+		}
+		data.OldPath = entry.OldPath()
+		data.Status = entry.Status
+	}
+	return data
 }
 
 func (a *App) buildPullRequestScopeData(pr *bitbucket.PullRequest) *PullRequestScopeData {
@@ -387,6 +437,7 @@ var allUIContexts = []config.Context{
 	config.CtxBuilds,
 	config.CtxRepos,
 	config.CtxDetail,
+	config.CtxDiff,
 }
 
 // quitReachableWarning returns a warning when every key bound to ActQuit is

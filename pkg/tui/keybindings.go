@@ -53,6 +53,51 @@ func (a *App) globalBindings() []Binding {
 	}
 }
 
+// reviewTabBindings are the keys the active pull request tab answers to. Each
+// tab is a different list with a different Enter, so the help has to follow the
+// tab and not just the mode.
+func (a *App) reviewTabBindings() []Binding {
+	switch a.detailView.ActiveTab() {
+	case views.TabFiles:
+		return []Binding{
+			a.bind(ActOpen, "open this file's diff"),
+			a.bind(ActNextFile, "next changed file"),
+			a.bind(ActPrevFile, "previous changed file"),
+			a.bind(ActOpenEditor, "open this file in the editor"),
+			a.bind(ActBrowser, "open in browser"),
+		}
+	case views.TabCommits:
+		return []Binding{
+			a.bind(ActOpen, "expand the commit message"),
+			a.bind(ActBrowser, "open the commit in a browser"),
+			a.bind(ActCopyURL, "copy the commit URL"),
+		}
+	case views.TabComments:
+		return []Binding{
+			a.bind(ActOpen, "expand the thread"),
+			a.bind(ActBrowser, "open the thread in a browser"),
+			a.bind(ActCopyURL, "copy the thread URL"),
+		}
+	case views.TabOverview:
+		return []Binding{
+			a.bind(ActBrowser, "open in browser"),
+			a.bind(ActURLPicker, "open URL picker"),
+			a.bind(ActCopyURL, "copy the pull request URL"),
+		}
+	}
+	return nil
+}
+
+// tabJumpBindings are the four keys that go straight to a pull request tab.
+func (a *App) tabJumpBindings() []Binding {
+	return []Binding{
+		a.bind(ActDetailOverview, "overview tab"),
+		a.bind(ActDetailFiles, "changed files tab"),
+		a.bind(ActDetailCommits, "commits tab"),
+		a.bind(ActDetailComments, "comments tab"),
+	}
+}
+
 // ContextBindings returns the keybindings that apply to the current focus.
 func (a *App) ContextBindings() []Binding {
 	global := a.globalBindings()
@@ -66,7 +111,21 @@ func (a *App) ContextBindings() []Binding {
 				a.bind(ActOpen, "open the step log"),
 				a.bind(ActBrowser, "open the pipeline in a browser"),
 			)
-		case views.ModePullRequest, views.ModeRepo, views.ModeSplash:
+		case views.ModeFileDiff:
+			bindings = append(bindings,
+				a.bind(ActBack, "back to the changed files"),
+				a.bind(ActOpen, "jump to the thread on this line"),
+				a.bind(ActNextFile, "next changed file"),
+				a.bind(ActPrevFile, "previous changed file"),
+				a.bind(ActOpenEditor, "open this line in the editor"),
+				a.bind(ActBrowser, "open the diff in a browser"),
+				a.bind(ActCopyURL, "copy the diff URL"),
+			)
+			bindings = append(bindings, a.tabJumpBindings()...)
+		case views.ModePullRequest:
+			bindings = append(bindings, a.reviewTabBindings()...)
+			bindings = append(bindings, a.tabJumpBindings()...)
+		case views.ModeRepo, views.ModeSplash:
 			bindings = append(bindings,
 				a.bind(ActBrowser, "open in browser"),
 				a.bind(ActURLPicker, "open URL picker"),
@@ -141,14 +200,22 @@ func (a *App) helpBarItems() []components.HelpItem {
 	}
 
 	if a.side == sideRight {
-		head := make([]components.HelpItem, 0, 3)
+		head := make([]components.HelpItem, 0, 4)
 		switch a.detailView.Mode() {
 		case views.ModePipeline, views.ModeStepLog:
 			head = append(head,
 				components.HelpItem{Key: km.Keys(ActOpen), Description: "step log"},
 				components.HelpItem{Key: km.Keys(ActBack), Description: "back"},
 			)
-		case views.ModePullRequest, views.ModeRepo, views.ModeSplash:
+		case views.ModeFileDiff:
+			head = append(head,
+				components.HelpItem{Key: km.Keys(ActNextFile) + "/" + km.Keys(ActPrevFile), Description: "file"},
+				components.HelpItem{Key: km.Keys(ActOpenEditor), Description: "editor"},
+				components.HelpItem{Key: km.Keys(ActBack), Description: "back"},
+			)
+		case views.ModePullRequest:
+			head = append(head, a.reviewTabHelpItems()...)
+		case views.ModeRepo, views.ModeSplash:
 			head = append(head,
 				components.HelpItem{Key: km.Keys(ActBrowser), Description: "browser"},
 				components.HelpItem{Key: km.Keys(ActURLPicker), Description: "urls"},
@@ -181,6 +248,30 @@ func (a *App) helpBarItems() []components.HelpItem {
 		return []components.HelpItem{
 			{Key: km.Keys(ActSwitchPanel) + "/" + km.Keys(ActFocusRight), Description: "detail"},
 			{Key: km.Keys(ActHelp), Description: "help"},
+		}
+	}
+	return nil
+}
+
+// reviewTabHelpItems is the hint strip of the active pull request tab.
+func (a *App) reviewTabHelpItems() []components.HelpItem {
+	km := a.keymap
+	switch a.detailView.ActiveTab() {
+	case views.TabFiles:
+		return []components.HelpItem{
+			{Key: km.Keys(ActOpen), Description: "diff"},
+			{Key: km.Keys(ActNextFile) + "/" + km.Keys(ActPrevFile), Description: "file"},
+			{Key: km.Keys(ActOpenEditor), Description: "editor"},
+		}
+	case views.TabCommits, views.TabComments:
+		return []components.HelpItem{
+			{Key: km.Keys(ActOpen), Description: "expand"},
+			{Key: km.Keys(ActBrowser), Description: "browser"},
+		}
+	case views.TabOverview:
+		return []components.HelpItem{
+			{Key: km.Keys(ActBrowser), Description: "browser"},
+			{Key: km.Keys(ActURLPicker), Description: "urls"},
 		}
 	}
 	return nil

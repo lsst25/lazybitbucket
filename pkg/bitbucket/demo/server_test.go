@@ -535,6 +535,8 @@ func TestWireKeysAreLowercase(t *testing.T) {
 		pipelinesPath(repoAPIGateway),
 		pipelinePath(repoAPIGateway, 413),
 		pipelinePath(repoAPIGateway, 413) + segmentSteps,
+		pullRequestPath(repoAPIGateway, 103) + segmentCommits,
+		pullRequestPath(repoAPIGateway, 103) + segmentComments,
 	}
 
 	for _, path := range paths {
@@ -544,6 +546,15 @@ func TestWireKeysAreLowercase(t *testing.T) {
 		}
 		assertLowercaseKeys(t, path, body)
 	}
+
+	// The diffstat is served by the redirect target, which is addressed by the
+	// absolute link the dataset carries rather than by a path.
+	href := demoPullRequest(t, server, repoAPIGateway, 103).Links.DiffStat.Href
+	var diffstat any
+	if err := json.Unmarshal(get(t, href, nil).Body, &diffstat); err != nil {
+		t.Fatalf("decode %s: %v", href, err)
+	}
+	assertLowercaseKeys(t, href, diffstat)
 }
 
 func assertLowercaseKeys(t *testing.T, path string, value any) {

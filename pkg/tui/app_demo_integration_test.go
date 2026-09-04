@@ -39,9 +39,10 @@ func demoApp(t *testing.T) *App {
 	app := NewAppWithAuth(cfg, client, AuthDemo)
 	t.Cleanup(app.Shutdown)
 
-	// Deterministic body rendering and an instant debounce, so runAll drains
-	// the chain without sleeping.
-	app.detailView = views.NewDetailView(views.PlainRenderer{})
+	// A plain Markdown renderer for deterministic bodies and an instant
+	// debounce so runAll drains the chain without sleeping. The code style
+	// stays on: the diff view's highlighting is part of what these tests check.
+	app.detailView = views.NewDetailView(views.PlainRenderer{}, "monokai")
 	app.detailView.ResolveNav = app.keymap.MatchNav
 	app.debounce = time.Nanosecond
 
@@ -200,5 +201,176 @@ func TestDemo_OneRequestPerRepositoryForTheThreeDefaultTabs(t *testing.T) {
 	app.prList.SetTabIndex(1)
 	if !app.prList.HasCachedTab() {
 		t.Error("the Mine tab must be served from the shared fetch, not a new request")
+	}
+}
+
+// demoReviewApp is demoApp with one pull request previewed and the detail panel
+// focused, which is where every review-tab walk starts.
+func demoReviewApp(t *testing.T, key string) *App {
+	t.Helper()
+	app := demoApp(t)
+	if !app.prList.SelectByKey(key) {
+		t.Fatalf("%s should be in the Open tab", key)
+	}
+	runAll(t, app, app.previewSelected())
+	app.side = sideRight
+	app.updateFocusState()
+	return app
+}
+
+func TestDemo_FilesTabShowsTheDiffstat(t *testing.T) {
+	t.Parallel()
+	app := demoReviewApp(t, "acme/api-gateway#103")
+
+	runAll(t, app, app.jumpToTab(views.TabFiles))
+
+	rendered := plain(app.detailView.View())
+	for _, want := range []string{"internal/upstream/retry.go", "docs/rfc-014.md", "Files (3)"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("the Files tab is missing %q:\n%s", want, rendered)
+		}
+	}
+	// The counts come from the demo's own diff, so they cannot drift.
+	if !strings.Contains(rendered, "+") || !strings.Contains(rendered, "−") {
+		t.Errorf("the changed-file rows should carry +/− counts:\n%s", rendered)
+	}
+}
+
+func TestDemo_EnterOnAFileRendersAHighlightedDiffWithAMarker(t *testing.T) {
+	t.Parallel()
+	app := demoReviewApp(t, "acme/api-gateway#103")
+	runAll(t, app, app.jumpToTab(views.TabFiles))
+	_ = app.detailView.View()
+
+	_, cmd := app.detailView.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter on a changed file should open its diff")
+	}
+	runAll(t, app, cmd)
+
+	testkit.AssertEqual(t, "mode", app.detailView.Mode(), views.ModeFileDiff)
+	testkit.AssertEqual(t, "file on screen", app.detailView.FileDiffPath(), "internal/upstream/retry.go")
+
+	raw := app.detailView.View()
+	if !strings.Contains(raw, "\x1b[") {
+		t.Error("the diff's code column should be syntax highlighted")
+	}
+	rendered := plain(raw)
+	if !strings.Contains(rendered, "●") {
+		t.Errorf("the commented line should carry a marker:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "@@") {
+		t.Errorf("the diff should show its hunk header:\n%s", rendered)
+	}
+}
+
+func TestDemo_NextFileMovesToTheFollowingDiff(t *testing.T) {
+	t.Parallel()
+	app := demoReviewApp(t, "acme/api-gateway#103")
+	runAll(t, app, app.jumpToTab(views.TabFiles))
+	runAll(t, app, app.openFileDiff("internal/upstream/retry.go"))
+
+	_, cmd, handled := app.handleReviewAction(ActNextFile)
+	if !handled {
+		t.Fatal("the next-file action must be handled")
+	}
+	runAll(t, app, cmd)
+
+	testkit.AssertEqual(t, "mode", app.detailView.Mode(), views.ModeFileDiff)
+	testkit.AssertEqual(t, "file on screen",
+		app.detailView.FileDiffPath(), "internal/upstream/retry_test.go")
+}
+
+func TestDemo_EnterOnACommentedLineLandsOnTheThread(t *testing.T) {
+	t.Parallel()
+	app := demoReviewApp(t, "acme/api-gateway#103")
+	runAll(t, app, app.jumpToTab(views.TabFiles))
+	runAll(t, app, app.openFileDiff("internal/upstream/retry.go"))
+	_ = app.detailView.View()
+
+	// The demo's first inline thread is anchored to new-side line 16.
+	found := false
+	for range 40 {
+		row, ok := app.detailView.SelectedDiffLine()
+		if ok && row.NewNo == 16 {
+			found = true
+			break
+		}
+		app.detailView.ScrollBy(1)
+	}
+	if !found {
+		t.Fatal("no diff row with new-side line 16")
+	}
+
+	_ = app.detailView.View()
+	_, cmd := app.detailView.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter on the commented line should jump to its thread")
+	}
+	runAll(t, app, cmd)
+
+	testkit.AssertEqual(t, "mode", app.detailView.Mode(), views.ModePullRequest)
+	testkit.AssertEqual(t, "tab", app.detailView.ActiveTab(), views.TabComments)
+	thread := app.detailView.SelectedThread()
+	if thread == nil {
+		t.Fatal("the cursor should be on a thread")
+	}
+	testkit.AssertEqual(t, "thread path", thread.Path(), "internal/upstream/retry.go")
+}
+
+func TestDemo_CommitsTabListsTheCommits(t *testing.T) {
+	t.Parallel()
+	app := demoReviewApp(t, "acme/api-gateway#103")
+
+	runAll(t, app, app.jumpToTab(views.TabCommits))
+
+	commits := app.detailView.Commits()
+	if len(commits) == 0 {
+		t.Fatal("the demo pull requests carry commits")
+	}
+	rendered := plain(app.detailView.View())
+	if !strings.Contains(rendered, commits[0].ShortHash()) {
+		t.Errorf("the Commits tab is missing the short hash:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, commits[0].Subject()) {
+		t.Errorf("the Commits tab is missing the subject:\n%s", rendered)
+	}
+}
+
+func TestDemo_CommentsTabShowsTheResolvedThread(t *testing.T) {
+	t.Parallel()
+	app := demoReviewApp(t, "acme/api-gateway#103")
+
+	runAll(t, app, app.jumpToTab(views.TabComments))
+
+	rendered := plain(app.detailView.View())
+	if !strings.Contains(rendered, "resolved") {
+		t.Errorf("the Comments tab should mark the resolved thread:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "internal/upstream/retry.go") {
+		t.Errorf("an inline thread should name its file:\n%s", rendered)
+	}
+}
+
+func TestDemo_TooLargeDiffSaysToOpenTheBrowser(t *testing.T) {
+	t.Parallel()
+	app := demoApp(t)
+	// #98 is merged, so it is only in a tab that asks for merged pull requests;
+	// the review fetches work off the previewed pull request, not the list.
+	pr, err := app.client.GetPullRequest(t.Context(), demo.Workspace, "api-gateway", 98)
+	if err != nil {
+		t.Fatalf("get #98: %v", err)
+	}
+	app.prCache[pr.Key()] = pr
+	app.previewKey = pr.Key()
+	app.detailView.SetPullRequest(pr)
+	app.side = sideRight
+	app.updateFocusState()
+
+	runAll(t, app, app.jumpToTab(views.TabFiles))
+
+	rendered := plain(app.detailView.View())
+	if !strings.Contains(rendered, "too large — open in browser (o)") {
+		t.Errorf("the Files tab should name the way out of a 555:\n%s", rendered)
 	}
 }

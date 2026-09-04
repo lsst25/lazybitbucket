@@ -132,3 +132,69 @@ func TestFakeClient_ConcurrentCallsAreRecorded(t *testing.T) {
 
 	testkit.AssertEqual(t, "recorded calls", len(fake.ListPullRequestsCalls), goroutines)
 }
+
+func TestFakeClient_ReviewMethodsRecordTheirArguments(t *testing.T) {
+	t.Parallel()
+
+	const prID = 103
+
+	fake := &FakeClient{T: t}
+	fake.ListPullRequestCommitsFunc = func(_ context.Context, _, _ string, _ int,
+		_ bitbucket.ListOptions,
+	) ([]bitbucket.Commit, error) {
+		return []bitbucket.Commit{{Hash: "06fd23caff6b0a76ce2f42c983988394dca1f17f"}}, nil
+	}
+	fake.ListPullRequestCommentsFunc = func(_ context.Context, _, _ string, _ int,
+		_ bitbucket.ListOptions,
+	) ([]bitbucket.Comment, error) {
+		return []bitbucket.Comment{{ID: 822302793}}, nil
+	}
+	fake.ListPullRequestDiffStatFunc = func(_ context.Context, _, _ string, _ int,
+	) ([]bitbucket.DiffStatEntry, error) {
+		return []bitbucket.DiffStatEntry{{Status: bitbucket.DiffStatModified}}, nil
+	}
+	fake.GetPullRequestDiffFunc = func(_ context.Context, _, _ string, _ int,
+		_ bitbucket.DiffOptions,
+	) (string, error) {
+		return "diff --git a/x b/x\n", nil
+	}
+
+	ctx := t.Context()
+
+	commits, err := fake.ListPullRequestCommits(ctx, testWorkspace, testRepo, prID,
+		bitbucket.ListOptions{MaxItems: 7})
+	if err != nil {
+		t.Fatalf("ListPullRequestCommits: %v", err)
+	}
+	comments, err := fake.ListPullRequestComments(ctx, testWorkspace, testRepo, prID,
+		bitbucket.ListOptions{MaxItems: 9})
+	if err != nil {
+		t.Fatalf("ListPullRequestComments: %v", err)
+	}
+	entries, err := fake.ListPullRequestDiffStat(ctx, testWorkspace, testRepo, prID)
+	if err != nil {
+		t.Fatalf("ListPullRequestDiffStat: %v", err)
+	}
+	diff, err := fake.GetPullRequestDiff(ctx, testWorkspace, testRepo, prID,
+		bitbucket.DiffOptions{Path: "pkg/tui/app.go", Context: 5, DiffURL: "https://api.example/diff"})
+	if err != nil {
+		t.Fatalf("GetPullRequestDiff: %v", err)
+	}
+
+	testkit.AssertEqual(t, "commits", len(commits), 1)
+	testkit.AssertEqual(t, "comments", len(comments), 1)
+	testkit.AssertEqual(t, "diffstat entries", len(entries), 1)
+	testkit.AssertEqual(t, "diff", diff, "diff --git a/x b/x\n")
+
+	testkit.AssertEqual(t, "ListPullRequestCommits", fake.CallCount("ListPullRequestCommits"), 1)
+	testkit.AssertEqual(t, "ListPullRequestComments", fake.CallCount("ListPullRequestComments"), 1)
+	testkit.AssertEqual(t, "ListPullRequestDiffStat", fake.CallCount("ListPullRequestDiffStat"), 1)
+	testkit.AssertEqual(t, "GetPullRequestDiff", fake.CallCount("GetPullRequestDiff"), 1)
+
+	testkit.AssertEqual(t, "commits max items", fake.ListPullRequestCommitsCalls[0].Opts.MaxItems, 7)
+	testkit.AssertEqual(t, "comments pull request", fake.ListPullRequestCommentsCalls[0].ID, prID)
+	testkit.AssertEqual(t, "diffstat repo", fake.ListPullRequestDiffStatCalls[0].RepoSlug, testRepo)
+	testkit.AssertEqual(t, "diff path", fake.GetPullRequestDiffCalls[0].Opts.Path, "pkg/tui/app.go")
+	testkit.AssertEqual(t, "diff context", fake.GetPullRequestDiffCalls[0].Opts.Context, 5)
+	testkit.AssertEqual(t, "diff url", fake.GetPullRequestDiffCalls[0].Opts.DiffURL, "https://api.example/diff")
+}

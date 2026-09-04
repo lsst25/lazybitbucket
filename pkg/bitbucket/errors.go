@@ -20,6 +20,15 @@ const acceptedScopesHeader = "X-Accepted-OAuth-Scopes"
 // the request is unknown.
 const credentialsRejectedHint = " (credentials rejected)"
 
+// StatusDiffTooLarge is Bitbucket's nonstandard status for a diff or diffstat
+// that timed out because it was too large. Neither endpoint paginates the
+// document it builds, so a big enough pull request answers this instead of a
+// diff — and net/http knows no text for it.
+const StatusDiffTooLarge = 555
+
+// statusTextDiffTooLarge is the status text APIError renders for 555.
+const statusTextDiffTooLarge = "Diff Too Large"
+
 // APIError is a non-2xx response from the Bitbucket Cloud REST API. Bitbucket
 // returns 404 for a wrong workspace, a missing repository, a missing pull
 // request and a no-permission read alike, so Message is shown verbatim in the
@@ -56,7 +65,7 @@ func (e *APIError) Error() string {
 	out.WriteString(e.Path)
 	out.WriteString(": status ")
 	out.WriteString(strconv.Itoa(e.Status))
-	if text := http.StatusText(e.Status); text != "" {
+	if text := statusText(e.Status); text != "" {
 		out.WriteString(" ")
 		out.WriteString(text)
 	}
@@ -116,6 +125,12 @@ func IsForbidden(err error) bool { return hasStatus(err, http.StatusForbidden) }
 // IsRateLimited reports whether err is a 429. The client does not retry.
 func IsRateLimited(err error) bool { return hasStatus(err, http.StatusTooManyRequests) }
 
+// IsDiffTooLarge reports whether err is Bitbucket's 555: the diff or diffstat
+// was too large and the server gave up building it. Retrying is pointless — the
+// only way out is a per-file diff or the browser — so this must be told apart
+// from the 5xx statuses a retry could fix.
+func IsDiffTooLarge(err error) bool { return hasStatus(err, StatusDiffTooLarge) }
+
 func hasStatus(err error, status int) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Status == status
@@ -169,10 +184,19 @@ func parseAPIError(method, path string, status int, header http.Header, body []b
 
 // statusMessage is the fallback Message for a body that carried none.
 func statusMessage(status int) string {
-	if text := http.StatusText(status); text != "" {
+	if text := statusText(status); text != "" {
 		return text
 	}
 	return fmt.Sprintf("status %d", status)
+}
+
+// statusText is http.StatusText plus the one status Bitbucket invented, so a
+// 555 reads as "status 555 Diff Too Large" rather than a bare number.
+func statusText(status int) string {
+	if status == StatusDiffTooLarge {
+		return statusTextDiffTooLarge
+	}
+	return http.StatusText(status)
 }
 
 func truncateBody(body []byte) string {

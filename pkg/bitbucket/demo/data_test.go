@@ -544,6 +544,27 @@ func TestDataset_ShiftMovesEveryTimestamp(t *testing.T) {
 			assertShifted(t, label+".CompletedOn", step.CompletedOn, original.CompletedOn, delta)
 		}
 	}
+
+	for key, commits := range after.Commits {
+		for index, commit := range commits {
+			testkit.AssertEqual(t, key+" "+commit.ShortHash()+".Date",
+				commit.Date, before.Commits[key][index].Date.Add(delta))
+		}
+	}
+
+	for key, comments := range after.Comments {
+		for index, comment := range comments {
+			original := before.Comments[key][index]
+			label := key + " comment " + strconv.FormatInt(comment.ID, 10)
+			testkit.AssertEqual(t, label+".CreatedOn", comment.CreatedOn, original.CreatedOn.Add(delta))
+			testkit.AssertEqual(t, label+".UpdatedOn", comment.UpdatedOn, original.UpdatedOn.Add(delta))
+			if comment.Resolution == nil {
+				continue
+			}
+			testkit.AssertEqual(t, label+".Resolution.CreatedOn",
+				comment.Resolution.CreatedOn, original.Resolution.CreatedOn.Add(delta))
+		}
+	}
 }
 
 // TestDataset_ShiftPreservesOrder pins the property --demo relies on: sliding

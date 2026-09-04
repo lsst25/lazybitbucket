@@ -23,7 +23,7 @@ func (c *Client) ListPullRequests(
 	ctx context.Context, workspace, repoSlug string, opts ListPullRequestsOptions,
 ) ([]PullRequest, error) {
 	maxItems := orDefault(opts.MaxItems, defaultMaxPullRequests)
-	path := repoPath(workspace, repoSlug) + "/pullrequests"
+	path := repoPath(workspace, repoSlug) + pullRequestsSegment
 
 	query := url.Values{}
 	query.Set("pagelen", strconv.Itoa(pageLen(maxPageLenPullRequests, maxItems)))
@@ -62,10 +62,8 @@ func (c *Client) ListPullRequests(
 // reviewers and participants, so it is the fallback when the list projection
 // was refused.
 func (c *Client) GetPullRequest(ctx context.Context, workspace, repoSlug string, id int) (*PullRequest, error) {
-	path := repoPath(workspace, repoSlug) + "/pullrequests/" + strconv.Itoa(id)
-
 	var pr PullRequest
-	if err := c.getJSON(ctx, path, nil, &pr); err != nil {
+	if err := c.getJSON(ctx, pullRequestPath(workspace, repoSlug, id), nil, &pr); err != nil {
 		return nil, fmt.Errorf("get pull request %s/%s#%d: %w", workspace, repoSlug, id, err)
 	}
 	return &pr, nil
@@ -78,7 +76,7 @@ func (c *Client) GetPullRequest(ctx context.Context, workspace, repoSlug string,
 func (c *Client) ListPullRequestStatuses(
 	ctx context.Context, workspace, repoSlug string, id int,
 ) ([]CommitStatus, error) {
-	path := repoPath(workspace, repoSlug) + "/pullrequests/" + strconv.Itoa(id) + "/statuses"
+	path := pullRequestPath(workspace, repoSlug, id) + "/statuses"
 
 	query := url.Values{}
 	query.Set("pagelen", strconv.Itoa(maxPageLenDefault))
@@ -88,6 +86,16 @@ func (c *Client) ListPullRequestStatuses(
 		return nil, fmt.Errorf("list statuses %s/%s#%d: %w", workspace, repoSlug, id, err)
 	}
 	return statuses, nil
+}
+
+// pullRequestsSegment is the collection path segment shared by the pull request
+// endpoints.
+const pullRequestsSegment = "/pullrequests"
+
+// pullRequestPath is the API path of one pull request, the prefix every PR
+// sub-resource (statuses, commits, comments, diff, diffstat) hangs off.
+func pullRequestPath(workspace, repoSlug string, id int) string {
+	return repoPath(workspace, repoSlug) + pullRequestsSegment + "/" + strconv.Itoa(id)
 }
 
 // isBadRequest reports whether err is a 400 from the API. An unsupported fields

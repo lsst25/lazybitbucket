@@ -18,4 +18,16 @@ const (
 	testFetchKey  = "OPEN|"
 
 	testBoom = "boom"
+
+	// The two files of the review fixture diff (see review_tabs_test.go).
+	testFileGo = "internal/rate/bucket.go"
+	testFileMD = "docs/rate.md"
+
+	// testSourceHash is the source commit the review fixtures describe; a
+	// second hash stands in for a push.
+	testSourceHash  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testPushedHash  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testThreadRoot  = int64(9001)
+	testCommitHash  = "cccccccccccccccccccccccccccccccccccccccc"
+	testCommitShort = "ccccccc"
 )

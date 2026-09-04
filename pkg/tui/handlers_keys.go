@@ -58,6 +58,9 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m, cmd, ok := a.handleTabAction(action); ok {
 		return m, cmd
 	}
+	if m, cmd, ok := a.handleReviewAction(action); ok {
+		return m, cmd
+	}
 	if m, cmd, ok := a.handlePullRequestAction(action); ok {
 		return m, cmd
 	}
@@ -296,7 +299,7 @@ func (a *App) handleTabAction(action Action) (tea.Model, tea.Cmd, bool) {
 	case ActPrevTab:
 		if a.side == sideRight {
 			a.detailView.PrevTab()
-			return a, nil, true
+			return a, a.onDetailTabChanged(), true
 		}
 		if a.leftFocus == focusPullRequests {
 			a.prList.PrevTab()
@@ -307,7 +310,7 @@ func (a *App) handleTabAction(action Action) (tea.Model, tea.Cmd, bool) {
 	case ActNextTab:
 		if a.side == sideRight {
 			a.detailView.NextTab()
-			return a, nil, true
+			return a, a.onDetailTabChanged(), true
 		}
 		if a.leftFocus == focusPullRequests {
 			a.prList.NextTab()
@@ -329,11 +332,99 @@ func (a *App) afterTabSwitch() tea.Cmd {
 	return tea.Batch(a.previewSelected(), a.startPrefetch())
 }
 
+// handleReviewAction is the detail panel's own key set: the four tab jumps, the
+// changed-file stepping and the editor. It acts only while the detail panel is
+// focused; with a left panel focused these keys fall through to routeToPanel
+// and the panel decides what, if anything, they mean there.
+func (a *App) handleReviewAction(action Action) (tea.Model, tea.Cmd, bool) {
+	if a.side != sideRight {
+		return nil, nil, false
+	}
+	switch action { //nolint:exhaustive // every other action is handled elsewhere
+	case ActDetailOverview:
+		return a, a.jumpToTab(views.TabOverview), true
+	case ActDetailFiles:
+		return a, a.jumpToTab(views.TabFiles), true
+	case ActDetailCommits:
+		return a, a.jumpToTab(views.TabCommits), true
+	case ActDetailComments:
+		return a, a.jumpToTab(views.TabComments), true
+	case ActNextFile:
+		return a, a.stepChangedFile(true), true
+	case ActPrevFile:
+		return a, a.stepChangedFile(false), true
+	case ActOpenEditor:
+		return a, a.openEditorAtCursor(), true
+	}
+	return nil, nil, false
+}
+
+// jumpToTab puts one detail tab on screen and warms it. SetActiveTab leaves
+// ModeFileDiff on the way, so a tab key pressed inside a diff lands on the tab
+// rather than on a diff wearing another tab's title.
+func (a *App) jumpToTab(tab views.DetailTab) tea.Cmd {
+	mode := a.detailView.Mode()
+	if mode != views.ModePullRequest && mode != views.ModeFileDiff {
+		return nil
+	}
+	a.detailView.SetActiveTab(tab)
+	return a.onDetailTabChanged()
+}
+
+// stepChangedFile moves to the neighbouring changed file: the cursor on the
+// Files tab, the whole diff view in ModeFileDiff. It stops at both ends rather
+// than wrapping, because wrapping while reading a diff reads as a glitch.
+func (a *App) stepChangedFile(forward bool) tea.Cmd {
+	mode := a.detailView.Mode()
+	onFilesTab := mode == views.ModePullRequest && a.detailView.ActiveTab() == views.TabFiles
+	if mode != views.ModeFileDiff && !onFilesTab {
+		return nil
+	}
+	pr := a.currentPullRequest()
+	if pr == nil {
+		return nil
+	}
+	// The keys work before the Files tab has ever been opened, so the list may
+	// still have to be fetched before there is anything to step through.
+	if len(a.detailView.DiffStat()) == 0 {
+		return a.ensureDiffStat(pr)
+	}
+
+	// Exactly one of the two may run: on the Files tab each call moves the list
+	// cursor, so probing PrevFile before NextFile would step back and forth and
+	// pin the cursor on the second file.
+	step := a.detailView.PrevFile
+	if forward {
+		step = a.detailView.NextFile
+	}
+	path, ok := step()
+	if !ok {
+		a.helpBar.SetStatusMsg(fileEdgeNote(forward))
+		return nil
+	}
+	if mode != views.ModeFileDiff {
+		// On the Files tab the cursor has already moved; the diff opens on Enter.
+		return nil
+	}
+	return a.openFileDiff(path)
+}
+
+// fileEdgeNote says which end of the changed-file list the cursor is stuck at.
+func fileEdgeNote(forward bool) string {
+	if forward {
+		return "last file"
+	}
+	return "first file"
+}
+
 func (a *App) handlePullRequestAction(action Action) (tea.Model, tea.Cmd, bool) {
 	switch action { //nolint:exhaustive // the rest of the actions are handled elsewhere
 	case ActCopyURL:
-		if pr := a.currentPullRequest(); pr != nil {
-			a.copyToClipboard(pr.HTMLURL())
+		// Copy and browser share one target, so `y` always yields the address
+		// `o` would have opened — the selected commit, the selected thread, the
+		// diff, or the pull request.
+		if url := a.browserURL(); url != "" {
+			a.copyToClipboard(url)
 		}
 		return a, nil, true
 
@@ -358,23 +449,8 @@ func (a *App) handlePullRequestAction(action Action) (tea.Model, tea.Cmd, bool) 
 // browserURL is what `o` opens, which depends on what the user is looking at.
 func (a *App) browserURL() string {
 	if a.side == sideRight {
-		mode := a.detailView.Mode()
-		if mode == views.ModePipeline || mode == views.ModeStepLog {
-			if pipeline := a.detailView.Pipeline(); pipeline != nil {
-				if url := pipeline.HTMLURL(); url != "" {
-					return url
-				}
-			}
-			if status := a.buildsPanel.SelectedStatus(); status != nil {
-				return status.URL
-			}
-		}
-		if mode == views.ModeRepo {
-			// The panel is showing a repository, so `o` opens that repository
-			// rather than whichever pull request happens to be selected.
-			if repo := a.repoList.SelectedRepo(); repo != nil && repo.URL != "" {
-				return repo.URL
-			}
+		if url := a.detailBrowserURL(); url != "" {
+			return url
 		}
 		if pr := a.currentPullRequest(); pr != nil {
 			return pr.HTMLURL()
@@ -395,6 +471,59 @@ func (a *App) browserURL() string {
 		if pr := a.currentPullRequest(); pr != nil {
 			return pr.HTMLURL()
 		}
+	}
+	return ""
+}
+
+// detailBrowserURL is the deep link the detail panel's own contents deserve,
+// "" when the pull request itself is the right target.
+func (a *App) detailBrowserURL() string {
+	switch a.detailView.Mode() {
+	case views.ModePipeline, views.ModeStepLog:
+		if pipeline := a.detailView.Pipeline(); pipeline != nil {
+			if url := pipeline.HTMLURL(); url != "" {
+				return url
+			}
+		}
+		if status := a.buildsPanel.SelectedStatus(); status != nil {
+			return status.URL
+		}
+	case views.ModeRepo:
+		// The panel is showing a repository, so `o` opens that repository
+		// rather than whichever pull request happens to be selected.
+		if repo := a.repoList.SelectedRepo(); repo != nil && repo.URL != "" {
+			return repo.URL
+		}
+	case views.ModeFileDiff:
+		// Bitbucket has no per-file anchor worth relying on, so the diff view
+		// opens the pull request's whole diff.
+		if pr := a.currentPullRequest(); pr != nil {
+			if url := pr.HTMLURL(); url != "" {
+				return url + "/diff"
+			}
+		}
+	case views.ModePullRequest:
+		return a.reviewTabURL()
+	case views.ModeSplash:
+		// The splash screen carries no selection.
+	}
+	return ""
+}
+
+// reviewTabURL is the deep link of the active review tab's cursor: the commit
+// or the thread the reader is on. "" falls back to the pull request.
+func (a *App) reviewTabURL() string {
+	switch a.detailView.ActiveTab() {
+	case views.TabCommits:
+		if commit := a.detailView.SelectedCommit(); commit != nil {
+			return commit.HTMLURL()
+		}
+	case views.TabComments:
+		if thread := a.detailView.SelectedThread(); thread != nil {
+			return thread.Root.HTMLURL()
+		}
+	case views.TabOverview, views.TabFiles:
+		// Both are faces of the pull request itself.
 	}
 	return ""
 }
@@ -426,20 +555,29 @@ func (a *App) handleActionRefresh() (tea.Model, tea.Cmd, bool) {
 	key := pr.Key()
 	delete(a.prCache, key)
 	delete(a.statusCache, key)
+	a.dropReviewCaches(key)
 	a.previewEpoch++
 	a.logFlag.Store(true)
-	return a, tea.Batch(
+	cmds := []tea.Cmd{
 		a.fetchStatuses(pr, a.previewEpoch),
 		a.fetchPullRequestDetail(pr, a.previewEpoch),
-	), true
+	}
+	// Whatever review data is on screen is refetched as well; the tabs the user
+	// has not opened stay cold.
+	if cmd := a.refreshReviewData(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	return a, tea.Batch(cmds...), true
 }
 
 // handleActivate is Enter and space: open the pull request detail, drill into a
 // build, or apply a repository filter.
 func (a *App) handleActivate() (tea.Model, tea.Cmd) {
 	if a.side != sideLeft {
-		// The detail panel handles activation itself (a pipeline step's log).
-		return nil, nil
+		// The detail panel owns activation (open a file's diff, a step's log,
+		// expand a commit or thread). Dispatch through the resolved action so a
+		// rebound `pullRequests.open`/`select` key keeps working there too.
+		return a, a.detailView.Activate()
 	}
 	switch a.leftFocus {
 	case focusPullRequests:
@@ -465,7 +603,9 @@ func (a *App) handleActionURLPicker() (tea.Model, tea.Cmd) {
 	if pr == nil {
 		return a, nil
 	}
-	groups := views.ExtractURLs(pr, a.statusCache[pr.Key()].statuses)
+	key := pr.Key()
+	groups := views.ExtractURLs(pr, a.statusCache[key].statuses,
+		a.commitsCache[key].value, a.threadsCache[key].value)
 	if len(groups) == 0 {
 		return a, nil
 	}

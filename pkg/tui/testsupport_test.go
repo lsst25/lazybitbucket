@@ -53,7 +53,7 @@ func newTestApp() *App {
 		cfg:        testConfig(),
 		prList:     views.NewPullRequestList(),
 		repoList:   views.NewRepoList(),
-		detailView: views.NewDetailView(views.PlainRenderer{}),
+		detailView: views.NewDetailView(views.PlainRenderer{}, ""),
 		logFlag:    new(atomic.Bool),
 		side:       sideLeft,
 		leftFocus:  focusPullRequests,
@@ -78,6 +78,7 @@ func newAppWithFake(t *testing.T, fake *bitbuckettest.FakeClient) *App {
 	app.prCache = map[string]*bitbucket.PullRequest{}
 	app.statusCache = map[string]statusEntry{}
 	app.pipelineCache = map[string]*pipelineEntry{}
+	app.ensureReviewCaches()
 	app.now = func() time.Time { return testNow }
 	app.debounce = time.Nanosecond
 	app.refreshEvery = 0

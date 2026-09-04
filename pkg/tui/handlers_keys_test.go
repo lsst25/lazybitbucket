@@ -146,15 +146,21 @@ func TestActivate_OnAnEmptyListDoesNothing(t *testing.T) {
 	}
 }
 
-func TestActivate_OnTheDetailPanelFallsThroughToTheView(t *testing.T) {
+func TestActivate_OnTheDetailPanelIsDispatchedToTheView(t *testing.T) {
 	t.Parallel()
 	app := keysApp(t)
 	app.side = sideRight
 
 	model, cmd := app.handleActivate()
 
-	if model != nil || cmd != nil {
-		t.Error("activation on the detail panel must be left to the view")
+	// The app consumes the key and asks the view to activate its selection, so
+	// a rebound open/select key works on the detail panel too. The overview of
+	// a pull request has nothing to open, so no command comes back.
+	if model == nil {
+		t.Fatal("activation on the detail panel must be handled, not dropped")
+	}
+	if cmd != nil {
+		t.Error("the overview tab has nothing to activate")
 	}
 }
 

@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 )
@@ -29,6 +30,19 @@ func CurrentBranch(dir string) (string, error) {
 			return "", nil
 		}
 		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// TopLevel returns the absolute path of the working tree dir sits in. It is
+// what a path taken from a pull request's diff has to be resolved against:
+// diff paths are repository-relative, and the tool may well have been started
+// from a subdirectory of the checkout.
+func TopLevel(dir string) (string, error) {
+	cmd := exec.CommandContext(context.Background(), "git", "-C", dir, "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse --show-toplevel: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }

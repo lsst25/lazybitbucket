@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -87,9 +88,54 @@ func NewServerWithDataset(data *Dataset) (*Server, error) {
 	}
 	server.server = &http.Server{Handler: server.handler(), ReadHeaderTimeout: readHeaderTimeout}
 
+	if err := rewriteDiffLinks(data, server.URL); err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
+
 	go func() { _ = server.server.Serve(listener) }()
 
 	return server, nil
+}
+
+// rewriteDiffLinks points every pull request's diff and diffstat links at this
+// server, at exactly the redirect targets its own pull request endpoints send
+// callers to.
+//
+// The client prefers PullRequest.Links.Diff over the /pullrequests/{id}/diff
+// path whenever the link is same-origin, so leaving the dataset's
+// api.bitbucket.org links in place would mean that shortcut — the one every
+// real diff request takes — is never exercised in demo mode or in these tests.
+func rewriteDiffLinks(data *Dataset, serverURL string) error {
+	base, err := url.Parse(serverURL)
+	if err != nil {
+		return fmt.Errorf("parse demo server URL %q: %w", serverURL, err)
+	}
+
+	for slug, pullRequests := range data.PullRequests {
+		for index := range pullRequests {
+			pullRequest := &pullRequests[index]
+			pullRequest.Links.Diff = revspecLink(base, slug, resourceDiff, *pullRequest)
+			pullRequest.Links.DiffStat = revspecLink(base, slug, resourceDiffStat, *pullRequest)
+		}
+	}
+	return nil
+}
+
+// revspecLink is the absolute URL of one repository-level diff resource on this
+// server, with the parameters the redirect would have added already in place.
+func revspecLink(base *url.URL, slug, resource string, pullRequest bitbucket.PullRequest) bitbucket.Link {
+	query := url.Values{}
+	query.Set(queryFromPullRequest, strconv.Itoa(pullRequest.ID))
+	query.Set(queryTopic, "true")
+
+	target := url.URL{
+		Scheme:   base.Scheme,
+		Host:     base.Host,
+		Path:     repositoryResourcePath(slug, resource, revspec(pullRequest, slug)),
+		RawQuery: query.Encode(),
+	}
+	return bitbucket.Link{Href: target.String()}
 }
 
 // SetMaxPageLen lowers the number of items the server is willing to put in one
@@ -150,6 +196,14 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests", s.handlePullRequests)
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}", s.handlePullRequest)
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}/statuses", s.handleStatuses)
+	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}/commits", s.handlePullRequestCommits)
+	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}/comments", s.handlePullRequestComments)
+	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}/diffstat", s.handlePullRequestDiffStat)
+	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}/diff", s.handlePullRequestDiff)
+	// The redirect targets. A revspec holds a slash and a %0D, so the wildcard
+	// has to swallow the rest of the path.
+	mux.HandleFunc("GET /repositories/{ws}/{slug}/diffstat/{spec...}", s.handleRepositoryDiffStat)
+	mux.HandleFunc("GET /repositories/{ws}/{slug}/diff/{spec...}", s.handleRepositoryDiff)
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/pipelines", s.handlePipelines)
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/pipelines/{ref}", s.handlePipeline)
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/pipelines/{ref}/steps", s.handlePipelineSteps)
@@ -490,10 +544,10 @@ func writeList[T any](w http.ResponseWriter, r *http.Request, items []T, ceiling
 		Values:   values[start:end],
 	}
 	if end < size {
-		envelope.Next = pageURL(r, page+1)
+		envelope.Next = pageURL(r, strconv.Itoa(page+1))
 	}
 	if page > 1 && start > 0 {
-		envelope.Previous = pageURL(r, page-1)
+		envelope.Previous = pageURL(r, strconv.Itoa(page-1))
 	}
 
 	writeJSON(w, envelope)
@@ -501,10 +555,11 @@ func writeList[T any](w http.ResponseWriter, r *http.Request, items []T, ceiling
 
 // pageURL builds an absolute, same-origin pagination link. The client refuses to
 // follow a next link whose host differs from its base URL, so the link must be
-// built from the request's own Host.
-func pageURL(r *http.Request, page int) string {
+// built from the request's own Host. page is a number for the page-based
+// collections and an opaque token for the iterator-paginated ones.
+func pageURL(r *http.Request, page string) string {
 	query := r.URL.Query()
-	query.Set("page", strconv.Itoa(page))
+	query.Set("page", page)
 	return "http://" + r.Host + r.URL.EscapedPath() + "?" + query.Encode()
 }
 
@@ -558,13 +613,18 @@ func writeJSON(w http.ResponseWriter, value any) {
 }
 
 func writeNotFound(w http.ResponseWriter, message string) {
+	writeErrorEnvelope(w, http.StatusNotFound, message)
+}
+
+// writeErrorEnvelope answers with Bitbucket's error body at the given status.
+func writeErrorEnvelope(w http.ResponseWriter, status int, message string) {
 	body, err := json.Marshal(errorEnvelope{Type: "error", Error: errorMessage{Message: message}})
 	if err != nil {
 		writeServerError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", contentTypeJSON)
-	w.WriteHeader(http.StatusNotFound)
+	w.WriteHeader(status)
 	_, _ = w.Write(body)
 }
 

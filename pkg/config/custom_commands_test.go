@@ -44,8 +44,14 @@ func TestResolveCustomCommands_ContextScopes(t *testing.T) {
 		{"builds", []string{"builds"}, ScopePullRequest | ScopeRepo | ScopeBuild},
 		{"repos", []string{"repos"}, ScopeRepo},
 		{"detail", []string{"detail"}, ScopePullRequest | ScopeRepo},
+		{"diff", []string{"diff"}, ScopePullRequest | ScopeRepo | ScopeFile},
 		{"repos and builds union", []string{"repos", "builds"}, ScopePullRequest | ScopeRepo | ScopeBuild},
-		{"every context", []string{"pullrequests", "builds", "repos", "detail"}, ScopePullRequest | ScopeRepo | ScopeBuild},
+		{"detail and diff union", []string{"detail", "diff"}, ScopePullRequest | ScopeRepo | ScopeFile},
+		{
+			"every context",
+			[]string{"pullrequests", "builds", "repos", "detail", "diff"},
+			ScopePullRequest | ScopeRepo | ScopeBuild | ScopeFile,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -64,6 +70,34 @@ func TestScopeMask_BitsAreDistinct(t *testing.T) {
 	testkit.AssertEqual(t, "ScopePullRequest", ScopePullRequest, ScopeMask(1))
 	testkit.AssertEqual(t, "ScopeRepo", ScopeRepo, ScopeMask(2))
 	testkit.AssertEqual(t, "ScopeBuild", ScopeBuild, ScopeMask(4))
+	testkit.AssertEqual(t, "ScopeFile", ScopeFile, ScopeMask(8))
+}
+
+func TestCtxDiff_IsNotADefaultContext(t *testing.T) {
+	t.Parallel()
+	// The diff context is opt-in: a command that omits `contexts:` must not
+	// suddenly appear on the Files tab and the per-file diff view.
+	testkit.AssertSliceEqual(t, "DefaultCommandContexts", DefaultCommandContexts,
+		[]Context{CtxPullRequests, CtxDetail})
+
+	got := resolveOne(t, CustomCommandConfig{Key: "y", Name: "Copy", Command: echoCommand})
+	testkit.AssertEqual(t, "HasContext(CtxDiff)", got.HasContext(CtxDiff), false)
+	testkit.AssertEqual(t, "Scopes&ScopeFile", got.Scopes&ScopeFile, ScopeMask(0))
+}
+
+func TestContextScopes_CoversEveryContext(t *testing.T) {
+	t.Parallel()
+	for _, ctx := range []Context{CtxPullRequests, CtxBuilds, CtxRepos, CtxDetail, CtxDiff} {
+		scopes, ok := contextScopes[ctx]
+		if !ok {
+			t.Errorf("context %q has no scope mask", ctx)
+			continue
+		}
+		if scopes == 0 {
+			t.Errorf("context %q has an empty scope mask", ctx)
+		}
+	}
+	testkit.AssertEqual(t, "len(contextScopes)", len(contextScopes), 5)
 }
 
 func TestResolveCustomCommands_EmptyFieldsError(t *testing.T) {

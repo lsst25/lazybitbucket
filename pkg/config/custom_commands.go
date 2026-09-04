@@ -17,6 +17,9 @@ const (
 	CtxBuilds       Context = "builds"
 	CtxRepos        Context = "repos"
 	CtxDetail       Context = "detail"
+	// CtxDiff is the most specific detail context: the Files tab or the
+	// per-file diff view, where the {{.File.*}} template data is available.
+	CtxDiff Context = "diff"
 )
 
 // DefaultCommandContexts is applied when a command omits `contexts:`.
@@ -29,6 +32,7 @@ const (
 	ScopePullRequest ScopeMask = 1 << iota
 	ScopeRepo
 	ScopeBuild
+	ScopeFile
 )
 
 var contextScopes = map[Context]ScopeMask{
@@ -36,6 +40,7 @@ var contextScopes = map[Context]ScopeMask{
 	CtxBuilds:       ScopePullRequest | ScopeRepo | ScopeBuild,
 	CtxRepos:        ScopeRepo,
 	CtxDetail:       ScopePullRequest | ScopeRepo,
+	CtxDiff:         ScopePullRequest | ScopeRepo | ScopeFile,
 }
 
 // ResolvedCustomCommand is a validated, pre-computed custom command.

@@ -93,6 +93,13 @@ keybinding:
         scrollUp: K
         halfPageDown: ctrl+f
         halfPageUp: ctrl+b
+        overviewTab: i
+        filesTab: d
+        commitsTab: m
+        commentsTab: t
+        nextFile: n
+        prevFile: p
+        openEditor: e
 pullRequestTabs:
     - name: Open
       filter: all
@@ -349,6 +356,8 @@ rendererStyle: auto
 
 Any other value causes lazybitbucket to exit on startup with an error naming the invalid setting.
 
+The same setting picks the syntax-highlighting theme of the diff pane, which is rendered with [chroma](https://github.com/alecthomas/chroma): `monokai` on a dark background, `github` on a light one. `notty` turns highlighting off — added lines are green and removed lines red, and nothing else is coloured. The lexer is chosen per file, from the file name first and its content second.
+
 ## Editor
 
 ```yaml
@@ -357,7 +366,27 @@ editor: nvim
 
 Resolution order: `editor` → `$VISUAL` → `$EDITOR` → `nvim`.
 
-Nothing in the current build opens an editor yet — the setting is read and validated, and is reserved for opening a file from the diff pane (roadmap step 2). Until then, use a custom command if you want to launch an editor from lazybitbucket.
+`e` in the detail panel opens the file you are reading in this editor: on the Files tab the selected file at line 1, inside a file diff the file at the cursor's line. lazybitbucket hands the terminal over and picks the session back up when the editor exits.
+
+The value may carry flags of its own (`code --wait`); only its first field names the program. That name decides how the line number is passed, because there is no common syntax for it:
+
+| Editors | Invocation | Dialect |
+|---------|------------|---------|
+| `vim`, `nvim`, `vi`, `gvim`, `nano`, `micro`, `emacs`, `kak` | `nvim +12 /repo/path/file.go` | `+LINE` before the path |
+| `code`, `codium`, `code-insiders` | `code --goto /repo/path/file.go:12` | `--goto path:LINE` |
+| `subl`, `sublime_text`, `zed`, `hx` | `zed /repo/path/file.go:12` | `path:LINE` |
+| anything else | `myeditor /repo/path/file.go` | the path alone, no line |
+
+The name is matched on the program's base name, so `/opt/homebrew/bin/nvim` is still `nvim`. Configured flags keep their place: `editor: code --wait` runs `code --wait --goto path:12`.
+
+Diff paths are repository-relative and are resolved against the **root of the git repository lazybitbucket was started in** — not the working directory, so running it from a subdirectory is fine. That checkout is never matched against the pull request's repository, because nothing maps a Bitbucket repository to a local clone. What you get is therefore whatever is on disk:
+
+- not started inside a git repository → `not inside a git repository`
+- the file is not in the working tree → `<path> not found in the working tree — check out the source branch (c)`
+- the pull request deleted the file → `file was removed in this pull request`
+- the checkout is on another branch → the hint bar says `editing <branch>, PR source is <source>` and the file opens anyway
+
+`c` checks out the pull request's source branch, which is the usual way to make the two agree.
 
 ## Keybindings
 
@@ -391,7 +420,7 @@ There is deliberately **no `keybinding.repos` group**. The keymap is keyed by ac
 
 The `navigation` section controls list navigation keys used across all panels. These default to vim-style keys (`j`/`k`/`g`/`G`/`ctrl+d`/`ctrl+u`).
 
-The `detail` section includes keys for scrolling the detail panel from any left panel without switching focus. Defaults: `J`/`K` for line scroll, `ctrl+f`/`ctrl+b` for half-page.
+The `detail` section includes keys for scrolling the detail panel from any left panel without switching focus (defaults: `J`/`K` for line scroll, `ctrl+f`/`ctrl+b` for half-page), plus the keys the detail panel answers to itself: `overviewTab`/`filesTab`/`commitsTab`/`commentsTab` (`i`/`d`/`m`/`t`) jump straight to one pull request tab, `nextFile`/`prevFile` (`n`/`p`) step through the changed files, and `openEditor` (`e`) opens the file under the cursor in [your editor](#editor). Those seven only act while the detail panel is focused.
 
 Setting a navigation key replaces all defaults for that action. For example, `down: "n"` means only `n` navigates down, `j`, arrow down and `ctrl+j` will no longer work.
 
@@ -457,6 +486,7 @@ Custom commands are matched before built-in keys, so a binding can shadow any ac
 | `builds` | The Builds panel is focused | `PR`, `Repo`, `Build` |
 | `repos` | The Repos panel is focused, or the detail panel is showing a repository | `Repo` |
 | `detail` | The right detail panel is showing a pull request, a pipeline run or a step log | `PR`, `Repo` |
+| `diff` | The detail panel is on the Files tab or showing one file's diff | `PR`, `Repo`, `File` |
 
 ### Template variables
 
@@ -506,6 +536,29 @@ Custom commands are matched before built-in keys, so a binding can shadow any ac
 | `{{.Build.RefName}}` | Ref the build ran on |
 | `{{.Build.URL}}` | Build result URL |
 | `{{.Build.BuildNumber}}` | Pipeline build number, when the URL carries one |
+
+**File scope** (`diff`):
+
+| Variable | Description |
+|----------|-------------|
+| `{{.File.Path}}` | Repository-relative path of the changed file, as it appears in the diff |
+| `{{.File.OldPath}}` | The path before a rename; empty otherwise |
+| `{{.File.Status}}` | `added`, `removed`, `modified` or `renamed` |
+| `{{.File.Line}}` | New-side line under the cursor inside a file diff; `1` on the Files tab |
+
+`diff` is the more specific of the two detail contexts: a command declared in `detail` keeps firing on the Files tab and inside a file diff, and a `diff` command bound to the same key wins there. With no file selected the command does not run and the help bar says `<name>: no file selected`.
+
+An example — blame the line the cursor is on:
+
+```yaml
+customCommands:
+  - key: "ctrl+b"
+    name: "Blame this line"
+    command: >-
+      git -C {{.GitRepoPath | shellescape}} blame -L {{.File.Line}},+20
+      -- {{.File.Path | shellescape}} | less
+    contexts: [diff]
+```
 
 ### Shared fields
 

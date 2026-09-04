@@ -92,7 +92,7 @@ func TestNewAppWithAuth_WarnsWhenQuitIsShadowedEverywhere(t *testing.T) {
 	t.Parallel()
 	fake, _ := constructionFake(t)
 	cfg := testConfig()
-	contexts := []string{"pullrequests", "builds", "repos", "detail"}
+	contexts := []string{"pullrequests", "builds", "repos", "detail", "diff"}
 	cfg.CustomCommands = []config.CustomCommandConfig{
 		{Key: "q", Name: "shadow q", Command: "echo hi", Contexts: contexts},
 		{Key: "ctrl+c", Name: "shadow ctrl c", Command: "echo hi", Contexts: contexts},

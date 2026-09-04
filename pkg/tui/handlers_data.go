@@ -307,6 +307,9 @@ func (a *App) handlePullRequestSelected(msg views.PullRequestSelectedMsg) (tea.M
 
 	a.previewKey = key
 	a.previewEpoch++
+	// A push moves the source commit, which makes every cached diff, diffstat
+	// and commit list for this pull request wrong.
+	a.dropStaleReviewCaches(pr)
 	// Only re-point the panel when it is not already on this pull request:
 	// a background refresh must not throw the user out of a pipeline or a
 	// step log they are reading. PullRequestKey is "" on the splash and repo

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"testing"
+
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 )
 
 // listPage mirrors Bitbucket's paginated envelope. The tests decode into it
@@ -121,4 +123,52 @@ func pipelinesPath(slug string) string {
 
 func pipelinePath(slug string, buildNumber int) string {
 	return pipelinesPath(slug) + "/" + strconv.Itoa(buildNumber)
+}
+
+// iteratorPage mirrors the envelope of an iterator-paginated collection: no
+// size member at all, and an opaque token in the next link.
+type iteratorPage[T any] struct {
+	PageLen int    `json:"pagelen"`
+	Next    string `json:"next"`
+	Values  []T    `json:"values"`
+}
+
+// getNoRedirect issues a GET that stops at a redirect instead of following it,
+// so a test can assert what the Location header actually says.
+func getNoRedirect(t *testing.T, url string) result {
+	t.Helper()
+
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("build request %s: %v", url, err)
+	}
+
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read body of %s: %v", url, err)
+	}
+	return result{Status: response.StatusCode, Header: response.Header.Clone(), Body: body}
+}
+
+// demoPullRequest is the dataset's pull request, which a test needs for the
+// links the server rewrote to point at itself.
+func demoPullRequest(t *testing.T, server *Server, slug string, id int) bitbucket.PullRequest {
+	t.Helper()
+
+	for _, pullRequest := range server.Data.PullRequests[slug] {
+		if pullRequest.ID == id {
+			return pullRequest
+		}
+	}
+	t.Fatalf("no pull request %s#%d in the dataset", slug, id)
+	return bitbucket.PullRequest{}
 }

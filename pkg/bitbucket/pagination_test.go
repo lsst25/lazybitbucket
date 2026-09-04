@@ -207,6 +207,53 @@ func TestGetAll_RefusesSchemeChangeOnNextLink(t *testing.T) {
 	}
 }
 
+func TestGetAll_StopsAtMaxPagesOnASelfRepeatingNextLink(t *testing.T) {
+	t.Parallel()
+
+	// ListPullRequestDiffStat and ListPullRequestStatuses ask for every value,
+	// so nothing but the page cap ends this walk: a next link that points back
+	// at the page it came from would otherwise spin until the context died,
+	// with the diff pane stuck on "loading".
+	var requests atomic.Int64
+	client := newHandlerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", contentTypeJSON)
+		_, _ = w.Write(selfNextPage(t, r, "http", testDiffStatPath,
+			[]any{map[string]any{"type": "diffstat", "status": DiffStatModified}}))
+	})
+
+	entries, err := client.ListPullRequestDiffStat(t.Context(), testWorkspace, testRepoSlug, testPRID)
+	if err != nil {
+		t.Fatalf("ListPullRequestDiffStat() error = %v", err)
+	}
+
+	// What was collected is returned rather than an error: a partial file list
+	// still renders.
+	testkit.AssertEqual(t, "requests made", requests.Load(), int64(maxPages))
+	testkit.AssertEqual(t, "entries", len(entries), maxPages)
+}
+
+func TestGetAll_StopsOnAnEmptyPageThatStillCarriesANextLink(t *testing.T) {
+	t.Parallel()
+
+	// A page with no values cannot make the walk any longer, whatever its next
+	// link says, so it ends the walk instead of costing another 199 requests.
+	var requests atomic.Int64
+	client := newHandlerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", contentTypeJSON)
+		_, _ = w.Write(selfNextPage(t, r, "http", testDiffStatPath, []any{}))
+	})
+
+	entries, err := client.ListPullRequestDiffStat(t.Context(), testWorkspace, testRepoSlug, testPRID)
+	if err != nil {
+		t.Fatalf("ListPullRequestDiffStat() error = %v", err)
+	}
+
+	testkit.AssertEqual(t, "requests made", requests.Load(), int64(1))
+	testkit.AssertEqual(t, "entries", len(entries), 0)
+}
+
 func TestGetAll_PropagatesLaterPageFailure(t *testing.T) {
 	t.Parallel()
 

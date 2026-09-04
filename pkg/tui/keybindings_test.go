@@ -6,6 +6,7 @@ import (
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
 	"github.com/lsst25/lazybitbucket/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
@@ -197,6 +198,26 @@ func TestActiveContexts_FollowFocusAndDetailMode(t *testing.T) {
 			want: []config.Context{config.CtxDetail},
 		},
 		{
+			name: "detail files tab",
+			setup: func(app *App) {
+				app.side = sideRight
+				pr := newPR(testRepo, 101, testTitle)
+				app.detailView.SetPullRequest(&pr)
+				app.detailView.SetActiveTab(views.TabFiles)
+			},
+			want: []config.Context{config.CtxDiff, config.CtxDetail},
+		},
+		{
+			name: "detail file diff",
+			setup: func(app *App) {
+				app.side = sideRight
+				pr := newPR(testRepo, 101, testTitle)
+				app.detailView.SetPullRequest(&pr)
+				app.detailView.SetFileDiffLoading(pr.Key(), testFileGo)
+			},
+			want: []config.Context{config.CtxDiff, config.CtxDetail},
+		},
+		{
 			name: "detail repo",
 			setup: func(app *App) {
 				app.side = sideRight
@@ -237,6 +258,90 @@ func TestActiveContexts_FollowFocusAndDetailMode(t *testing.T) {
 func hasDescription(bindings []Binding, want string) bool {
 	for _, b := range bindings {
 		if b.Description == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestContextBindings_FollowTheDetailTabAndMode(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		setup func(app *App, pr *bitbucket.PullRequest)
+		want  []string
+	}{
+		{
+			name:  "files tab",
+			setup: func(app *App, _ *bitbucket.PullRequest) { app.detailView.SetActiveTab(views.TabFiles) },
+			want:  []string{"open this file's diff", "next changed file", "open this file in the editor"},
+		},
+		{
+			name:  "commits tab",
+			setup: func(app *App, _ *bitbucket.PullRequest) { app.detailView.SetActiveTab(views.TabCommits) },
+			want:  []string{"expand the commit message", "copy the commit URL"},
+		},
+		{
+			name:  "comments tab",
+			setup: func(app *App, _ *bitbucket.PullRequest) { app.detailView.SetActiveTab(views.TabComments) },
+			want:  []string{"expand the thread", "open the thread in a browser"},
+		},
+		{
+			name: "file diff",
+			setup: func(app *App, pr *bitbucket.PullRequest) {
+				app.detailView.SetFileDiffLoading(pr.Key(), testFileGo)
+			},
+			want: []string{"back to the changed files", "open this line in the editor", "next changed file"},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			app := appForKeybindings(t)
+			app.side = sideRight
+			pr := newPR(testRepo, 101, testTitle)
+			app.detailView.SetPullRequest(&pr)
+			testCase.setup(app, &pr)
+
+			bindings := app.ContextBindings()
+
+			for _, want := range testCase.want {
+				if !hasDescription(bindings, want) {
+					t.Errorf("the help overlay is missing %q", want)
+				}
+			}
+			// Every tab offers the four jumps.
+			if !hasDescription(bindings, "commits tab") {
+				t.Error("the help overlay should list the tab jumps")
+			}
+		})
+	}
+}
+
+func TestHelpBarItems_FollowTheDetailTabAndMode(t *testing.T) {
+	t.Parallel()
+	app := appForKeybindings(t)
+	app.side = sideRight
+	pr := newPR(testRepo, 101, testTitle)
+	app.detailView.SetPullRequest(&pr)
+
+	app.detailView.SetActiveTab(views.TabFiles)
+	if !hasHelpDescription(app.helpBarItems(), "editor") {
+		t.Error("the Files tab strip should name the editor key")
+	}
+
+	app.detailView.SetFileDiffLoading(pr.Key(), testFileGo)
+	items := app.helpBarItems()
+	if !hasHelpDescription(items, "file") || !hasHelpDescription(items, "editor") {
+		t.Errorf("the diff strip should name the file and editor keys: %+v", items)
+	}
+}
+
+func hasHelpDescription(items []components.HelpItem, want string) bool {
+	for _, item := range items {
+		if item.Description == want {
 			return true
 		}
 	}
