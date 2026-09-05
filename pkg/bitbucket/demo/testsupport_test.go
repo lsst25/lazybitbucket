@@ -1,6 +1,7 @@
 package demo
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -22,11 +23,14 @@ type listPage[T any] struct {
 	Values   []T    `json:"values"`
 }
 
-// errorBody is the envelope every 404 from the demo server uses.
+// errorBody is the envelope every error from the demo server uses. Fields is
+// empty everywhere except on a write rejected for a named member of its
+// document.
 type errorBody struct {
 	Type  string `json:"type"`
 	Error struct {
-		Message string `json:"message"`
+		Message string              `json:"message"`
+		Fields  map[string][]string `json:"fields"`
 	} `json:"error"`
 }
 
@@ -81,6 +85,66 @@ func get(t *testing.T, url string, header http.Header) result {
 	return result{Status: response.StatusCode, Header: response.Header.Clone(), Body: body}
 }
 
+// putJSON issues a PUT carrying body as its JSON document.
+func putJSON(t *testing.T, url string, body any, header http.Header) result {
+	t.Helper()
+	return sendJSON(t, http.MethodPut, url, body, header)
+}
+
+// postJSON issues a POST carrying body as its JSON document.
+func postJSON(t *testing.T, url string, body any, header http.Header) result {
+	t.Helper()
+	return sendJSON(t, http.MethodPost, url, body, header)
+}
+
+// sendJSON issues a request with a JSON body and returns the whole exchange. A
+// nil body sends none at all, and a json.RawMessage is sent verbatim, so a test
+// can hand the server a document that does not parse.
+func sendJSON(t *testing.T, method, url string, body any, header http.Header) result {
+	t.Helper()
+
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(encodeTestBody(t, body))
+	}
+
+	request, err := http.NewRequestWithContext(t.Context(), method, url, reader)
+	if err != nil {
+		t.Fatalf("build request %s %s: %v", method, url, err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	for name, values := range header {
+		for _, value := range values {
+			request.Header.Add(name, value)
+		}
+	}
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	payload, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read body of %s %s: %v", method, url, err)
+	}
+	return result{Status: response.StatusCode, Header: response.Header.Clone(), Body: payload}
+}
+
+func encodeTestBody(t *testing.T, body any) []byte {
+	t.Helper()
+
+	if raw, ok := body.(json.RawMessage); ok {
+		return raw
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("encode request body %T: %v", body, err)
+	}
+	return encoded
+}
+
 // getOK fetches a path relative to the server and fails unless it answered 200.
 func getOK(t *testing.T, server *Server, path string) []byte {
 	t.Helper()
@@ -115,6 +179,21 @@ func pullRequestsPath(slug string) string {
 
 func pullRequestPath(slug string, id int) string {
 	return pullRequestsPath(slug) + "/" + strconv.Itoa(id)
+}
+
+// mergePath is the merge endpoint of one pull request.
+func mergePath(slug string, id int) string {
+	return pullRequestPath(slug, id) + segmentMerge
+}
+
+// mergeTaskPath is where a queued merge is polled.
+func mergeTaskPath(slug string, id int, task string) string {
+	return mergePath(slug, id) + segmentTaskStatus + "/" + task
+}
+
+// defaultReviewersPath is the repository's effective default reviewers.
+func defaultReviewersPath(slug string) string {
+	return pathRepositories + "/" + slug + "/effective-default-reviewers"
 }
 
 func pipelinesPath(slug string) string {

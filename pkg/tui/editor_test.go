@@ -63,8 +63,12 @@ func TestEditorCommand_SpeaksEachDialect(t *testing.T) {
 			wantName: "ed", wantArgs: []string{"/tmp/x.go"},
 		},
 		{
-			name: "a line below one is clamped", editor: "nvim", line: 0,
-			wantName: "nvim", wantArgs: []string{"+1", "/tmp/x.go"},
+			name: "a line of zero opens the file without a position", editor: "nvim", line: 0,
+			wantName: "nvim", wantArgs: []string{"/tmp/x.go"},
+		},
+		{
+			name: "a line of zero drops the goto too", editor: "code", line: 0,
+			wantName: "code", wantArgs: []string{"/tmp/x.go"},
 		},
 	}
 

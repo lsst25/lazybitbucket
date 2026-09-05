@@ -57,15 +57,23 @@ var editorDialects = map[string]editorDialect{
 // position in the dialect that editor understands. The configured value may
 // carry flags of its own ("code --wait"), so only its first field names the
 // program. ok is false when no editor is configured at all.
+//
+// A line of zero or less means "no position": the file is opened plainly, in
+// every dialect. That is what the description editor wants — a temp file has no
+// line worth landing on, and "+1" in front of a scratch file is noise.
 func editorCommand(editor, path string, line int) (name string, args []string, ok bool) {
 	fields := strings.Fields(editor)
 	if len(fields) == 0 {
 		return "", nil, false
 	}
 	name, args = fields[0], slices.Clone(fields[1:])
-	line = max(line, 1)
 
-	switch editorDialects[filepath.Base(name)] {
+	dialect := editorDialects[filepath.Base(name)]
+	if line < 1 {
+		dialect = editorPathOnly
+	}
+
+	switch dialect {
 	case editorPlusLine:
 		args = append(args, "+"+strconv.Itoa(line), path)
 	case editorGoto:
@@ -103,6 +111,19 @@ func (a *App) buildEditorCmd(path string, line int) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(a.context(), name, args...)
 	cmd.Dir = a.gitRepoRoot
 	return cmd, nil
+}
+
+// buildTempFileEditorCmd is the command that opens a file the tool wrote
+// itself: a description temp file, not a path out of the diff. It shares
+// editorCommand with buildEditorCmd and nothing else — there is no repository
+// to resolve the path against, nothing to stat (the file was just written), and
+// no working directory worth imposing on the editor.
+func (a *App) buildTempFileEditorCmd(path string) (*exec.Cmd, error) {
+	name, args, ok := editorCommand(a.cfg.ResolveEditor(), path, 0)
+	if !ok {
+		return nil, errors.New("no editor configured — set editor in config.yml, or $VISUAL/$EDITOR")
+	}
+	return exec.CommandContext(a.context(), name, args...), nil
 }
 
 // openInEditor suspends the TUI and opens one file at one line in the

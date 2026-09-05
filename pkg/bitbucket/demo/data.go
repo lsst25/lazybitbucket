@@ -8,6 +8,16 @@
 // Nothing here is random: every identifier is a literal and every timestamp is
 // an offset from a fixed base time, so two datasets built in different runs are
 // byte-identical.
+//
+// The server is no longer read-only. Merging a pull request and editing its
+// title, description, draft state or reviewers change the dataset in place, so
+// the world a demo session sees is the world it has acted on. Two things follow
+// from that. Every route holds Server.dataMu, because a write route and a read
+// route can now run at the same time. And a write stamps updated_on with
+// time.Now().UTC() rather than a dataset offset: a write happens at user time,
+// so the pull request the user just merged has to sort to the top of a list
+// ordered by update — which is the one place the package is deliberately not
+// reproducible.
 package demo
 
 import (
@@ -133,6 +143,10 @@ type Dataset struct {
 	DiffStats map[string][]bitbucket.DiffStatEntry // derived from Diffs, in diff order
 	// TooLargeDiffs are the pull requests whose diff and diffstat answer 555.
 	TooLargeDiffs map[string]bool
+
+	// The two candidate pools the reviewer picker draws on.
+	Members          []bitbucket.Account            // every account in the workspace
+	DefaultReviewers map[string][]bitbucket.Account // repo slug → effective default reviewers
 }
 
 // NewDataset builds the demo dataset. It allocates a fresh copy every call, so a
@@ -152,6 +166,9 @@ func NewDataset() *Dataset {
 		Diffs:         map[string]string{},
 		DiffStats:     map[string][]bitbucket.DiffStatEntry{},
 		TooLargeDiffs: map[string]bool{},
+
+		Members:          workspaceMembers(),
+		DefaultReviewers: defaultReviewers(),
 	}
 
 	for _, spec := range pullRequestSpecs() {
@@ -309,6 +326,25 @@ func grace() bitbucket.Account    { return newAccount(uuidGrace, "Grace Hopper",
 func linus() bitbucket.Account    { return newAccount(uuidLinus, "Linus Torvalds", "linus") }
 func ken() bitbucket.Account      { return newAccount(uuidKen, "Ken Thompson", "ken") }
 func barbara() bitbucket.Account  { return newAccount(uuidBarbara, "Barbara Liskov", "barbara") }
+
+// workspaceMembers is every account in the demo workspace, in the order
+// GET /workspaces/{ws}/members serves them: the demo user first, then the five
+// people whose pull requests they review.
+func workspaceMembers() []bitbucket.Account {
+	return []bitbucket.Account{demoUser(), ada(), grace(), linus(), ken(), barbara()}
+}
+
+// defaultReviewers is each repository's effective default reviewers — the
+// accounts Bitbucket would add to every new pull request there. Two per
+// repository, none of them the workspace owner, so the reviewer picker has both
+// candidates it already knows and candidates it does not.
+func defaultReviewers() map[string][]bitbucket.Account {
+	return map[string][]bitbucket.Account{
+		repoAPIGateway: {ada(), grace()},
+		repoWebApp:     {ken(), barbara()},
+		repoInfra:      {barbara(), linus()},
+	}
+}
 
 func newParticipant(
 	user bitbucket.Account,

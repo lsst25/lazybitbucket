@@ -1,6 +1,7 @@
 package bitbucket
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -63,10 +64,13 @@ const defaultPullRequestFields = "+values.reviewers,+values.participants"
 // fields parameter entirely.
 const noFields = "-"
 
-// Client is a read-only Bitbucket Cloud REST API v2 client. It issues nothing
-// but GET requests, holds no workspace binding, and is safe for concurrent use
-// once constructed — SetLogger and SetOnRequest must be called before the first
-// request.
+// Client is a Bitbucket Cloud REST API v2 client. It holds no workspace
+// binding and is safe for concurrent use once constructed — SetLogger and
+// SetOnRequest must be called before the first request.
+//
+// Reads are GETs; the write methods (MergePullRequest, UpdatePullRequest) send
+// JSON bodies through writeJSON. A client built with ClientOpts.ReadOnly
+// refuses every non-GET request with ErrReadOnly before a socket is opened.
 type Client struct {
 	baseURL    string
 	authHeader string
@@ -75,6 +79,7 @@ type Client struct {
 	httpClient *http.Client
 	logger     io.Writer
 	onRequest  func(RequestLog)
+	readOnly   bool
 }
 
 // ClientOpts configures a Client. The two supported credential shapes are a
@@ -93,6 +98,10 @@ type ClientOpts struct {
 	UserAgent string
 	// HTTPClient overrides the transport; nil means a 30 second timeout.
 	HTTPClient *http.Client
+	// ReadOnly makes every non-GET request fail with ErrReadOnly before it is
+	// built, so the client cannot modify anything on Bitbucket. It is the
+	// transport-level half of the application's "browse only" mode.
+	ReadOnly bool
 }
 
 var _ ClientInterface = (*Client)(nil)
@@ -125,6 +134,7 @@ func NewClient(opts ClientOpts) *Client {
 		httpClient: httpClient,
 		logger:     nil,
 		onRequest:  nil,
+		readOnly:   opts.ReadOnly,
 	}
 }
 
@@ -155,6 +165,10 @@ func (c *Client) AuthHeader() string { return c.authHeader }
 // HTTPClient returns the underlying HTTP client.
 func (c *Client) HTTPClient() *http.Client { return c.httpClient }
 
+// ReadOnly reports whether the client refuses non-GET requests. The TUI asks
+// so it can say so before opening a write dialog instead of after.
+func (c *Client) ReadOnly() bool { return c.readOnly }
+
 // SetLogger sends one request line and one response line per call to w.
 func (c *Client) SetLogger(w io.Writer) { c.logger = w }
 
@@ -177,20 +191,51 @@ func (c *Client) notify(entry RequestLog) {
 	}
 }
 
-// request performs one GET and returns the body and status. fullURL is what
-// goes on the wire; relPath is the same location relative to BaseURL, used for
-// logging, RequestLog.Path and APIError.Path (which drops the query).
+// requestSpec is one request to build: the verb, where it goes, and what it
+// carries. It exists because the verb has to reach five layers (the log line,
+// two error wrappers, RequestLog, APIError) and threading a sixth parameter
+// through each of them reads worse than one value.
+//
+// relPath is fullURL relative to BaseURL, used for logging, RequestLog.Path and
+// APIError.Path (which drops the query). body nil and contentType "" mean a
+// request without a payload, which is every GET.
+type requestSpec struct {
+	method       string
+	fullURL      string
+	relPath      string
+	accept       string
+	contentType  string
+	body         []byte
+	extraHeaders http.Header
+}
+
+// getSpec is the requestSpec every read builds: a GET with no body.
+func getSpec(fullURL, relPath, accept string, extraHeaders http.Header) requestSpec {
+	return requestSpec{
+		method:       http.MethodGet,
+		fullURL:      fullURL,
+		relPath:      relPath,
+		accept:       accept,
+		contentType:  "",
+		body:         nil,
+		extraHeaders: extraHeaders,
+	}
+}
+
+// request performs one GET and returns the body and status. It is the read
+// path's entry point; writes go through writeJSON.
 //
 // Non-2xx responses return the body, the status and an *APIError stamped with
 // the client's AuthMethod.
 func (c *Client) request(
 	ctx context.Context, fullURL, relPath, accept string, extraHeaders http.Header,
 ) ([]byte, int, error) {
-	resp, err := c.do(ctx, c.httpClient, fullURL, relPath, accept, extraHeaders)
+	spec := getSpec(fullURL, relPath, accept, extraHeaders)
+	resp, err := c.do(ctx, c.httpClient, spec)
 	if err != nil {
 		return resp.body, resp.status, err
 	}
-	return resp.body, resp.status, c.statusError(relPath, resp)
+	return resp.body, resp.status, c.statusError(spec.method, relPath, resp)
 }
 
 // rawResponse is one completed exchange whose status has not been judged yet.
@@ -202,17 +247,23 @@ type rawResponse struct {
 	header http.Header
 }
 
-// do performs one GET through httpClient and reports the exchange. Its error is
-// reserved for a request that produced no answer at all — an unbuildable
-// request, a transport failure, an unreadable body — so an HTTP error status is
-// the caller's to judge with statusError.
-func (c *Client) do(
-	ctx context.Context, httpClient *http.Client, fullURL, relPath, accept string, extraHeaders http.Header,
-) (rawResponse, error) {
-	start := time.Now()
-	c.log("%s %s %s\n", start.Format(time.TimeOnly), http.MethodGet, fullURL)
+// do performs one request through httpClient and reports the exchange. Its
+// error is reserved for a request that produced no answer at all — a refusal by
+// the read-only guard, an unbuildable request, a transport failure, an
+// unreadable body — so an HTTP error status is the caller's to judge with
+// statusError.
+func (c *Client) do(ctx context.Context, httpClient *http.Client, spec requestSpec) (rawResponse, error) {
+	// The last line of defence for read-only mode: no socket is opened, and
+	// nothing is logged here — writeJSON has already logged the refusal for the
+	// paths a user can reach.
+	if c.readOnly && spec.method != http.MethodGet {
+		return rawResponse{body: nil, status: 0, header: nil}, ErrReadOnly
+	}
 
-	req, err := c.newRequest(ctx, fullURL, relPath, accept, extraHeaders)
+	start := time.Now()
+	c.log("%s %s %s\n", start.Format(time.TimeOnly), spec.method, spec.fullURL)
+
+	req, err := c.newRequest(ctx, spec)
 	if err != nil {
 		return rawResponse{body: nil, status: 0, header: nil}, err
 	}
@@ -221,21 +272,21 @@ func (c *Client) do(
 	if err != nil {
 		c.log("  ERROR: %v\n", err)
 		return rawResponse{body: nil, status: 0, header: nil},
-			fmt.Errorf("execute request %s %s: %w", http.MethodGet, relPath, err)
+			fmt.Errorf("execute request %s %s: %w", spec.method, spec.relPath, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return rawResponse{body: nil, status: resp.StatusCode, header: resp.Header},
-			fmt.Errorf("read response body for %s %s: %w", http.MethodGet, relPath, err)
+			fmt.Errorf("read response body for %s %s: %w", spec.method, spec.relPath, err)
 	}
 
 	elapsed := time.Since(start)
 	c.log("  -> %d (%s) %d bytes\n", resp.StatusCode, elapsed.Round(time.Millisecond), len(body))
 	c.notify(RequestLog{
-		Method:             http.MethodGet,
-		Path:               relPath,
+		Method:             spec.method,
+		Path:               spec.relPath,
 		Status:             resp.StatusCode,
 		Elapsed:            elapsed,
 		RateLimitRemaining: rateLimitRemaining(resp.Header),
@@ -244,20 +295,28 @@ func (c *Client) do(
 	return rawResponse{body: body, status: resp.StatusCode, header: resp.Header}, nil
 }
 
-// newRequest builds the GET with the client's standard headers on it.
-func (c *Client) newRequest(
-	ctx context.Context, fullURL, relPath, accept string, extraHeaders http.Header,
-) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+// newRequest builds the request with the client's standard headers on it, plus
+// Content-Type when the spec carries a payload.
+func (c *Client) newRequest(ctx context.Context, spec requestSpec) (*http.Request, error) {
+	var payload io.Reader
+	if len(spec.body) > 0 {
+		// A *bytes.Reader gives net/http both ContentLength and GetBody.
+		payload = bytes.NewReader(spec.body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, spec.method, spec.fullURL, payload)
 	if err != nil {
-		return nil, fmt.Errorf("create request %s %s: %w", http.MethodGet, relPath, err)
+		return nil, fmt.Errorf("create request %s %s: %w", spec.method, spec.relPath, err)
 	}
 	if c.authHeader != "" {
 		req.Header.Set("Authorization", c.authHeader)
 	}
-	req.Header.Set("Accept", accept)
+	req.Header.Set("Accept", spec.accept)
 	req.Header.Set("User-Agent", c.userAgent)
-	for name, values := range extraHeaders {
+	if spec.contentType != "" {
+		req.Header.Set("Content-Type", spec.contentType)
+	}
+	for name, values := range spec.extraHeaders {
 		for _, value := range values {
 			req.Header.Add(name, value)
 		}
@@ -269,13 +328,13 @@ func (c *Client) newRequest(
 // is a 2xx. A 3xx counts as an error: every request but the diff redirect probe
 // has already had its redirects followed by net/http, so a redirect status
 // reaching here is one nothing is going to resolve.
-func (c *Client) statusError(relPath string, resp rawResponse) error {
+func (c *Client) statusError(method, relPath string, resp rawResponse) error {
 	if resp.status >= http.StatusOK && resp.status < http.StatusMultipleChoices {
 		return nil
 	}
 
 	c.log("  BODY: %s\n", string(resp.body))
-	apiErr := parseAPIError(http.MethodGet, pathWithoutQuery(relPath), resp.status, resp.header, resp.body)
+	apiErr := parseAPIError(method, pathWithoutQuery(relPath), resp.status, resp.header, resp.body)
 	apiErr.AuthMethod = c.authMethod
 	return apiErr
 }
@@ -287,7 +346,7 @@ func (c *Client) getJSON(ctx context.Context, path string, query url.Values, out
 	if err != nil {
 		return err
 	}
-	return unmarshalBody(relPath, body, out)
+	return unmarshalBody(http.MethodGet, relPath, body, out)
 }
 
 // getJSONURL follows an absolute URL handed back by the API — a pagination
@@ -314,7 +373,7 @@ func (c *Client) getJSONURL(ctx context.Context, absURL string, out any) error {
 	if err != nil {
 		return err
 	}
-	return unmarshalBody(relPath, body, out)
+	return unmarshalBody(http.MethodGet, relPath, body, out)
 }
 
 // getRaw fetches a non-JSON resource — the pipeline step log, which is a text
@@ -332,12 +391,59 @@ func (c *Client) getRaw(
 	return c.request(ctx, c.baseURL+relPath, relPath, accept, extraHeaders)
 }
 
-func unmarshalBody(relPath string, body []byte, out any) error {
+// writeJSON sends payload as a JSON body to relPath and reports the status and
+// the response headers alongside any error, so a caller can tell a 200 (the
+// answer is in out) from a 202 (the answer is a Location to poll).
+//
+// It uses noRedirectClient deliberately: net/http turns a redirected POST into
+// a GET on 301/302/303 and replays the body on 307/308, and neither is a thing
+// a merge should do behind the caller's back. statusError already treats a 3xx
+// as an error, so a redirected write surfaces as an *APIError.
+//
+// out is only unmarshalled on a 200 — an empty 202 body would otherwise decode
+// into a zero-value struct and look like a successful answer.
+func (c *Client) writeJSON(
+	ctx context.Context, method, relPath string, payload, out any,
+) (int, http.Header, error) {
+	if c.readOnly {
+		c.log("  READ-ONLY: refused %s %s\n", method, relPath)
+		return 0, nil, ErrReadOnly
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return 0, nil, fmt.Errorf("encode request body for %s %s: %w", method, relPath, err)
+	}
+
+	spec := requestSpec{
+		method:       method,
+		fullURL:      c.baseURL + relPath,
+		relPath:      relPath,
+		accept:       acceptJSON,
+		contentType:  acceptJSON,
+		body:         body,
+		extraHeaders: nil,
+	}
+
+	resp, err := c.do(ctx, c.noRedirectClient(), spec)
+	if err != nil {
+		return resp.status, resp.header, err
+	}
+	if err := c.statusError(method, relPath, resp); err != nil {
+		return resp.status, resp.header, err
+	}
+	if resp.status != http.StatusOK {
+		return resp.status, resp.header, nil
+	}
+	return resp.status, resp.header, unmarshalBody(method, relPath, resp.body, out)
+}
+
+func unmarshalBody(method, relPath string, body []byte, out any) error {
 	if out == nil || len(body) == 0 {
 		return nil
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("decode response for %s %s: %w", http.MethodGet, pathWithoutQuery(relPath), err)
+		return fmt.Errorf("decode response for %s %s: %w", method, pathWithoutQuery(relPath), err)
 	}
 	return nil
 }

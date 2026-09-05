@@ -42,20 +42,31 @@ const (
 	zeroTimestamp = "0001-01-01T00:00:00Z"
 )
 
-// Server is an in-process fake of the read-only slice of the Bitbucket Cloud
-// REST API that lazybitbucket uses. Point a bitbucket.Client at Server.URL and
-// every call in ClientInterface resolves against Data.
+// Server is an in-process fake of the slice of the Bitbucket Cloud REST API
+// that lazybitbucket uses. Point a bitbucket.Client at Server.URL and every
+// call in ClientInterface resolves against Data.
 //
-// It performs no authentication: any Authorization header it sees is recorded
-// (LastAuthorization) so tests can assert the client sent the right one.
+// It performs no authentication, on the write routes no more than on the read
+// ones: any Authorization header it sees is recorded (LastAuthorization) so
+// tests can assert the client sent the right one, and nothing is ever rejected
+// for the lack of one.
 type Server struct {
 	// URL is the origin to use as the client's BaseURL, e.g. "http://127.0.0.1:53412".
 	URL string
-	// Data is the dataset the routes read from. Mutating it between requests is
-	// allowed; the handlers only read.
+	// Data is the dataset the routes serve. The write routes change it in
+	// place, so a caller that reads it while requests are in flight has to hold
+	// dataMu — mutating it between requests, with nothing in flight, stays
+	// allowed.
 	Data *Dataset
 
 	server *http.Server
+
+	// dataMu guards Data and mergeTasks: the merge and update routes write what
+	// every other route reads. It is separate from mu, which guards the two
+	// pieces of server state that have nothing to do with the dataset, so the
+	// two locks never nest.
+	dataMu     sync.RWMutex
+	mergeTasks map[string]*mergeTask
 
 	mu         sync.Mutex
 	lastAuth   string
@@ -82,6 +93,8 @@ func NewServerWithDataset(data *Dataset) (*Server, error) {
 		URL:        "http://" + listener.Addr().String(),
 		Data:       data,
 		server:     nil,
+		dataMu:     sync.RWMutex{},
+		mergeTasks: map[string]*mergeTask{},
 		mu:         sync.Mutex{},
 		lastAuth:   "",
 		pageLenCap: 0,
@@ -200,6 +213,14 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}/comments", s.handlePullRequestComments)
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}/diffstat", s.handlePullRequestDiffStat)
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}/diff", s.handlePullRequestDiff)
+	// The write routes, plus the two listings the reviewer picker feeds on.
+	mux.HandleFunc("PUT /repositories/{ws}/{slug}/pullrequests/{id}", s.handleUpdatePullRequest)
+	mux.HandleFunc("POST /repositories/{ws}/{slug}/pullrequests/{id}/merge", s.handleMergePullRequest)
+	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}/merge/task-status/{task}",
+		s.handleMergeTaskStatus)
+	mux.HandleFunc("GET /repositories/{ws}/{slug}/effective-default-reviewers",
+		s.handleEffectiveDefaultReviewers)
+	mux.HandleFunc("GET /workspaces/{ws}/members", s.handleWorkspaceMembers)
 	// The redirect targets. A revspec holds a slash and a %0D, so the wildcard
 	// has to swallow the rest of the path.
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/diffstat/{spec...}", s.handleRepositoryDiffStat)
@@ -239,11 +260,22 @@ func stripAPIPrefix(r *http.Request) *http.Request {
 // Handlers
 // -----------------------------------------------------------------------------
 
+// Every handler that touches Data holds dataMu for as long as it needs it,
+// writing included: a pull request's reviewers and participants are slices the
+// dataset and its copies share, so a read that only copied the struct would
+// still race the merge and update routes.
+
 func (s *Server) handleCurrentUser(w http.ResponseWriter, _ *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	writeJSON(w, s.Data.User)
 }
 
 func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	if r.PathValue("ws") != Workspace {
 		writeNotFound(w, "No workspace with identifier '"+r.PathValue("ws")+"'.")
 		return
@@ -252,6 +284,9 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRepositories(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	if r.PathValue("ws") != Workspace {
 		writeNotFound(w, "No workspace with identifier '"+r.PathValue("ws")+"'.")
 		return
@@ -266,6 +301,9 @@ func (s *Server) handleRepositories(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRepository(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	repository, ok := s.findRepository(r)
 	if !ok {
 		writeRepositoryNotFound(w, r)
@@ -275,6 +313,9 @@ func (s *Server) handleRepository(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePullRequests(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	if _, ok := s.findRepository(r); !ok {
 		writeRepositoryNotFound(w, r)
 		return
@@ -295,6 +336,9 @@ func (s *Server) handlePullRequests(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePullRequest(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	pullRequest, ok := s.findPullRequest(r)
 	if !ok {
 		writePullRequestNotFound(w, r)
@@ -304,6 +348,9 @@ func (s *Server) handlePullRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStatuses(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	pullRequest, ok := s.findPullRequest(r)
 	if !ok {
 		writePullRequestNotFound(w, r)
@@ -316,6 +363,9 @@ func (s *Server) handleStatuses(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	if _, ok := s.findRepository(r); !ok {
 		writeRepositoryNotFound(w, r)
 		return
@@ -337,6 +387,9 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePipeline(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	pipeline, ok := s.findPipeline(r)
 	if !ok {
 		writePipelineNotFound(w, r)
@@ -346,6 +399,9 @@ func (s *Server) handlePipeline(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePipelineSteps(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	pipeline, ok := s.findPipeline(r)
 	if !ok {
 		writePipelineNotFound(w, r)
@@ -355,6 +411,9 @@ func (s *Server) handlePipelineSteps(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStepLog(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	pipeline, ok := s.findPipeline(r)
 	if !ok {
 		writePipelineNotFound(w, r)
@@ -415,6 +474,28 @@ func (s *Server) findPullRequest(r *http.Request) (bitbucket.PullRequest, bool) 
 		}
 	}
 	return bitbucket.PullRequest{}, false
+}
+
+// pullRequestIndex resolves the request's pull request to where it lives in the
+// dataset, so a write route can change it in place instead of a copy of it.
+// findPullRequest stays the answer for a read. The caller must hold dataMu, and
+// must not append to the slice while it holds the index.
+func (s *Server) pullRequestIndex(r *http.Request) (string, int, bool) {
+	if _, ok := s.findRepository(r); !ok {
+		return "", 0, false
+	}
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		return "", 0, false
+	}
+
+	slug := r.PathValue("slug")
+	for index, pullRequest := range s.Data.PullRequests[slug] {
+		if pullRequest.ID == id {
+			return slug, index, true
+		}
+	}
+	return "", 0, false
 }
 
 // findPipeline resolves the {ref} path segment, which Bitbucket accepts as
@@ -512,8 +593,12 @@ type listEnvelope struct {
 	Values   []json.RawMessage `json:"values"`
 }
 
+// errorMessage is the error member of Bitbucket's envelope. Fields carries the
+// per-input validation messages a write can be rejected with — one entry per
+// offending member of the request document — and is absent everywhere else.
 type errorMessage struct {
-	Message string `json:"message"`
+	Message string              `json:"message"`
+	Fields  map[string][]string `json:"fields,omitempty"`
 }
 
 type errorEnvelope struct {
@@ -601,14 +686,22 @@ func suffixRange(header string, size int) (int, bool) {
 	return size - count, true
 }
 
+// writeJSON answers 200 with value as the body.
 func writeJSON(w http.ResponseWriter, value any) {
+	writeJSONStatus(w, http.StatusOK, value)
+}
+
+// writeJSONStatus answers with value as the body at the given status, which is
+// what a route answering anything but a plain 200 needs — the error envelopes
+// and, were it to carry a document, the merge 202.
+func writeJSONStatus(w http.ResponseWriter, status int, value any) {
 	body, err := encodeValue(value)
 	if err != nil {
 		writeServerError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", contentTypeJSON)
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(status)
 	_, _ = w.Write(body)
 }
 
@@ -618,14 +711,10 @@ func writeNotFound(w http.ResponseWriter, message string) {
 
 // writeErrorEnvelope answers with Bitbucket's error body at the given status.
 func writeErrorEnvelope(w http.ResponseWriter, status int, message string) {
-	body, err := json.Marshal(errorEnvelope{Type: "error", Error: errorMessage{Message: message}})
-	if err != nil {
-		writeServerError(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", contentTypeJSON)
-	w.WriteHeader(status)
-	_, _ = w.Write(body)
+	writeJSONStatus(w, status, errorEnvelope{
+		Type:  "error",
+		Error: errorMessage{Message: message, Fields: nil},
+	})
 }
 
 func writeRepositoryNotFound(w http.ResponseWriter, r *http.Request) {
@@ -645,7 +734,7 @@ func writePipelineNotFound(w http.ResponseWriter, r *http.Request) {
 func writeServerError(w http.ResponseWriter, cause error) {
 	body, err := json.Marshal(errorEnvelope{
 		Type:  "error",
-		Error: errorMessage{Message: cause.Error()},
+		Error: errorMessage{Message: cause.Error(), Fields: nil},
 	})
 	if err != nil {
 		body = []byte(`{"type":"error","error":{"message":"internal demo server error"}}`)

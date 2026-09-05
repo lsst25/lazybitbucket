@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -444,6 +445,108 @@ func TestUpdate_RoutesEveryBranch(t *testing.T) {
 			wantCmd: true,
 		},
 		{
+			name: "a cancelled form drops every callback",
+			setup: func(app *App, _ *bitbuckettest.FakeClient) {
+				app.armForm(formMerge, func(components.FormConfirmedMsg) tea.Cmd { return nil })
+				app.onSelect = func(components.ModalItem) tea.Cmd { return nil }
+			},
+			msg:     components.FormCancelledMsg{ID: formMerge},
+			wantCmd: false,
+			assert: func(t *testing.T, app *App) {
+				t.Helper()
+				if app.onForm != nil || app.onSelect != nil {
+					t.Error("cancelling an overlay must clear every callback slot")
+				}
+			},
+		},
+		{
+			name: "a confirmed form runs its callback once",
+			setup: func(app *App, _ *bitbuckettest.FakeClient) {
+				app.armForm(formDraft, func(components.FormConfirmedMsg) tea.Cmd { return tea.Quit })
+			},
+			msg:     components.FormConfirmedMsg{ID: formDraft, Fields: nil},
+			wantCmd: true,
+			assert: func(t *testing.T, app *App) {
+				t.Helper()
+				if app.onForm != nil {
+					t.Error("a confirmed form must drop its callback")
+				}
+			},
+		},
+		{
+			name: "a cancelled input drops every callback",
+			setup: func(app *App, _ *bitbuckettest.FakeClient) {
+				app.onInput = func(string) tea.Cmd { return nil }
+			},
+			msg:     components.InputCancelledMsg{},
+			wantCmd: false,
+			assert: func(t *testing.T, app *App) {
+				t.Helper()
+				if app.onInput != nil {
+					t.Error("cancelling the input must clear its callback")
+				}
+			},
+		},
+		{
+			name:    "a confirmed input without a callback is ignored",
+			msg:     components.InputConfirmedMsg{Text: testTitle},
+			wantCmd: false,
+		},
+		{
+			name:    "a confirmed checklist without a callback is ignored",
+			msg:     components.ChecklistConfirmedMsg{Selected: nil},
+			wantCmd: false,
+		},
+		{
+			name:    "a failed description edit reports the editor and re-arms the mouse",
+			msg:     descriptionEditedMsg{key: testPRKey, path: "", original: "", err: errors.New(testBoom)},
+			wantCmd: true,
+			assert: func(t *testing.T, app *App) {
+				t.Helper()
+				if !strings.Contains(app.statusPanel.ErrorMessage(), testBoom) {
+					t.Errorf("status error = %q, want the editor failure", app.statusPanel.ErrorMessage())
+				}
+			},
+		},
+		{
+			name:    "a queued merge schedules the next poll",
+			msg:     mergeQueuedMsg{key: testPRKey, taskURL: testTaskURL, attempt: 0},
+			wantCmd: true,
+		},
+		{
+			name:    "a write failure reaches the help bar",
+			msg:     pullRequestWrittenMsg{key: testPRKey, verb: verbEdit, pr: nil, err: errors.New(testBoom)},
+			wantCmd: false,
+			assert: func(t *testing.T, app *App) {
+				t.Helper()
+				if got := plain(app.helpBar.View()); !strings.Contains(got, "edit failed: "+testBoom) {
+					t.Errorf("help bar = %q, want the failure line", got)
+				}
+			},
+		},
+		{
+			name:    "a sync result reaches the help bar",
+			msg:     syncDoneMsg{key: testPRKey, summary: "synced", branch: "", pushed: false, err: nil},
+			wantCmd: false,
+			assert: func(t *testing.T, app *App) {
+				t.Helper()
+				if got := plain(app.helpBar.View()); !strings.Contains(got, "synced") {
+					t.Errorf("help bar = %q, want the summary", got)
+				}
+			},
+		},
+		{
+			name:    "reviewer candidates for another pull request are dropped",
+			msg:     reviewerCandidatesMsg{key: testPRKey2, candidates: nil, note: "", err: nil},
+			wantCmd: false,
+			assert: func(t *testing.T, app *App) {
+				t.Helper()
+				if app.modal.IsVisible() {
+					t.Error("candidates for a pull request nobody is looking at must open nothing")
+				}
+			},
+		},
+		{
 			name: "an unclaimed key falls through to the focused panel",
 			setup: func(app *App, _ *bitbuckettest.FakeClient) {
 				app.prList.SetPullRequests([]bitbucket.PullRequest{
@@ -514,11 +617,58 @@ func TestUpdate_ModalInterceptsBeforeAnyHandler(t *testing.T) {
 	app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
 	app.modal.Show("URLs", []components.ModalItem{{ID: "https://example.test", Label: "example"}})
 
-	_, _ = app.Update(runeKey('q'))
+	_, cmd := app.Update(runeKey('q'))
 
-	if !app.modal.IsVisible() {
-		t.Error("the modal must swallow keys rather than let quit through")
+	// q is quit everywhere else. Inside the modal it is the modal's own cancel
+	// key, and the quit handler never sees it.
+	if app.modal.IsVisible() {
+		t.Error("q inside the modal should close it")
 	}
+	msgs := collectMsgs(cmd)
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %v, want exactly the modal's cancellation", msgs)
+	}
+	if _, ok := msgs[0].(components.ModalCancelledMsg); !ok {
+		t.Errorf("message = %T, want ModalCancelledMsg rather than a quit", msgs[0])
+	}
+}
+
+func TestUpdate_FormAndInputInterceptKeysToo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the form swallows navigation", func(t *testing.T) {
+		t.Parallel()
+		app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
+		app.form.Show("t", "Title", "confirm", []components.FormField{
+			{ID: "a", Label: "A", Kind: components.FormToggle},
+			{ID: "b", Label: "B", Kind: components.FormToggle},
+		})
+
+		_, _ = app.Update(runeKey('j'))
+		_, _ = app.Update(runeKey(' '))
+
+		if !app.form.IsVisible() {
+			t.Fatal("the form should still be open")
+		}
+		if !strings.Contains(plain(app.form.View()), "[x]") {
+			t.Error("space should have toggled the row the cursor moved to")
+		}
+	})
+
+	t.Run("the input swallows typing", func(t *testing.T) {
+		t.Parallel()
+		app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
+		app.input.Show("Title", "")
+
+		_, _ = app.Update(runeKey('q'))
+
+		if !app.input.IsVisible() {
+			t.Fatal("q must be typed into the input, not quit the app")
+		}
+		if !strings.Contains(plain(app.input.View()), "q") {
+			t.Error("the typed rune should be in the input")
+		}
+	})
 }
 
 func TestUpdate_ModalSelectionRunsTheCallbackOnce(t *testing.T) {

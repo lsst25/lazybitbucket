@@ -294,3 +294,103 @@ func TestIsDiffTooLarge(t *testing.T) {
 		})
 	}
 }
+
+// Bitbucket sends per-input validation messages on a rejected write, and they
+// are the only actionable half of the answer — the envelope's message is often
+// just "Bad request".
+func TestParseAPIError_Fields(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		body            string
+		wantUserMessage string
+		wantFields      map[string][]string
+	}{
+		{
+			name:            "array of messages",
+			body:            `{"type":"error","error":{"message":"Bad request","fields":{"title":["This field is required."]}}}`,
+			wantUserMessage: "Bad request: title: This field is required.",
+			wantFields:      map[string][]string{"title": {"This field is required."}},
+		},
+		{
+			name:            "a bare string is accepted too",
+			body:            `{"type":"error","error":{"message":"Bad request","fields":{"title":"This field is required."}}}`,
+			wantUserMessage: "Bad request: title: This field is required.",
+			wantFields:      map[string][]string{"title": {"This field is required."}},
+		},
+		{
+			name: "several fields report the first in sorted key order",
+			body: `{"type":"error","error":{"message":"Bad request","fields":` +
+				`{"title":["Too long."],"reviewers":["The author cannot be a reviewer."]}}}`,
+			wantUserMessage: "Bad request: reviewers: The author cannot be a reviewer.",
+			wantFields: map[string][]string{
+				"reviewers": {"The author cannot be a reviewer."},
+				"title":     {"Too long."},
+			},
+		},
+		{
+			name:            "an unusable value is dropped, not fatal",
+			body:            `{"type":"error","error":{"message":"Bad request","fields":{"title":{"nested":true}}}}`,
+			wantUserMessage: "Bad request",
+			wantFields:      nil,
+		},
+		{
+			name: "a message that already carries the field sentence is not repeated",
+			body: `{"type":"error","error":{"message":"title: This field is required.",` +
+				`"fields":{"title":["This field is required."]}}}`,
+			wantUserMessage: "title: This field is required.",
+			wantFields:      map[string][]string{"title": {"This field is required."}},
+		},
+		{
+			name:            "no fields at all",
+			body:            `{"type":"error","error":{"message":"Not found"}}`,
+			wantUserMessage: "Not found",
+			wantFields:      nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			apiErr := parseAPIError(testMethodPut, testPath, http.StatusBadRequest, http.Header{}, []byte(tt.body))
+
+			testkit.AssertEqual(t, "UserMessage()", apiErr.UserMessage(), tt.wantUserMessage)
+			testkit.AssertEqual(t, "len(Fields)", len(apiErr.Fields), len(tt.wantFields))
+			for name, want := range tt.wantFields {
+				testkit.AssertSliceEqual(t, "Fields["+name+"]", apiErr.Fields[name], want)
+			}
+
+			// Error() is what the log line shows, and it carries the same detail.
+			if !strings.Contains(apiErr.Error(), tt.wantUserMessage) {
+				t.Errorf("Error() = %q, want it to contain %q", apiErr.Error(), tt.wantUserMessage)
+			}
+		})
+	}
+}
+
+// 555 means "the diff was too large" for a GET and "the operation timed out"
+// for a write. Reusing the diff wording on a merge would tell the user to fetch
+// less, which is not the fix.
+func TestStatusText_555DependsOnTheVerb(t *testing.T) {
+	t.Parallel()
+
+	get := parseAPIError(testMethod, testDiffPath, StatusDiffTooLarge, http.Header{}, nil)
+	testkit.AssertEqual(t, "GET message", get.Message, statusTextDiffTooLarge)
+
+	post := parseAPIError(testMethodPost, testMergePath, StatusDiffTooLarge, http.Header{}, nil)
+	testkit.AssertEqual(t, "POST message", post.Message, statusTextTimedOut)
+
+	// IsDiffTooLarge stays status-based: the diff callers are its only users.
+	testkit.AssertEqual(t, "IsDiffTooLarge(GET)", IsDiffTooLarge(get), true)
+}
+
+func TestIsReadOnly(t *testing.T) {
+	t.Parallel()
+
+	testkit.AssertEqual(t, "wrapped", IsReadOnly(fmt.Errorf("merge acme/x#1: %w", ErrReadOnly)), true)
+	testkit.AssertEqual(t, "bare", IsReadOnly(ErrReadOnly), true)
+	testkit.AssertEqual(t, "nil", IsReadOnly(nil), false)
+	testkit.AssertEqual(t, "other", IsReadOnly(errors.New("dial tcp: connection refused")), false)
+}

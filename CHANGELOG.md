@@ -14,11 +14,14 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Added
 
-- `pkg/bitbucket`: a read-only Bitbucket Cloud REST client — API tokens and access tokens (Bearer)
-  or Atlassian email + API token (Basic), pagination that follows `next`, typed `APIError` with
-  not-found / unauthorized / forbidden / rate-limited predicates, and a concurrent multi-repository
-  pull request fetch. The client has no write methods: nothing in lazybitbucket issues a non-GET
-  request
+- Started inside a checkout whose remote points at one of the listed repositories, the pull request
+  list opens scoped to that repository
+
+- `pkg/bitbucket`: a Bitbucket Cloud REST client — API tokens and access tokens (Bearer) or Atlassian
+  email + API token (Basic), pagination that follows `next`, typed `APIError` with not-found /
+  unauthorized / forbidden / rate-limited predicates, and a concurrent multi-repository pull request
+  fetch. Its writes are merging and editing a pull request, and only those: approving, declining,
+  commenting and triggering pipelines have no methods at all
 - `pkg/bitbucket/bitbuckettest`: strict fake client for unit tests
 - `pkg/bitbucket/demo`: a deterministic demo dataset and fake REST server, an ordinary untagged
   package, used by `--demo` and by integration tests
@@ -55,9 +58,42 @@ one are upstream lazyjira history, and their compare links still point at upstre
 - `pkg/bitbucket`: `ListPullRequestCommits`, `ListPullRequestComments`, `ListPullRequestDiffStat` and
   `GetPullRequestDiff`, thread building from the flat comment list, and `IsDiffTooLarge` for
   Bitbucket's 555 "diff too large" answer
-- `--demo` (needs a `-tags demo` build), `--workspace` and the repeatable `--repo` flag
+- Merge a pull request from the list or the detail panel (`M`): a dialog picks one of the six strategies
+  the API accepts (merge commit, squash, fast-forward, squash fast-forward, rebase fast-forward, rebase
+  merge), toggles close-source-branch and takes an optional commit message. Merges are requested asynchronously
+  (`async=true`): the `202 Accepted` task is polled at once, then every two seconds for up to a minute, and
+  reported when it lands
+- Sync the source branch with its target (`S`), by merge or rebase, driven through git in the local
+  checkout because Bitbucket's "Sync now" has no public endpoint. It needs the source branch checked
+  out and a clean tree, picks the remote whose URL points at the pull request's repository (else
+  `origin`), pushes with `--force-with-lease` after a rebase, and aborts a conflicting merge or rebase
+  before reporting it
+- Edit the title or the description (`E`): the title inline, the description in the configured `editor`
+  through a temporary Markdown file, with an unchanged description sending nothing
+- Set and remove reviewers (`V`): a checklist over the current reviewers, the pull request's reviewing
+  participants, the repository's effective default reviewers and the workspace members, deduplicated
+  and without the author, filterable with `/`
+- Toggle draft state (`D`), behind a confirmation
+- Read-only mode — `bitbucket.readOnly: true`, the `--read-only` flag or `LAZYBITBUCKET_READ_ONLY=1`,
+  none of which can turn it off again. The client refuses every non-GET request with `ErrReadOnly`
+  before a socket is opened, the status panel shows `read-only`, and the five action keys disappear
+  from the help surfaces and answer with a hint-bar message. Sync is refused too: it ends in a push
+- `pkg/bitbucket`: `MergePullRequest`, `GetMergeTaskStatus`, `UpdatePullRequest`,
+  `ListEffectiveDefaultReviewers` and `ListWorkspaceMembers`, plus `MergeStrategy` with the six
+  documented values, `MergeOptions`, `PullRequestUpdate`, `PullRequest.ReviewerUUIDs` and the
+  `IsReadOnly` predicate
+- `pkg/git`: `IsClean`, `RemoteFor`, `Fetch`, `MergeBranch`, `RebaseOnto`, `Push` and `ErrConflict`
+- `pkg/bitbucket/demo`: write routes on the fake server (`PUT`/merge/merge task status,
+  effective default reviewers, workspace members) with production-shaped validation, and two
+  designated fixtures — `api-gateway` #103 answers the queued `202` and its task, `web-app` #41
+  answers the `409` of a lost race
+- `--demo` (needs a `-tags demo` build), `--workspace`, the repeatable `--repo` flag and `--read-only`
 
 ### Changed
+
+- `c` fetches the source branch from the remote that points at the pull request's repository before
+  checking it out, fast-forwards a local branch the remote has moved past, and reports a diverged one
+  instead of touching it
 
 - Renamed `cmd/lazyjira` to `cmd/lazybitbucket`; the binary, the Homebrew tap, the AUR packages, the
   nix attribute and the nfpm package are all `lazybitbucket`
@@ -74,6 +110,15 @@ one are upstream lazyjira history, and their compare links still point at upstre
   `pullRequests.open` and `pullRequests.focusRight`, so those bindings can no longer be silently
   overwritten
 - Panels are Status / Pull Requests / Builds / Repos on `1`–`4`, detail on `0`
+- The client is no longer read-only by construction. It issues `POST` and `PUT` for the merge and
+  update endpoints, through a write path that never follows a redirect and never retries a
+  non-idempotent request, and a client built with `ClientOpts.ReadOnly` refuses all of them with
+  `ErrReadOnly` before the request exists. Read-only is now a mode rather than a missing feature
+- `APIError` carries `error.fields`, and `UserMessage()` appends the first per-field validation
+  message in sorted key order, so a rejected write reads `title: This field is required.` instead of
+  the envelope's generic `Bad request`
+- `keybinding.pullRequests` gained `merge`, `sync`, `edit`, `reviewers` and `toggleDraft`
+  (`M`/`S`/`E`/`V`/`D`), and `bitbucket` gained `readOnly`
 - Docs rewritten for the Bitbucket workflow; `docs/Custom_Fields.md` removed
 
 ### Removed

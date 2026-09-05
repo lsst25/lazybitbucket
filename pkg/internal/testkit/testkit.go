@@ -80,6 +80,22 @@ func RecordingSequenceServer(t *testing.T, responses []StubResponse) (*httptest.
 	return server, recorded
 }
 
+// NoRequestServer is a server that must never be hit: any request fails the
+// test and answers 500. It is how a test proves a guard short-circuited before
+// the transport — a read-only client refusing a write, for instance — rather
+// than merely proving no assertion tripped.
+func NoRequestServer(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request %s %s: the server should never be reached", r.Method, r.URL.RequestURI())
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+
+	return server
+}
+
 func AssertEqual[T comparable](t *testing.T, label string, got, want T) {
 	t.Helper()
 	if got != want {

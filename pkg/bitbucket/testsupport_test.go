@@ -2,6 +2,7 @@ package bitbucket
 
 import (
 	"encoding/json"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -15,12 +16,12 @@ import (
 
 // bearerOpts is the token-only credential shape: Authorization: Bearer <token>.
 func bearerOpts() ClientOpts {
-	return ClientOpts{BaseURL: "", Token: testToken, Email: "", UserAgent: "", HTTPClient: nil}
+	return ClientOpts{BaseURL: "", Token: testToken, Email: "", UserAgent: "", HTTPClient: nil, ReadOnly: false}
 }
 
 // basicOpts is the email+token credential shape: Basic base64(email:token).
 func basicOpts() ClientOpts {
-	return ClientOpts{BaseURL: "", Token: testToken, Email: testEmail, UserAgent: "", HTTPClient: nil}
+	return ClientOpts{BaseURL: "", Token: testToken, Email: testEmail, UserAgent: "", HTTPClient: nil, ReadOnly: false}
 }
 
 func newRecordingClient(
@@ -121,6 +122,31 @@ func pagedServer(t *testing.T, pages []string) (*Client, *[]testkit.RecordedRequ
 	return client, recorded
 }
 
+// writeServer points a bearer client at a handler that records every request
+// with its body. It is the write tests' workhorse: they assert on the verb, the
+// headers and the exact bytes that went on the wire.
+func writeServer(t *testing.T, handler http.HandlerFunc) (*Client, *recorder) {
+	t.Helper()
+
+	rec := &recorder{mu: sync.Mutex{}, requests: nil, targets: nil}
+	client := newHandlerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		recordWrite(t, rec, r)
+		handler(w, r)
+	})
+	return client, rec
+}
+
+// readOnlyClient is a client that must never reach the network: its base URL is
+// a server that fails the test on any request.
+func readOnlyClient(t *testing.T) *Client {
+	t.Helper()
+
+	opts := bearerOpts()
+	opts.BaseURL = testkit.NoRequestServer(t).URL
+	opts.ReadOnly = true
+	return NewClient(opts)
+}
+
 // writeJSON answers a handler-built request with a fixed body.
 func writeJSON(t *testing.T, w http.ResponseWriter, status int, body string) {
 	t.Helper()
@@ -177,6 +203,30 @@ func (rec *recorder) add(r *http.Request) {
 		Query:  r.URL.Query(),
 		Header: r.Header.Clone(),
 		Body:   nil,
+	})
+	rec.targets = append(rec.targets, r.URL.RequestURI())
+}
+
+// recordWrite is recorder.add plus the request body, which the write tests
+// assert byte-exact: a partial PUT that carries one member too many silently
+// clears a field on the real API.
+func recordWrite(t *testing.T, rec *recorder, r *http.Request) {
+	t.Helper()
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Errorf("read request body: %v", err)
+	}
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+
+	rec.requests = append(rec.requests, testkit.RecordedRequest{
+		Method: r.Method,
+		Path:   r.URL.Path,
+		Query:  r.URL.Query(),
+		Header: r.Header.Clone(),
+		Body:   body,
 	})
 	rec.targets = append(rec.targets, r.URL.RequestURI())
 }

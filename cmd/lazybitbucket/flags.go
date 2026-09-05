@@ -32,6 +32,7 @@ type cliOptions struct {
 	debugFile string
 	workspace string
 	repos     repeatedFlag
+	readOnly  bool
 }
 
 // parseFlags parses the arguments of the default command. Usage and flag errors
@@ -44,6 +45,7 @@ func parseFlags(args []string, out io.Writer) (*cliOptions, error) {
 	fs.StringVar(&opts.logFile, "log", "", "Log API requests to `FILE`")
 	fs.StringVar(&opts.debugFile, "debug", "", "Write debug logs to `FILE`")
 	fs.StringVar(&opts.workspace, "workspace", "", "Bitbucket workspace `SLUG` (overrides the config file)")
+	fs.BoolVar(&opts.readOnly, "read-only", false, "Refuse every request that would modify Bitbucket")
 	fs.Var(&opts.repos, "repo", "Repository `SLUG` to show, repeatable (overrides the configured repositories)")
 	if err := fs.Parse(args); err != nil {
 		return nil, fmt.Errorf("parsing flags: %w", err)
@@ -52,12 +54,17 @@ func parseFlags(args []string, out io.Writer) (*cliOptions, error) {
 }
 
 // applyTo overrides the loaded configuration with the values given on the
-// command line. Unset flags leave the configuration untouched.
+// command line. Unset flags leave the configuration untouched: --read-only can
+// only turn read-only mode on, never off, so a config file or environment
+// variable that enables it cannot be overridden from the command line.
 func (o *cliOptions) applyTo(cfg *config.Config) {
 	if o.workspace != "" {
 		cfg.Bitbucket.Workspace = o.workspace
 	}
 	if len(o.repos) > 0 {
 		cfg.Bitbucket.Repositories = append([]string(nil), o.repos...)
+	}
+	if o.readOnly {
+		cfg.Bitbucket.ReadOnly = true
 	}
 }

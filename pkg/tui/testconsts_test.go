@@ -9,10 +9,20 @@ const (
 	testPRKey2 = "acme/api-gateway#102"
 	testTitle  = "Add a token bucket rate limiter"
 
-	testUserUUID  = "{00000000-0000-0000-0000-000000000001}"
-	testOtherUUID = "{00000000-0000-0000-0000-000000000002}"
+	testUserUUID   = "{00000000-0000-0000-0000-000000000001}"
+	testOtherUUID  = "{00000000-0000-0000-0000-000000000002}"
+	testThirdUUID  = "{00000000-0000-0000-0000-000000000003}"
+	testFourthUUID = "{00000000-0000-0000-0000-000000000004}"
 
-	testBranch = "feature/rate-limiter"
+	testBranch   = "feature/rate-limiter"
+	branchMain   = "main"
+	remoteOrigin = "origin"
+
+	// testDescription is the pull request body the description editor edits.
+	testDescription = "See https://example.test/spec for the design."
+
+	// testTaskURL is the queued-merge task a 202 would point at.
+	testTaskURL = "https://api.example.test/2.0/repositories/acme/api-gateway/pullrequests/101/merge/task-status/t-1"
 
 	testOpenState = "OPEN"
 	testFetchKey  = "OPEN|"

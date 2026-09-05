@@ -31,6 +31,14 @@ Sleep 200ms
 Type "g"
 Sleep 400ms
 
+# === Merge dialog ===
+# M opens the merge form on the selected PR — strategy, close source branch and
+# an optional message. Escape closes it without sending anything.
+Type "M"
+Sleep 900ms
+@close
+@wait 300
+
 # open it in the detail panel and read further down the description
 @select
 @wait 600

@@ -28,6 +28,7 @@ const (
 	testEmail     = "user@acme.com"
 	bearerPrefix  = "Bearer "
 	basicPrefix   = "Basic "
+	readOnlyFlag  = "--read-only"
 )
 
 // clearBitbucketEnv drops every BITBUCKET_* override so the ambient
@@ -135,6 +136,85 @@ func TestCliOptions_ApplyToKeepsConfigWhenFlagsUnset(t *testing.T) {
 
 	assertEqual(t, "workspace", cfg.Bitbucket.Workspace, "configured")
 	assertEqual(t, "repositories", strings.Join(cfg.Bitbucket.Repositories, ","), "configured-repo")
+}
+
+func TestParseFlags_ReadOnly(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"absent", nil, false},
+		{"present", []string{readOnlyFlag}, true},
+		{"explicitly true", []string{readOnlyFlag + "=true"}, true},
+		{"explicitly false", []string{readOnlyFlag + "=false"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			opts, err := parseFlags(tc.args, io.Discard)
+			if err != nil {
+				t.Fatalf("parseFlags: %v", err)
+			}
+			assertEqual(t, "readOnly", opts.readOnly, tc.want)
+		})
+	}
+}
+
+// The flag is a one-way switch: it can only turn read-only mode on, so a
+// configured or environment-set read-only session cannot be widened from the
+// command line.
+func TestCliOptions_ApplyToReadOnlyOnlyTurnsItOn(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		flag       bool
+		configured bool
+		want       bool
+	}{
+		{"flag on, config off", true, false, true},
+		{"flag off, config on stays on", false, true, true},
+		{"flag on, config on", true, true, true},
+		{"neither", false, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &config.Config{}
+			cfg.Bitbucket.ReadOnly = tc.configured
+
+			(&cliOptions{readOnly: tc.flag}).applyTo(cfg)
+
+			assertEqual(t, "Bitbucket.ReadOnly", cfg.Bitbucket.ReadOnly, tc.want)
+		})
+	}
+}
+
+func TestMakeClient_ReadOnlyFollowsTheConfig(t *testing.T) {
+	t.Parallel()
+	assertEqual(t, "default", makeClient(&config.Config{}, authBearer, "", testToken).ReadOnly(), false)
+
+	cfg := &config.Config{}
+	cfg.Bitbucket.ReadOnly = true
+	assertEqual(t, "read-only", makeClient(cfg, authBearer, "", testToken).ReadOnly(), true)
+}
+
+func TestResolveClient_ReadOnlyReachesTheSavedCredentialsClient(t *testing.T) {
+	t.Setenv("LAZYBITBUCKET_CONFIG_DIR", t.TempDir())
+	if err := config.SaveCredentials(&config.Credentials{
+		AuthMethod: authBearer, Token: testToken, Workspace: testWorkspace,
+	}); err != nil {
+		t.Fatalf("SaveCredentials: %v", err)
+	}
+
+	cfg := &config.Config{}
+	cfg.Bitbucket.ReadOnly = true
+	client, _, err := resolveClient(cfg)
+	if err != nil {
+		t.Fatalf("resolveClient: %v", err)
+	}
+	assertEqual(t, "ReadOnly", client.ReadOnly(), true)
 }
 
 func TestMakeClient_AuthHeaderPerMethod(t *testing.T) {
@@ -484,6 +564,31 @@ func TestRunSetupWizard_DefaultsToBearerAndConfiguredWorkspace(t *testing.T) {
 	assertEqual(t, "saved workspace", creds.Workspace, testWorkspace)
 }
 
+// The wizard only reads, so read-only mode must not change what it does: it
+// still verifies the connection and saves the credentials, and hands back a
+// client that refuses writes.
+func TestRunSetupWizard_ReadOnlyLeavesTheWizardUnchanged(t *testing.T) {
+	t.Setenv("LAZYBITBUCKET_CONFIG_DIR", t.TempDir())
+	server := stubAPI(t, http.StatusOK, http.StatusOK)
+
+	cfg := stubConfig(server.URL)
+	cfg.Bitbucket.ReadOnly = true
+	client, err := runSetupWizard(cfg, strings.NewReader("1\n"+testToken+"\n"+testWorkspace+"\n"))
+	if err != nil {
+		t.Fatalf("runSetupWizard: %v", err)
+	}
+	assertEqual(t, "ReadOnly", client.ReadOnly(), true)
+
+	creds, err := config.LoadCredentials()
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+	if creds == nil {
+		t.Fatal("creds = nil, want saved credentials")
+	}
+	assertEqual(t, "saved workspace", creds.Workspace, testWorkspace)
+}
+
 func TestRunSetupWizard_MissingTokenErrors(t *testing.T) {
 	t.Parallel()
 	if _, err := runSetupWizard(&config.Config{}, strings.NewReader("1\n\n")); !errors.Is(err, errWizardToken) {
@@ -590,5 +695,17 @@ func TestDispatch_HelpExitsZero(t *testing.T) {
 		if strings.Contains(stderr.String(), "Error:") {
 			t.Errorf("stderr for %s reports an error: %q", arg, stderr.String())
 		}
+	}
+}
+
+func TestDispatch_HelpListsTheReadOnlyFlag(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr strings.Builder
+	assertEqual(t, "exit code", dispatch([]string{"--help"}, &stdout, &stderr), 0)
+	if !strings.Contains(stderr.String(), "-read-only") {
+		t.Errorf("usage = %q, want it to list -read-only", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Refuse every request that would modify Bitbucket") {
+		t.Errorf("usage = %q, want the -read-only help text", stderr.String())
 	}
 }

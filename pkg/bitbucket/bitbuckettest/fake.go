@@ -2,7 +2,8 @@
 // bitbucket.ClientInterface for use in unit tests. By default every method
 // calls t.Fatalf, so unexpected calls surface immediately with a clear message.
 // Tests opt-in by assigning a *Func field for each method they expect to be
-// called.
+// called. That strictness matters most for the write methods: a test that never
+// meant to merge anything fails loudly instead of quietly recording a call.
 //
 // Unlike jiratest.FakeClient the fake is goroutine-safe: bitbucket.FetchPullRequests
 // calls the client from several goroutines, so every method records its call
@@ -134,6 +135,44 @@ type GetPipelineStepLogCall struct {
 	Opts        bitbucket.StepLogOptions
 }
 
+// MergePullRequestCall records one MergePullRequest call.
+type MergePullRequestCall struct {
+	Ctx       context.Context
+	Workspace string
+	RepoSlug  string
+	ID        int
+	Opts      bitbucket.MergeOptions
+}
+
+// GetMergeTaskStatusCall records one GetMergeTaskStatus call.
+type GetMergeTaskStatusCall struct {
+	Ctx     context.Context
+	TaskURL string
+}
+
+// UpdatePullRequestCall records one UpdatePullRequest call.
+type UpdatePullRequestCall struct {
+	Ctx       context.Context
+	Workspace string
+	RepoSlug  string
+	ID        int
+	Update    bitbucket.PullRequestUpdate
+}
+
+// ListEffectiveDefaultReviewersCall records one ListEffectiveDefaultReviewers call.
+type ListEffectiveDefaultReviewersCall struct {
+	Ctx       context.Context
+	Workspace string
+	RepoSlug  string
+}
+
+// ListWorkspaceMembersCall records one ListWorkspaceMembers call.
+type ListWorkspaceMembersCall struct {
+	Ctx       context.Context
+	Workspace string
+	Opts      bitbucket.ListOptions
+}
+
 // FakeClient is a strict-fail implementation of bitbucket.ClientInterface.
 //
 // Usage:
@@ -166,7 +205,15 @@ type FakeClient struct {
 	GetPipelineFunc             func(ctx context.Context, workspace, repoSlug, pipelineRef string) (*bitbucket.Pipeline, error)
 	ListPipelineStepsFunc       func(ctx context.Context, workspace, repoSlug, pipelineRef string) ([]bitbucket.PipelineStep, error)
 	GetPipelineStepLogFunc      func(ctx context.Context, workspace, repoSlug, pipelineRef, stepUUID string, opts bitbucket.StepLogOptions) (string, error)
-	SetOnRequestFunc            func(fn func(bitbucket.RequestLog))
+
+	// Write-method overrides. Same contract: nil -> t.Fatalf on call.
+	MergePullRequestFunc              func(ctx context.Context, workspace, repoSlug string, id int, opts bitbucket.MergeOptions) (bitbucket.MergeResult, error)
+	GetMergeTaskStatusFunc            func(ctx context.Context, taskURL string) (bitbucket.MergeTaskStatus, error)
+	UpdatePullRequestFunc             func(ctx context.Context, workspace, repoSlug string, id int, update bitbucket.PullRequestUpdate) (*bitbucket.PullRequest, error)
+	ListEffectiveDefaultReviewersFunc func(ctx context.Context, workspace, repoSlug string) ([]bitbucket.Account, error)
+	ListWorkspaceMembersFunc          func(ctx context.Context, workspace string, opts bitbucket.ListOptions) ([]bitbucket.Account, error)
+
+	SetOnRequestFunc func(fn func(bitbucket.RequestLog))
 
 	// Call recorders (populated before the *Func is invoked). Guarded by mu:
 	// read them only after the code under test has returned, or use CallCount.
@@ -185,7 +232,14 @@ type FakeClient struct {
 	GetPipelineCalls             []GetPipelineCall
 	ListPipelineStepsCalls       []ListPipelineStepsCall
 	GetPipelineStepLogCalls      []GetPipelineStepLogCall
-	SetOnRequestCalls            int
+
+	MergePullRequestCalls              []MergePullRequestCall
+	GetMergeTaskStatusCalls            []GetMergeTaskStatusCall
+	UpdatePullRequestCalls             []UpdatePullRequestCall
+	ListEffectiveDefaultReviewersCalls []ListEffectiveDefaultReviewersCall
+	ListWorkspaceMembersCalls          []ListWorkspaceMembersCall
+
+	SetOnRequestCalls int
 
 	// mu guards every recorder field and every *Func read. Stubs are always
 	// dispatched outside the lock so they may block or call back into the fake.
@@ -237,6 +291,16 @@ func (f *FakeClient) CallCount(method string) int {
 		return len(f.ListPipelineStepsCalls)
 	case "GetPipelineStepLog":
 		return len(f.GetPipelineStepLogCalls)
+	case "MergePullRequest":
+		return len(f.MergePullRequestCalls)
+	case "GetMergeTaskStatus":
+		return len(f.GetMergeTaskStatusCalls)
+	case "UpdatePullRequest":
+		return len(f.UpdatePullRequestCalls)
+	case "ListEffectiveDefaultReviewers":
+		return len(f.ListEffectiveDefaultReviewersCalls)
+	case "ListWorkspaceMembers":
+		return len(f.ListWorkspaceMembersCalls)
 	case "SetOnRequest":
 		return f.SetOnRequestCalls
 	default:
@@ -467,6 +531,80 @@ func (f *FakeClient) GetPipelineStepLog(ctx context.Context, workspace, repoSlug
 		return "", nil
 	}
 	return fn(ctx, workspace, repoSlug, pipelineRef, stepUUID, opts)
+}
+
+// MergePullRequest records the call and dispatches MergePullRequestFunc.
+func (f *FakeClient) MergePullRequest(ctx context.Context, workspace, repoSlug string, id int, opts bitbucket.MergeOptions) (bitbucket.MergeResult, error) {
+	f.mu.Lock()
+	f.MergePullRequestCalls = append(f.MergePullRequestCalls,
+		MergePullRequestCall{Ctx: ctx, Workspace: workspace, RepoSlug: repoSlug, ID: id, Opts: opts})
+	fn := f.MergePullRequestFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("MergePullRequest")
+		return bitbucket.MergeResult{PullRequest: nil, TaskURL: ""}, nil
+	}
+	return fn(ctx, workspace, repoSlug, id, opts)
+}
+
+// GetMergeTaskStatus records the call and dispatches GetMergeTaskStatusFunc.
+func (f *FakeClient) GetMergeTaskStatus(ctx context.Context, taskURL string) (bitbucket.MergeTaskStatus, error) {
+	f.mu.Lock()
+	f.GetMergeTaskStatusCalls = append(f.GetMergeTaskStatusCalls, GetMergeTaskStatusCall{Ctx: ctx, TaskURL: taskURL})
+	fn := f.GetMergeTaskStatusFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("GetMergeTaskStatus")
+		return bitbucket.MergeTaskStatus{Status: "", MergeResult: nil}, nil
+	}
+	return fn(ctx, taskURL)
+}
+
+// UpdatePullRequest records the call and dispatches UpdatePullRequestFunc.
+func (f *FakeClient) UpdatePullRequest(ctx context.Context, workspace, repoSlug string, id int, update bitbucket.PullRequestUpdate) (*bitbucket.PullRequest, error) {
+	f.mu.Lock()
+	f.UpdatePullRequestCalls = append(f.UpdatePullRequestCalls,
+		UpdatePullRequestCall{Ctx: ctx, Workspace: workspace, RepoSlug: repoSlug, ID: id, Update: update})
+	fn := f.UpdatePullRequestFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("UpdatePullRequest")
+		return nil, nil
+	}
+	return fn(ctx, workspace, repoSlug, id, update)
+}
+
+// ListEffectiveDefaultReviewers records the call and dispatches ListEffectiveDefaultReviewersFunc.
+func (f *FakeClient) ListEffectiveDefaultReviewers(ctx context.Context, workspace, repoSlug string) ([]bitbucket.Account, error) {
+	f.mu.Lock()
+	f.ListEffectiveDefaultReviewersCalls = append(f.ListEffectiveDefaultReviewersCalls,
+		ListEffectiveDefaultReviewersCall{Ctx: ctx, Workspace: workspace, RepoSlug: repoSlug})
+	fn := f.ListEffectiveDefaultReviewersFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("ListEffectiveDefaultReviewers")
+		return nil, nil
+	}
+	return fn(ctx, workspace, repoSlug)
+}
+
+// ListWorkspaceMembers records the call and dispatches ListWorkspaceMembersFunc.
+func (f *FakeClient) ListWorkspaceMembers(ctx context.Context, workspace string, opts bitbucket.ListOptions) ([]bitbucket.Account, error) {
+	f.mu.Lock()
+	f.ListWorkspaceMembersCalls = append(f.ListWorkspaceMembersCalls,
+		ListWorkspaceMembersCall{Ctx: ctx, Workspace: workspace, Opts: opts})
+	fn := f.ListWorkspaceMembersFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("ListWorkspaceMembers")
+		return nil, nil
+	}
+	return fn(ctx, workspace, opts)
 }
 
 // SetOnRequest records the call and dispatches SetOnRequestFunc.

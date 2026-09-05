@@ -41,6 +41,40 @@ func TestStartDemo_ConfiguresWorkspaceAndRepositories(t *testing.T) {
 		strings.Join(slugs, ","), strings.Join(cfg.Bitbucket.Repositories, ","))
 }
 
+// --demo --read-only builds a demo client that refuses writes too, so the
+// read-only surface can be demonstrated without an account.
+func TestStartDemo_ReadOnlyReachesTheClient(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{}
+	cfg.Bitbucket.ReadOnly = true
+	client, _, cleanup, err := startDemo(cfg)
+	if err != nil {
+		t.Fatalf("startDemo: %v", err)
+	}
+	t.Cleanup(cleanup)
+
+	real, ok := client.(*bitbucket.Client)
+	if !ok {
+		t.Fatalf("client is %T, want *bitbucket.Client", client)
+	}
+	assertEqual(t, "ReadOnly", real.ReadOnly(), true)
+}
+
+func TestStartDemo_DefaultsToWritable(t *testing.T) {
+	t.Parallel()
+	client, _, cleanup, err := startDemo(&config.Config{})
+	if err != nil {
+		t.Fatalf("startDemo: %v", err)
+	}
+	t.Cleanup(cleanup)
+
+	real, ok := client.(*bitbucket.Client)
+	if !ok {
+		t.Fatalf("client is %T, want *bitbucket.Client", client)
+	}
+	assertEqual(t, "ReadOnly", real.ReadOnly(), false)
+}
+
 func TestFreshDataset_IsAnHourOldAndKeepsIntervals(t *testing.T) {
 	t.Parallel()
 

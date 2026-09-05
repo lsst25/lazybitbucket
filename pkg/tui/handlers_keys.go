@@ -442,6 +442,23 @@ func (a *App) handlePullRequestAction(action Action) (tea.Model, tea.Cmd, bool) 
 
 	case ActRefreshAll:
 		return a, a.refreshCmd(), true
+
+	// The five write actions. Each one opens its own dialog and returns
+	// without touching Bitbucket; see actions.go.
+	case ActMerge:
+		return a, a.handleActionMerge(), true
+
+	case ActSync:
+		return a, a.handleActionSync(), true
+
+	case ActEdit:
+		return a, a.handleActionEdit(), true
+
+	case ActReviewers:
+		return a, a.handleActionReviewers(), true
+
+	case ActToggleDraft:
+		return a, a.handleActionToggleDraft(), true
 	}
 	return nil, nil, false
 }
@@ -542,7 +559,7 @@ func (a *App) handleActionCheckout() (tea.Model, tea.Cmd, bool) {
 	if branch == "" {
 		return a, nil, true
 	}
-	return a, a.gitCheckoutBranch(branch), true
+	return a, a.gitCheckoutBranch(pr.Workspace(), pr.RepoSlug(), branch), true
 }
 
 // handleActionRefresh drops the selected pull request's caches and refetches

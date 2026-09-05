@@ -34,7 +34,11 @@ make build-demo
 - **Repo filter** — narrow the list to a single repository from the Repos panel
 - **Search** — `/` filters the focused list as you type
 - **Browser hand-off** — `o` opens what you are looking at (the PR, a commit, a thread, the diff), `y` copies that URL, `u` opens a picker of every URL the PR reaches (builds, links in the description, plus commits and threads once those tabs have been opened)
-- **Read-only** — the client has no write methods at all. lazybitbucket never merges, approves, comments or edits
+- **Merge** — `M` opens a dialog: one of the six strategies Bitbucket accepts, close-source-branch, an optional commit message. The merge runs asynchronously on Bitbucket and is polled until it lands
+- **Sync with the target branch** — `S` merges or rebases the source branch onto its target and pushes, through git in your own checkout, because Bitbucket's "Sync now" has no API. Conflicts abort and are left to you
+- **Edit** — `E` changes the title inline, or opens the description in `$EDITOR` and sends back what you saved
+- **Reviewers and draft** — `V` is a checklist over the current reviewers, the repository's default reviewers and the workspace members; `D` flips the PR between draft and ready for review
+- **Read-only mode** — `--read-only` (or `bitbucket.readOnly: true`) makes the whole thing browse-only: the client refuses every non-GET request before it is sent, and the action keys disappear. Nothing else is ever written either — lazybitbucket cannot approve, decline or comment
 - **Git integration** — check out the source branch of the selected PR; the PR matching your current branch is selected at startup
 - **Custom commands** — bind shell commands to keys with template access to the focused PR, repo, build, or the changed file and line under the cursor
 - **Themes** — default ANSI palette plus all four Catppuccin flavors (Latte, Frappé, Macchiato, Mocha)
@@ -122,7 +126,7 @@ Atlassian **app passwords no longer exist** — they were removed on 28 July 202
 
 The token is shown once and cannot be retrieved later.
 
-A token without scopes does not work. lazybitbucket only reads, so the five read scopes are enough:
+A token without scopes does not work. These five read scopes cover everything lazybitbucket browses:
 
 | Scope | Needed for |
 |-------|------------|
@@ -133,6 +137,14 @@ A token without scopes does not work. lazybitbucket only reads, so the five read
 | `read:workspace:bitbucket` | the workspace itself (used by the connection test) |
 
 API token scopes are a different namespace from OAuth 2.0 scopes and do **not** imply each other, so tick all five.
+
+The five [pull request actions](docs/Keybindings.md#pull-request-actions) need one more:
+
+| Scope | Needed for |
+|-------|------------|
+| `write:pullrequest:bitbucket` | editing the title or description, setting reviewers, toggling draft, and merging |
+
+Leave it off and every read still works while a write comes back `403` — no harm done, just a message in the hint bar. If you would rather not have the possibility at all, use [read-only mode](docs/Config.md#read-only-mode), which does not need it and refuses writes before they are sent. Sync needs no scope of its own: it is local git, so what it needs is push permission on the remote. On a repository, project or workspace access token the same permission is spelled `pullrequest:write`.
 
 ### Auth options
 
@@ -172,6 +184,7 @@ These override both `config.yml` and `auth.json`, which makes them handy for a p
 | `BITBUCKET_TOKEN` | API token or access token |
 | `BITBUCKET_API_URL` | API base URL (defaults to `https://api.bitbucket.org/2.0`) |
 | `LAZYBITBUCKET_CONFIG_DIR` | Override the whole config directory |
+| `LAZYBITBUCKET_READ_ONLY` | `1`, `true` or `yes` turns on read-only mode; it cannot turn it off |
 
 ## Themes
 
@@ -194,6 +207,7 @@ lazybitbucket version            # show version
 lazybitbucket --demo             # built-in demo dataset (requires a -tags demo build)
 lazybitbucket --workspace acme   # override the configured workspace
 lazybitbucket --repo web-app     # override the configured repositories (repeatable)
+lazybitbucket --read-only        # browse only: refuse every request that would write
 lazybitbucket --log api.log      # log API requests to a file
 lazybitbucket --debug debug.log  # log internal debug output to a file
 ```
@@ -216,6 +230,11 @@ Press `?` inside the app for all keybindings.
 | `u` | URL picker |
 | `y` | Copy the pull request URL |
 | `c` | Check out the source branch |
+| `M` | Merge the pull request |
+| `S` | Sync the source branch with its target |
+| `E` | Edit the title or the description |
+| `V` | Set the reviewers |
+| `D` | Toggle draft |
 | `i` `d` `m` `t` | Jump to the Overview / Files / Commits / Comments tab of the PR |
 | `n` / `p` | Next / previous changed file |
 | `e` | Open the file under the cursor in your editor |

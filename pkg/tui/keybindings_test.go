@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
 	"github.com/lsst25/lazybitbucket/pkg/config"
@@ -346,4 +348,148 @@ func hasHelpDescription(items []components.HelpItem, want string) bool {
 		}
 	}
 	return false
+}
+
+// hasBindingKey reports whether any binding in the list is bound to key.
+func hasBindingKey(bindings []Binding, key string) bool {
+	for _, binding := range bindings {
+		if binding.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// hasHelpKey reports whether any help item in the strip is bound to key.
+func hasHelpKey(items []components.HelpItem, key string) bool {
+	for _, item := range items {
+		if item.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func TestWriteBindings_ListedWhenWritableAndOmittedWhenNot(t *testing.T) {
+	t.Parallel()
+
+	writeKeys := []string{"M", "S", "E", "V", "D"}
+
+	t.Run("the pull request list lists all five", func(t *testing.T) {
+		t.Parallel()
+		app := appForKeybindings(t)
+		app.side, app.leftFocus = sideLeft, focusPullRequests
+
+		bindings := app.ContextBindings()
+		items := app.helpBarItems()
+
+		for _, key := range writeKeys {
+			if !hasBindingKey(bindings, key) {
+				t.Errorf("the help overlay should list %q", key)
+			}
+			if !hasHelpKey(items, key) {
+				t.Errorf("the help bar should list %q", key)
+			}
+		}
+	})
+
+	t.Run("the detail panel lists them too", func(t *testing.T) {
+		t.Parallel()
+		app := appForKeybindings(t)
+		pr := newPR(testRepo, 101, testTitle)
+		app.detailView.SetPullRequest(&pr)
+		app.side = sideRight
+
+		bindings := app.ContextBindings()
+
+		for _, key := range writeKeys {
+			if !hasBindingKey(bindings, key) {
+				t.Errorf("the detail help overlay should list %q", key)
+			}
+		}
+	})
+
+	t.Run("read-only mode omits them everywhere", func(t *testing.T) {
+		t.Parallel()
+		app := appForKeybindings(t)
+		app.readOnly = true
+		app.side, app.leftFocus = sideLeft, focusPullRequests
+
+		bindings := app.ContextBindings()
+		items := app.helpBarItems()
+
+		for _, key := range writeKeys {
+			if hasBindingKey(bindings, key) {
+				t.Errorf("read-only mode must not advertise %q", key)
+			}
+			if hasHelpKey(items, key) {
+				t.Errorf("read-only mode must not advertise %q on the help bar", key)
+			}
+		}
+	})
+}
+
+func TestHelpBarItems_FollowTheOpenOverlay(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		setup func(*App)
+		want  []string
+	}{
+		{
+			name: "a form names its own keys",
+			setup: func(app *App) {
+				app.form.Show(formSync, "Sync", verbSync, []components.FormField{
+					{ID: fieldPush, Label: "Push", Kind: components.FormToggle},
+				})
+			},
+			want: []string{"move", "change", "toggle", "confirm", "cancel"},
+		},
+		{
+			name: "an inline text edit says keep and revert",
+			setup: func(app *App) {
+				app.form.Show(formMerge, "Merge", verbMerge, []components.FormField{
+					{ID: fieldMessage, Label: "Message", Kind: components.FormText},
+				})
+				_, _ = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			},
+			want: []string{"keep", "revert"},
+		},
+		{
+			name:  "the input says confirm and cancel",
+			setup: func(app *App) { app.input.Show("Title", testTitle) },
+			want:  []string{"confirm", "cancel"},
+		},
+		{
+			name: "the checklist saves rather than selects",
+			setup: func(app *App) {
+				app.modal.ShowChecklist("Reviewers", []components.ModalItem{{ID: "a", Label: "A"}}, nil)
+			},
+			want: []string{"toggle", "save", "filter", "cancel"},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			app := appForKeybindings(t)
+			testCase.setup(app)
+
+			items := app.helpBarItems()
+
+			for _, want := range testCase.want {
+				found := false
+				for _, item := range items {
+					if item.Description == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("help strip %v is missing %q", items, want)
+				}
+			}
+		})
+	}
 }

@@ -34,6 +34,19 @@ const (
 
 	fieldPage = "page"
 
+	// Write route segments and the members their documents carry.
+	segmentMerge      = "/merge"
+	segmentTaskStatus = "/task-status"
+	pathMembers       = pathWorkspace + "/members"
+
+	fieldTaskStatus  = "task_status"
+	fieldMergeResult = "merge_result"
+	fieldUser        = "user"
+
+	typeWorkspaceMembership = "workspace_membership"
+
+	updatedTitle = "Rate limit the public routes"
+
 	headerContentType = "Content-Type"
 	headerLocation    = "Location"
 )

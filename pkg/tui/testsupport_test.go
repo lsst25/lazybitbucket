@@ -13,6 +13,7 @@ import (
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
 	"github.com/lsst25/lazybitbucket/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
@@ -82,6 +83,13 @@ func newAppWithFake(t *testing.T, fake *bitbuckettest.FakeClient) *App {
 	app.now = func() time.Time { return testNow }
 	app.debounce = time.Nanosecond
 	app.refreshEvery = 0
+	app.writesInFlight = map[string]string{}
+	// The overlay stack is what NewAppWithAuth builds, and it decides whether a
+	// key reaches a handler at all. A hand-built app without it silently skips
+	// interception, so every unit test gets the real one.
+	app.form = components.NewFormModal()
+	app.input = components.NewInputModal()
+	app.overlays = components.OverlayStack{&app.modal, &app.form, &app.input}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	app.ctx, app.cancel = ctx, cancel
@@ -101,6 +109,7 @@ func sizedApp(t *testing.T, fake *bitbuckettest.FakeClient) *App {
 	app.detailView.ResolveNav = app.keymap.MatchNav
 	app.width = 120
 	app.height = 40
+	app.overlays.SetSize(app.width, app.height)
 	app.layoutPanels()
 	return app
 }

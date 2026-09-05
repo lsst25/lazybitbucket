@@ -62,6 +62,15 @@ const (
 	ActNextFile       Action = "nextFile"
 	ActPrevFile       Action = "prevFile"
 	ActOpenEditor     Action = "openEditor"
+
+	// The five write actions. Each opens a dialog first — nothing here reaches
+	// Bitbucket without a confirmation — and all five are refused, and hidden
+	// from the help surfaces, in read-only mode.
+	ActMerge       Action = "merge"
+	ActSync        Action = "sync"
+	ActEdit        Action = "edit"
+	ActReviewers   Action = "reviewers"
+	ActToggleDraft Action = "toggleDraft"
 )
 
 // Keymap maps actions to key strings. Several keys may trigger one action.
@@ -115,6 +124,14 @@ func DefaultKeymap() Keymap {
 		ActNextFile:       {"n"},
 		ActPrevFile:       {"p"},
 		ActOpenEditor:     {"e"},
+
+		// Uppercase on purpose: the lowercase review keys d, m and e stay where
+		// they are, and a write is worth a shifted key.
+		ActMerge:       {"M"},
+		ActSync:        {"S"},
+		ActEdit:        {"E"},
+		ActReviewers:   {"V"},
+		ActToggleDraft: {"D"},
 	}
 }
 
@@ -152,6 +169,11 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	set(ActURLPicker, kcfg.PullRequests.URLPicker)
 	set(ActCopyURL, kcfg.PullRequests.CopyURL)
 	set(ActCheckout, kcfg.PullRequests.Checkout)
+	set(ActMerge, kcfg.PullRequests.Merge)
+	set(ActSync, kcfg.PullRequests.Sync)
+	set(ActEdit, kcfg.PullRequests.Edit)
+	set(ActReviewers, kcfg.PullRequests.Reviewers)
+	set(ActToggleDraft, kcfg.PullRequests.ToggleDraft)
 
 	set(ActFocusLeft, kcfg.Detail.FocusLeft)
 	set(ActBack, kcfg.Detail.Back)

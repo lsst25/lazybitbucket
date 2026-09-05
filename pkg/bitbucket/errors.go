@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -26,8 +28,24 @@ const credentialsRejectedHint = " (credentials rejected)"
 // diff — and net/http knows no text for it.
 const StatusDiffTooLarge = 555
 
-// statusTextDiffTooLarge is the status text APIError renders for 555.
+// statusTextDiffTooLarge is the status text APIError renders for a 555 answering
+// a GET.
 const statusTextDiffTooLarge = "Diff Too Large"
+
+// statusTextTimedOut is the status text APIError renders for a 555 answering a
+// write. The merge and decline endpoints answer 555 when the operation took too
+// long, which has nothing to do with a diff being too large: the operation may
+// even have completed, so the fix is to refresh rather than to fetch less.
+const statusTextTimedOut = "Timed Out"
+
+// ErrReadOnly is what every mutating method returns when the client was built
+// with ClientOpts.ReadOnly. It is reported before a request is built, so no
+// socket is opened and nothing reaches Bitbucket.
+var ErrReadOnly = errors.New("client is read-only: refusing to modify Bitbucket")
+
+// IsReadOnly reports whether err is the read-only refusal, wrapped or not. The
+// TUI uses it to answer "read-only mode" instead of an API message.
+func IsReadOnly(err error) bool { return errors.Is(err, ErrReadOnly) }
 
 // APIError is a non-2xx response from the Bitbucket Cloud REST API. Bitbucket
 // returns 404 for a wrong workspace, a missing repository, a missing pull
@@ -44,6 +62,10 @@ type APIError struct {
 	// ID is error.id from the envelope: Bitbucket's log correlation id, worth
 	// quoting in a bug report.
 	ID string
+	// Fields is error.fields from the envelope: per-input validation messages a
+	// write can fail with, e.g. {"title": ["This field is required."]}. It is nil
+	// for the read endpoints, which never send it.
+	Fields map[string][]string
 	// AcceptedScopes is the X-Accepted-OAuth-Scopes response header, which tells
 	// which scope a 403 wanted.
 	AcceptedScopes string
@@ -65,13 +87,13 @@ func (e *APIError) Error() string {
 	out.WriteString(e.Path)
 	out.WriteString(": status ")
 	out.WriteString(strconv.Itoa(e.Status))
-	if text := statusText(e.Status); text != "" {
+	if text := statusText(e.Status, e.Method); text != "" {
 		out.WriteString(" ")
 		out.WriteString(text)
 	}
-	if e.Message != "" {
+	if message := e.UserMessage(); message != "" {
 		out.WriteString(": ")
-		out.WriteString(e.Message)
+		out.WriteString(message)
 	}
 	if e.Detail != "" {
 		out.WriteString(" — ")
@@ -90,6 +112,32 @@ func (e *APIError) Error() string {
 	default:
 	}
 	return out.String()
+}
+
+// UserMessage is the single line the UI shows: the server's own message, plus
+// the first per-field validation detail when the response carried any. A write
+// rejected for an empty title reads "title: This field is required." rather
+// than the generic "Bad request" the envelope's message often is.
+//
+// Fields are visited in sorted key order so the sentence is stable across runs
+// — Go map iteration is not.
+func (e *APIError) UserMessage() string {
+	for _, name := range slices.Sorted(maps.Keys(e.Fields)) {
+		messages := e.Fields[name]
+		if len(messages) == 0 || messages[0] == "" {
+			continue
+		}
+		if e.Message == "" {
+			return name + ": " + messages[0]
+		}
+		if strings.Contains(strings.ToLower(e.Message), strings.ToLower(messages[0])) {
+			// Some envelopes repeat the field sentence in the generic message;
+			// appending it again would read "title: required: title: required".
+			return e.Message
+		}
+		return e.Message + ": " + name + ": " + messages[0]
+	}
+	return e.Message
 }
 
 // unauthorizedHint is the actionable half of a 401 message. Which credential
@@ -155,6 +203,7 @@ func parseAPIError(method, path string, status int, header http.Header, body []b
 		Message:        "",
 		Detail:         "",
 		ID:             "",
+		Fields:         nil,
 		AcceptedScopes: header.Get(acceptedScopesHeader),
 		AuthMethod:     AuthNone,
 		Body:           truncateBody(body),
@@ -164,37 +213,91 @@ func parseAPIError(method, path string, status int, header http.Header, body []b
 		var envelope struct {
 			Type  string `json:"type"`
 			Error struct {
-				Message string `json:"message"`
-				Detail  string `json:"detail"`
-				ID      string `json:"id"`
+				Message string                     `json:"message"`
+				Detail  string                     `json:"detail"`
+				ID      string                     `json:"id"`
+				Fields  map[string]json.RawMessage `json:"fields"`
 			} `json:"error"`
 		}
 		if err := json.Unmarshal(body, &envelope); err == nil {
 			apiErr.Message = envelope.Error.Message
 			apiErr.Detail = envelope.Error.Detail
 			apiErr.ID = envelope.Error.ID
+			apiErr.Fields = parseErrorFields(envelope.Error.Fields)
 		}
 	}
 
 	if apiErr.Message == "" {
-		apiErr.Message = statusMessage(status)
+		apiErr.Message = statusMessage(status, method)
 	}
 	return apiErr
 }
 
+// parseErrorFields decodes error.fields leniently. Bitbucket documents the
+// values as arrays of strings, but sends a bare string for some inputs, so both
+// shapes are accepted and anything else for a key is dropped rather than
+// failing the whole error.
+func parseErrorFields(raw map[string]json.RawMessage) map[string][]string {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	fields := make(map[string][]string, len(raw))
+	for name, value := range raw {
+		var messages []string
+		if err := json.Unmarshal(value, &messages); err == nil {
+			fields[name] = messages
+			continue
+		}
+		var single string
+		if err := json.Unmarshal(value, &single); err == nil {
+			fields[name] = []string{single}
+		}
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	return fields
+}
+
+// errorEnvelopeError reports the *APIError hiding in an otherwise successful
+// body. The merge task-status endpoint answers 200 with Bitbucket's error
+// envelope when the merge itself failed, so the status alone cannot be trusted
+// there. A body that is not an error envelope yields nil.
+func errorEnvelopeError(method, path string, status int, body []byte) *APIError {
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	// A body that is not JSON leaves Type empty, which is answer enough: only a
+	// decoded "type":"error" makes this an envelope worth reporting.
+	_ = json.Unmarshal(body, &envelope)
+	if envelope.Type != errorEnvelopeType {
+		return nil
+	}
+	return parseAPIError(method, path, status, http.Header{}, body)
+}
+
+// errorEnvelopeType is the "type" member of Bitbucket's error envelope.
+const errorEnvelopeType = "error"
+
 // statusMessage is the fallback Message for a body that carried none.
-func statusMessage(status int) string {
-	if text := statusText(status); text != "" {
+func statusMessage(status int, method string) string {
+	if text := statusText(status, method); text != "" {
 		return text
 	}
 	return fmt.Sprintf("status %d", status)
 }
 
-// statusText is http.StatusText plus the one status Bitbucket invented, so a
-// 555 reads as "status 555 Diff Too Large" rather than a bare number.
-func statusText(status int) string {
+// statusText is http.StatusText plus the one status Bitbucket invented. 555
+// means two different things depending on the verb: a GET could not build a
+// diff that large, while a write (merge, decline) ran past the gateway's
+// deadline and may or may not have completed.
+func statusText(status int, method string) string {
 	if status == StatusDiffTooLarge {
-		return statusTextDiffTooLarge
+		if method == http.MethodGet {
+			return statusTextDiffTooLarge
+		}
+		return statusTextTimedOut
 	}
 	return http.StatusText(status)
 }

@@ -16,9 +16,13 @@ type InputConfirmedMsg struct{ Text string }
 // InputCancelledMsg is sent when the user presses Esc
 type InputCancelledMsg struct{}
 
+// defaultHintsTitle titles the hints panel when the caller sets none.
+const defaultHintsTitle = "Suggestions"
+
 // InputModal is a single-line text input popup with an optional hints list below the input
 type InputModal struct {
 	title      string
+	hintsTitle string
 	text       []rune
 	cursor     int
 	visible    bool
@@ -29,8 +33,11 @@ type InputModal struct {
 	height     int
 }
 
+// minInputModalWidth is the narrowest popup View renders, borders included.
+const minInputModalWidth = 12
+
 func NewInputModal() InputModal {
-	return InputModal{}
+	return InputModal{hintsTitle: defaultHintsTitle}
 }
 
 // Show opens the input modal with a title and pre-filled text
@@ -42,6 +49,11 @@ func (m *InputModal) Show(title, prefill string) {
 	m.focusInput = true
 	m.hints = nil
 	m.hintCursor = 0
+}
+
+// SetHintsTitle sets the title of the hints panel, defaulting to "Suggestions"
+func (m *InputModal) SetHintsTitle(title string) {
+	m.hintsTitle = title
 }
 
 // SetHints sets the optional hint items shown below the input
@@ -172,7 +184,9 @@ func (m *InputModal) View() string {
 		return ""
 	}
 
-	contentW := min(max(m.width*6/10, 30), m.width-4)
+	// Shown before the first SetSize (or on a tiny terminal) the width is 0 or
+	// too small; a negative repeat count would panic, so the popup keeps a floor.
+	contentW := max(min(max(m.width*6/10, 30), m.width-4), minInputModalWidth)
 	innerW := contentW - 2
 
 	cursorStyle := lipgloss.NewStyle().Foreground(theme.ColorCyan)
@@ -309,7 +323,10 @@ func (m *InputModal) HintView() string {
 	}
 
 	body := strings.Join(lines, "\n")
-	title := "Existing branches"
+	title := m.hintsTitle
+	if title == "" {
+		title = defaultHintsTitle
+	}
 	footer := fmt.Sprintf("%d of %d", m.hintCursor+1, len(m.hints))
 	return RenderPanelFull(title, footer, body, contentW, len(lines), !m.focusInput, nil)
 }

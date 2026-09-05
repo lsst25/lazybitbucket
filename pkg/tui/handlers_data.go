@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -72,6 +73,7 @@ func (a *App) handleReposLoaded(msg reposLoadedMsg) (tea.Model, tea.Cmd) {
 	a.repoList.SetRepos(msg.repos)
 	a.splashInfo.RepoCount = len(msg.repos)
 	a.splashInfo.RepoNote = ""
+	a.scopeToCheckout(msg.repos)
 
 	if len(a.cfg.Bitbucket.Repositories) == 0 {
 		switch {
@@ -356,6 +358,29 @@ func (a *App) previewSelected() tea.Cmd {
 	}
 	_, cmd := a.handlePullRequestSelected(views.PullRequestSelectedMsg{PullRequest: sel})
 	return cmd
+}
+
+// scopeToCheckout narrows the list to the repository lazybitbucket was started
+// in, when that checkout's remotes name one of the repositories on the list. It
+// happens once, only while no filter is set, and is undone the way any filter
+// is — by picking "All repositories" — so a user who widens the view is not
+// narrowed again on the next refresh.
+func (a *App) scopeToCheckout(repos []bitbucket.Repository) {
+	if a.autoScoped || a.repoFilter != "" || len(a.gitRemoteRepos) == 0 {
+		return
+	}
+	for _, repo := range repos {
+		if !slices.Contains(a.gitRemoteRepos, strings.ToLower(repo.FullName)) {
+			continue
+		}
+		a.autoScoped = true
+		a.repoFilter = repo.Slug
+		a.prList.SetRepoFilter(repo.Slug)
+		a.repoList.SetActiveSlug(repo.Slug)
+		a.statusPanel.SetScope(scopeLabel(repo.Slug))
+		a.helpBar.SetStatusMsg("showing " + repo.Slug + " — the repository of this checkout; pick All repositories to widen")
+		return
+	}
 }
 
 // selectRepo narrows the list to one repository (or clears the filter for the

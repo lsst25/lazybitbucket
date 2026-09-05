@@ -40,6 +40,9 @@ const defaultDiffContext = 3
 // endpoint does: iterator pagination, so the envelope carries no size and its
 // next link holds an opaque token rather than a page number.
 func (s *Server) handlePullRequestCommits(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	pullRequest, ok := s.findPullRequest(r)
 	if !ok {
 		writePullRequestNotFound(w, r)
@@ -53,6 +56,9 @@ func (s *Server) handlePullRequestCommits(w http.ResponseWriter, r *http.Request
 // handlePullRequestComments serves the flat comment list, oldest first when the
 // request asks for sort=created_on as the client does.
 func (s *Server) handlePullRequestComments(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	pullRequest, ok := s.findPullRequest(r)
 	if !ok {
 		writePullRequestNotFound(w, r)
@@ -87,6 +93,9 @@ func (s *Server) handlePullRequestDiff(w http.ResponseWriter, r *http.Request) {
 // client resolves this redirect itself and merges its parameters onto the
 // Location; the fake must not paper over the shape that forces it to.
 func (s *Server) redirectToRevspec(w http.ResponseWriter, r *http.Request, resource string) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	pullRequest, ok := s.findPullRequest(r)
 	if !ok {
 		writePullRequestNotFound(w, r)
@@ -121,6 +130,9 @@ func repositoryResourcePath(slug, resource, spec string) string {
 // changed file, paginated with size present, or 555 for a pull request the
 // server refuses to diff.
 func (s *Server) handleRepositoryDiffStat(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	key, ok := s.revspecKey(w, r)
 	if !ok {
 		return
@@ -132,6 +144,9 @@ func (s *Server) handleRepositoryDiffStat(w http.ResponseWriter, r *http.Request
 // filtered by the repeated path= parameter and clipped to context= lines of
 // context around each change.
 func (s *Server) handleRepositoryDiff(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.RLock()
+	defer s.dataMu.RUnlock()
+
 	key, ok := s.revspecKey(w, r)
 	if !ok {
 		return

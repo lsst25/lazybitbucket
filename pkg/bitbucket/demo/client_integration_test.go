@@ -1,6 +1,9 @@
 package demo
 
 import (
+	"errors"
+	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -27,6 +30,22 @@ func newDemoClient(t *testing.T, server *Server) *bitbucket.Client {
 		Email:      "",
 		UserAgent:  "",
 		HTTPClient: nil,
+		ReadOnly:   false,
+	})
+}
+
+// newReadOnlyDemoClient is newDemoClient with the browse-only guard on, which
+// is the whole difference: every write has to fail before it reaches the server.
+func newReadOnlyDemoClient(t *testing.T, server *Server) *bitbucket.Client {
+	t.Helper()
+
+	return bitbucket.NewClient(bitbucket.ClientOpts{
+		BaseURL:    server.URL,
+		Token:      "demo-token",
+		Email:      "",
+		UserAgent:  "",
+		HTTPClient: nil,
+		ReadOnly:   true,
 	})
 }
 
@@ -644,8 +663,301 @@ func TestClientDiffTooLargeIsToldApart(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
+// Writes
+// -----------------------------------------------------------------------------
+
+// TestClientMergePullRequest is the whole synchronous merge as the application
+// sees it: the merged pull request comes back from the request itself, and the
+// listing that fed the open tab no longer has it.
+func TestClientMergePullRequest(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+
+	result, err := client.MergePullRequest(t.Context(), Workspace, repoAPIGateway, 101,
+		bitbucket.MergeOptions{
+			Strategy:          bitbucket.MergeSquash,
+			CloseSourceBranch: ptr(true),
+			Message:           "Merge the rate limiter",
+		})
+	if err != nil {
+		t.Fatalf("MergePullRequest(#101): %v", err)
+	}
+	testkit.AssertEqual(t, "Queued()", result.Queued(), false)
+	if result.PullRequest == nil {
+		t.Fatalf("MergePullRequest(#101) returned no pull request: %+v", result)
+	}
+	testkit.AssertEqual(t, "state", string(result.PullRequest.State), string(bitbucket.PullRequestMerged))
+	testkit.AssertEqual(t, "close_source_branch", result.PullRequest.CloseSourceBranch, true)
+	if result.PullRequest.MergeCommit == nil {
+		t.Fatalf("merged pull request carries no merge commit: %+v", result.PullRequest)
+	}
+
+	fetched, err := client.GetPullRequest(t.Context(), Workspace, repoAPIGateway, 101)
+	if err != nil {
+		t.Fatalf("GetPullRequest(#101): %v", err)
+	}
+	testkit.AssertEqual(t, "state after the merge", string(fetched.State), string(bitbucket.PullRequestMerged))
+
+	open, err := client.ListPullRequests(t.Context(), Workspace, repoAPIGateway,
+		bitbucket.ListPullRequestsOptions{States: nil, Query: "", Sort: "", MaxItems: 0, Fields: ""})
+	if err != nil {
+		t.Fatalf("ListPullRequests: %v", err)
+	}
+	if slices.Contains(idsOf(open), 101) {
+		t.Fatalf("the open listing still carries #101: %v", idsOf(open))
+	}
+}
+
+// TestClientMergePullRequestQueued is the asynchronous half: a 202 the client
+// reports as a task URL, a poll that answers PENDING, and a second that answers
+// SUCCESS carrying the merged pull request.
+func TestClientMergePullRequestQueued(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+
+	result, err := client.MergePullRequest(t.Context(), Workspace, repoAPIGateway, prQueuedMerge,
+		bitbucket.MergeOptions{Strategy: bitbucket.MergeCommit, CloseSourceBranch: nil, Message: ""})
+	if err != nil {
+		t.Fatalf("MergePullRequest(#%d): %v", prQueuedMerge, err)
+	}
+	testkit.AssertEqual(t, "Queued()", result.Queued(), true)
+	testkit.AssertEqual(t, "no pull request came back", result.PullRequest == nil, true)
+	if !strings.HasPrefix(result.TaskURL, server.URL) {
+		t.Fatalf("TaskURL = %q, want a URL on %s", result.TaskURL, server.URL)
+	}
+
+	pending, err := client.GetMergeTaskStatus(t.Context(), result.TaskURL)
+	if err != nil {
+		t.Fatalf("GetMergeTaskStatus (first poll): %v", err)
+	}
+	testkit.AssertEqual(t, "first poll status", pending.Status, bitbucket.MergeTaskPending)
+	testkit.AssertEqual(t, "a pending task carries no merge result", pending.MergeResult == nil, true)
+
+	success, err := client.GetMergeTaskStatus(t.Context(), result.TaskURL)
+	if err != nil {
+		t.Fatalf("GetMergeTaskStatus (second poll): %v", err)
+	}
+	testkit.AssertEqual(t, "second poll status", success.Status, bitbucket.MergeTaskSuccess)
+	if success.MergeResult == nil {
+		t.Fatalf("a successful task carries no merge result: %+v", success)
+	}
+	testkit.AssertEqual(t, "merge result state",
+		string(success.MergeResult.State), string(bitbucket.PullRequestMerged))
+
+	fetched, err := client.GetPullRequest(t.Context(), Workspace, repoAPIGateway, prQueuedMerge)
+	if err != nil {
+		t.Fatalf("GetPullRequest(#%d): %v", prQueuedMerge, err)
+	}
+	testkit.AssertEqual(t, "state after the task succeeded",
+		string(fetched.State), string(bitbucket.PullRequestMerged))
+}
+
+// TestClientMergePullRequestRefsChanged is the 409 the merge dialog has to be
+// able to explain: the refs moved, and nothing was merged.
+func TestClientMergePullRequestRefsChanged(t *testing.T) {
+	t.Parallel()
+
+	client := newDemoClient(t, newTestServer(t))
+
+	_, err := client.MergePullRequest(t.Context(), Workspace, repoWebApp, prRefsChanged,
+		bitbucket.MergeOptions{Strategy: "", CloseSourceBranch: nil, Message: ""})
+	var apiErr *bitbucket.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("MergePullRequest(#%d) error = %v, want an *APIError", prRefsChanged, err)
+	}
+	testkit.AssertEqual(t, "status", apiErr.Status, http.StatusConflict)
+	testkit.AssertEqual(t, "message", apiErr.Message, msgRefsChanged)
+	testkit.AssertEqual(t, "method", apiErr.Method, http.MethodPost)
+}
+
+func TestClientMergePullRequestNonOpenIsRejected(t *testing.T) {
+	t.Parallel()
+
+	client := newDemoClient(t, newTestServer(t))
+
+	_, err := client.MergePullRequest(t.Context(), Workspace, repoAPIGateway, 98,
+		bitbucket.MergeOptions{Strategy: "", CloseSourceBranch: nil, Message: ""})
+	var apiErr *bitbucket.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("MergePullRequest(#98) error = %v, want an *APIError", err)
+	}
+	testkit.AssertEqual(t, "status", apiErr.Status, http.StatusBadRequest)
+	testkit.AssertEqual(t, "UserMessage()", apiErr.UserMessage(), msgOnlyOpenCanBeMerged)
+}
+
+// TestClientUpdatePullRequestTitle also pins the reviewer rule the client
+// enforces: an update states the complete reviewer set, and the ones it was not
+// editing have to survive the round trip.
+func TestClientUpdatePullRequestTitle(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+
+	before, err := client.GetPullRequest(t.Context(), Workspace, repoAPIGateway, 101)
+	if err != nil {
+		t.Fatalf("GetPullRequest(#101): %v", err)
+	}
+
+	updated, err := client.UpdatePullRequest(t.Context(), Workspace, repoAPIGateway, 101,
+		bitbucket.PullRequestUpdate{
+			Title:       ptr(updatedTitle),
+			Description: nil,
+			Draft:       nil,
+			Reviewers:   before.ReviewerUUIDs(),
+		})
+	if err != nil {
+		t.Fatalf("UpdatePullRequest(#101): %v", err)
+	}
+	testkit.AssertEqual(t, "title", updated.Title, updatedTitle)
+	testkit.AssertEqual(t, "description is untouched", updated.Description, before.Description)
+	testkit.AssertSliceEqual(t, "reviewers survive", updated.ReviewerUUIDs(), before.ReviewerUUIDs())
+
+	fetched, err := client.GetPullRequest(t.Context(), Workspace, repoAPIGateway, 101)
+	if err != nil {
+		t.Fatalf("GetPullRequest(#101) after the update: %v", err)
+	}
+	testkit.AssertEqual(t, "title after the update", fetched.Title, updatedTitle)
+}
+
+func TestClientUpdatePullRequestReviewersAndDraft(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+
+	updated, err := client.UpdatePullRequest(t.Context(), Workspace, repoAPIGateway, 102,
+		bitbucket.PullRequestUpdate{
+			Title:       nil,
+			Description: nil,
+			Draft:       ptr(false),
+			Reviewers:   []string{uuidKen},
+		})
+	if err != nil {
+		t.Fatalf("UpdatePullRequest(#102): %v", err)
+	}
+	testkit.AssertEqual(t, "draft", updated.Draft, false)
+	testkit.AssertSliceEqual(t, "reviewers", updated.ReviewerUUIDs(), []string{uuidKen})
+	testkit.AssertEqual(t, "the reviewer became a participant", updated.IsReviewer(uuidKen), true)
+	testkit.AssertEqual(t, "the replaced reviewer is gone", updated.IsReviewer(uuidLinus), false)
+}
+
+// TestClientUpdatePullRequestEmptyTitle is the validation failure the help bar
+// has to be able to read out: an *APIError carrying error.fields, whose
+// UserMessage names the member that was wrong.
+func TestClientUpdatePullRequestEmptyTitle(t *testing.T) {
+	t.Parallel()
+
+	client := newDemoClient(t, newTestServer(t))
+
+	_, err := client.UpdatePullRequest(t.Context(), Workspace, repoAPIGateway, 101,
+		bitbucket.PullRequestUpdate{
+			Title:       ptr(""),
+			Description: nil,
+			Draft:       nil,
+			Reviewers:   []string{},
+		})
+	var apiErr *bitbucket.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("UpdatePullRequest(empty title) error = %v, want an *APIError", err)
+	}
+	testkit.AssertEqual(t, "status", apiErr.Status, http.StatusBadRequest)
+	testkit.AssertEqual(t, "method", apiErr.Method, http.MethodPut)
+	testkit.AssertSliceEqual(t, "Fields[title]", apiErr.Fields[fieldTitle], []string{msgTitleRequired})
+	testkit.AssertEqual(t, "UserMessage()", apiErr.UserMessage(),
+		msgBadRequest+": "+fieldTitle+": "+msgTitleRequired)
+}
+
+// TestClientReadOnlyRefusesWritesWithoutAskingTheServer is the guarantee the
+// browse-only mode is worth having: the refusal happens in the client, so the
+// server never hears about the write at all.
+func TestClientReadOnlyRefusesWritesWithoutAskingTheServer(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newReadOnlyDemoClient(t, server)
+
+	_, mergeErr := client.MergePullRequest(t.Context(), Workspace, repoAPIGateway, 101,
+		bitbucket.MergeOptions{Strategy: bitbucket.MergeSquash, CloseSourceBranch: nil, Message: ""})
+	if !bitbucket.IsReadOnly(mergeErr) {
+		t.Fatalf("MergePullRequest on a read-only client = %v, want ErrReadOnly", mergeErr)
+	}
+
+	_, updateErr := client.UpdatePullRequest(t.Context(), Workspace, repoAPIGateway, 101,
+		bitbucket.PullRequestUpdate{
+			Title:       ptr(updatedTitle),
+			Description: nil,
+			Draft:       nil,
+			Reviewers:   []string{},
+		})
+	if !bitbucket.IsReadOnly(updateErr) {
+		t.Fatalf("UpdatePullRequest on a read-only client = %v, want ErrReadOnly", updateErr)
+	}
+
+	// Nothing reached the server: it has seen no request at all, and the pull
+	// request is as the dataset built it.
+	testkit.AssertEqual(t, "LastAuthorization()", server.LastAuthorization(), "")
+	testkit.AssertEqual(t, "state", string(demoPullRequest(t, server, repoAPIGateway, 101).State),
+		string(bitbucket.PullRequestOpen))
+	testkit.AssertEqual(t, "title", demoPullRequest(t, server, repoAPIGateway, 101).Title,
+		"Add a token bucket rate limiter to the public routes")
+
+	// Reads still work, which is the point of the mode.
+	if _, err := client.GetPullRequest(t.Context(), Workspace, repoAPIGateway, 101); err != nil {
+		t.Fatalf("GetPullRequest on a read-only client: %v", err)
+	}
+	testkit.AssertEqual(t, "LastAuthorization() after a read",
+		server.LastAuthorization(), demoAuthorization)
+}
+
+// TestClientListsReviewerCandidates covers the two listings the reviewer picker
+// draws on, pagination included: both are collections, and the client walks
+// them by following next.
+func TestClientListsReviewerCandidates(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	server.SetMaxPageLen(2)
+	client := newDemoClient(t, server)
+
+	defaults, err := client.ListEffectiveDefaultReviewers(t.Context(), Workspace, repoAPIGateway)
+	if err != nil {
+		t.Fatalf("ListEffectiveDefaultReviewers: %v", err)
+	}
+	testkit.AssertSliceEqual(t, "default reviewer uuids", uuidsOf(defaults), []string{uuidAda, uuidGrace})
+
+	members, err := client.ListWorkspaceMembers(t.Context(), Workspace,
+		bitbucket.ListOptions{MaxItems: 0})
+	if err != nil {
+		t.Fatalf("ListWorkspaceMembers: %v", err)
+	}
+	testkit.AssertSliceEqual(t, "member uuids", uuidsOf(members),
+		[]string{uuidDemo, uuidAda, uuidGrace, uuidLinus, uuidKen, uuidBarbara})
+	testkit.AssertEqual(t, "the accounts came through whole", members[1].DisplayName, "Ada Lovelace")
+
+	bounded, err := client.ListWorkspaceMembers(t.Context(), Workspace,
+		bitbucket.ListOptions{MaxItems: 3})
+	if err != nil {
+		t.Fatalf("ListWorkspaceMembers(MaxItems 3): %v", err)
+	}
+	testkit.AssertEqual(t, "len(bounded)", len(bounded), 3)
+}
+
+// -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
+
+func uuidsOf(accounts []bitbucket.Account) []string {
+	uuids := make([]string, 0, len(accounts))
+	for _, account := range accounts {
+		uuids = append(uuids, account.UUID)
+	}
+	return uuids
+}
 
 func slugsOf(repositories []bitbucket.Repository) []string {
 	slugs := make([]string, 0, len(repositories))

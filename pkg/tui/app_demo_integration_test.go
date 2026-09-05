@@ -374,3 +374,132 @@ func TestDemo_TooLargeDiffSaysToOpenTheBrowser(t *testing.T) {
 		t.Errorf("the Files tab should name the way out of a 555:\n%s", rendered)
 	}
 }
+
+// demoPRKey101 and friends are the demo fixtures the write flows act on.
+const (
+	demoPRKey101 = "acme/api-gateway#101"
+	demoPRKey103 = "acme/api-gateway#103"
+	demoPRKey41  = "acme/web-app#41"
+)
+
+// confirmDialog presses enter on the open dialog and drains everything the
+// confirmation fans out into.
+func confirmDialog(t *testing.T, app *App) {
+	t.Helper()
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	runAll(t, app, cmd)
+}
+
+func TestDemo_MergingLeavesTheOpenTabAndShowsMerged(t *testing.T) {
+	t.Parallel()
+	app := demoReviewApp(t, demoPRKey101)
+
+	_, _ = app.Update(runeKey('M'))
+	if !app.form.IsVisible() {
+		t.Fatal("M should open the merge dialog")
+	}
+	if !strings.Contains(plain(app.form.View()), "Merge #101 into main") {
+		t.Errorf("dialog = %q, want the merge title", plain(app.form.View()))
+	}
+	// The write and the list refetch it triggers are driven in two steps: the
+	// refetch drops #101 from the Open tab and moves the cursor, so what the
+	// detail panel says about #101 has to be read before that lands.
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	confirmed := collectMsgs(cmd)
+	if len(confirmed) != 1 {
+		t.Fatalf("messages = %v, want the form confirmation", confirmed)
+	}
+	_, cmd = app.Update(confirmed[0])
+	written := collectMsgs(cmd)
+	if len(written) != 1 {
+		t.Fatalf("messages = %v, want the merge result", written)
+	}
+	_, cmd = app.Update(written[0])
+
+	if !strings.Contains(plain(app.detailView.View()), "MERGED") {
+		t.Errorf("the detail panel should show the merged state:\n%s", plain(app.detailView.View()))
+	}
+	if !strings.Contains(plain(app.helpBar.View()), "merged #101") {
+		t.Errorf("help bar = %q, want the success line", plain(app.helpBar.View()))
+	}
+
+	runAll(t, app, cmd)
+	// The refetch is the truth about which pull requests are open: nothing
+	// filters by state client side.
+	for _, pr := range app.prList.CurrentPullRequests() {
+		if pr.Key() == demoPRKey101 {
+			t.Error("a merged pull request must not survive the Open tab's refetch")
+		}
+	}
+}
+
+func TestDemo_MergingAPullRequestWhoseRefsMovedSaysSo(t *testing.T) {
+	t.Parallel()
+	app := demoApp(t)
+	if !app.prList.SelectByKey(demoPRKey41) {
+		t.Fatalf("%s should be in the Open tab", demoPRKey41)
+	}
+	runAll(t, app, app.previewSelected())
+
+	_, _ = app.Update(runeKey('M'))
+	confirmDialog(t, app)
+
+	if got := plain(app.helpBar.View()); !strings.Contains(got, "merge failed: refs changed — refresh and retry") {
+		t.Errorf("help bar = %q, want the 409 explanation", got)
+	}
+	if _, busy := app.writesInFlight[demoPRKey41]; busy {
+		t.Error("a failed merge must clear its in-flight record")
+	}
+}
+
+func TestDemo_TogglingDraftMarksThePullRequest(t *testing.T) {
+	t.Parallel()
+	app := demoReviewApp(t, demoPRKey103)
+
+	_, _ = app.Update(runeKey('D'))
+	if !strings.Contains(plain(app.form.View()), "Mark #103 as draft?") {
+		t.Fatalf("dialog = %q, want the draft question", plain(app.form.View()))
+	}
+	confirmDialog(t, app)
+
+	if !strings.Contains(plain(app.detailView.View()), "· draft") {
+		t.Errorf("the detail panel should mark the pull request a draft:\n%s", plain(app.detailView.View()))
+	}
+	if !app.prCache[demoPRKey103].Draft {
+		t.Error("the cached pull request should carry the server's new draft flag")
+	}
+}
+
+func TestDemo_EditingTheTitleRoundTrips(t *testing.T) {
+	t.Parallel()
+	app := demoReviewApp(t, demoPRKey101)
+	const newTitle = "Rate limit the public routes"
+
+	_, _ = app.Update(runeKey('E'))
+	if !app.modal.IsVisible() {
+		t.Fatal("E should open the edit chooser")
+	}
+	// Enter picks the first row, which is Title.
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	runAll(t, app, cmd)
+	if !app.input.IsVisible() {
+		t.Fatal("the title editor should be open")
+	}
+
+	_, _ = app.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	_, _ = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(newTitle)})
+	_, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	runAll(t, app, cmd)
+
+	testkit.AssertEqual(t, "cached title", app.prCache[demoPRKey101].Title, newTitle)
+	if !strings.Contains(plain(app.detailView.View()), newTitle) {
+		t.Errorf("the detail panel should show the new title:\n%s", plain(app.detailView.View()))
+	}
+	// The server is the truth: read it back rather than trusting the cache.
+	fetched, err := app.client.GetPullRequest(t.Context(), demo.Workspace, "api-gateway", 101)
+	if err != nil {
+		t.Fatalf("get #101: %v", err)
+	}
+	testkit.AssertEqual(t, "server title", fetched.Title, newTitle)
+	testkit.AssertEqual(t, "reviewers kept", len(fetched.Reviewers), 2)
+}

@@ -13,21 +13,37 @@ integration, release packaging. What it does not have is any concept of a pull r
 
 ## Current status
 
-ROADMAP steps 0, 1 and 2 are **implemented**. The domain layer is Bitbucket, `pkg/jira` is gone, the
-binary, config dir and packaging are renamed, and the review surface — diff pane, editor hand-off,
-commits and review threads — is in.
+ROADMAP steps 0, 1, 2 and 3 are **implemented**. The domain layer is Bitbucket, `pkg/jira` is gone, the
+binary, config dir and packaging are renamed, the review surface — diff pane, editor hand-off, commits
+and review threads — is in, and the tool now acts on a PR as well as reading it: merge, sync, edit
+title/description, reviewers, draft, plus a browse-only read-only mode.
 
 What exists:
 
-- `pkg/bitbucket` — read-only Bitbucket Cloud REST client (auth, pagination, `APIError` + predicates,
-  concurrent multi-repo PR fetch), `pkg/bitbucket/bitbuckettest` (strict fake client) and
-  `pkg/bitbucket/demo` (deterministic dataset + fake REST server, an ordinary untagged package used by
-  `--demo` and by integration tests).
+- `pkg/bitbucket` — Bitbucket Cloud REST client (auth, pagination, `APIError` + predicates, concurrent
+  multi-repo PR fetch) plus a small write surface: `MergePullRequest` (`MergeOptions`, `MergeStrategy`
+  with six values and `Label()`, `MergeResult.Queued()` for the 202) and `GetMergeTaskStatus`,
+  `UpdatePullRequest` (`PullRequestUpdate`: title, description, draft, reviewers),
+  `ListEffectiveDefaultReviewers` and `ListWorkspaceMembers`. Writes go through
+  `writeJSON` → `do` on the no-redirect client, are never retried, and are refused with `ErrReadOnly`
+  (predicate `IsReadOnly`) when `ClientOpts.ReadOnly` is set. `ErrEmptyUpdate` and
+  `ErrReviewersUnknown` guard the update body — `Reviewers` is the complete set and is always sent,
+  because Bitbucket clears what a PUT omits. `APIError` carries `Fields` (`error.fields`) and
+  `UserMessage()` appends the first field message, which is what the TUI shows. Also
+  `pkg/bitbucket/bitbuckettest` (strict fake client) and `pkg/bitbucket/demo` (deterministic dataset +
+  fake REST server, an ordinary untagged package used by `--demo` and by integration tests; its write
+  routes mirror production validation, with `api-gateway` #103 the queued-202 fixture and `web-app` #41
+  the 409).
 - `pkg/diff` — a lenient unified-diff parser (files, hunks, per-side line numbers, renames, binary
   files, `\ No newline at end of file`, quoted paths). Pure, stdlib only.
-- `pkg/config` — `bitbucket` (workspace, repositories, email, baseUrl), `pullRequestTabs`,
+- `pkg/git` — branch checkout, plus the sync helpers in `sync.go`: `IsClean`, `RemoteFor` (the remote
+  whose URL points at `<workspace>/<slug>`, else `origin`), `Fetch`, `MergeBranch`, `RebaseOnto`,
+  `Push` (`--force-with-lease` after a rebase) and `ErrConflict` (both operations abort before
+  returning). Git runs with `GIT_TERMINAL_PROMPT=0` so a credential prompt cannot hang the UI.
+- `pkg/config` — `bitbucket` (workspace, repositories, email, baseUrl, `readOnly`), `pullRequestTabs`,
   `gui.pullRequestListFields`, `refreshInterval`, `editor`, custom command contexts
-  `pullrequests`/`builds`/`repos`/`detail`/`diff`.
+  `pullrequests`/`builds`/`repos`/`detail`/`diff`, and `keybinding.pullRequests` with
+  `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`.
 - `pkg/tui` — panels Status `[1]`, Pull Requests `[2]`, Builds `[3]`, Repos `[4]`, Detail `[0]`. PR list
   with Open/Mine/Reviewing tabs and configurable columns, Builds panel with drill-down into a pipeline
   run, its steps and each step's log, repo filter, `/` search, URL picker, copy URL, browser hand-off,
@@ -37,21 +53,31 @@ What exists:
   source commit so a push invalidates it. Behind the Files tab is `ModeFileDiff`: a per-file unified
   diff with a line cursor, chroma syntax highlighting, `●` markers on commented lines, `n`/`p` to walk
   the files and `e` to open the file at the cursor's line in `config.ResolveEditor()` (`editor.go`).
-- `cmd/lazybitbucket` — CLI (`auth`, `logout`, `version`; `--demo --log --debug --workspace --repo`),
-  credential wizard.
+  The five write flows live in `actions.go` on `M` merge, `S` sync, `E` edit, `V` reviewers, `D` draft —
+  they work from the list and the detail panel alike, always open a dialog first, are refused for a
+  non-`OPEN` PR, while another write on that PR is in flight, and in read-only mode. The merge, sync and
+  draft dialogs are `components.FormModal` (choice / toggle / text / note rows); reviewers reuse
+  `Modal.ShowChecklist` and the title editor `InputModal`; the description goes through a temp `.md`
+  file and `tea.ExecProcess`. A queued merge polls the task every 2s, 30 attempts. The status panel
+  shows `read-only` next to the auth method.
+- `cmd/lazybitbucket` — CLI (`auth`, `logout`, `version`;
+  `--demo --log --debug --workspace --repo --read-only`), credential wizard.
 
 Hard constraints that still hold:
 
-- **The client has no write methods.** Nothing in the tool issues a non-GET request to Bitbucket.
-  Merging, approving, commenting and editing are later roadmap steps.
-- No test touches the network. Unit tests use `bitbuckettest.FakeClient` or `httptest`; integration
-  tests use `pkg/bitbucket/demo`.
+- **Every write goes through `writeJSON`/`do` and is refused under `ClientOpts.ReadOnly`** with
+  `ErrReadOnly`, before a request is built. Read-only is browse-only: the TUI blocks sync too, because
+  it pushes. Approving, declining, commenting, tasks and pipeline triggers still have no methods at all.
+- **No test may reach the real API.** Unit tests use `bitbuckettest.FakeClient` or `httptest`;
+  integration tests use `pkg/bitbucket/demo`; **every `bitbucket.NewClient` in a test passes a local
+  `BaseURL`** — never the default, which is the real host.
 - `pkg/bitbucket` and `pkg/bitbucket/demo` import nothing from `pkg/tui` or `pkg/config`.
 
-Not built yet (ROADMAP step 3+): every write operation — merge, sync with target, editing title or
-description, reviewers, draft state, approving, posting or resolving comments, triggering pipelines —
-plus the richer search/saved filters and PR creation of step 4. Also not built: the activity feed,
-side-by-side diffs, whole-file views and conflict display (deliberate step-2 non-goals).
+Not built yet (ROADMAP step 4+): the richer search / saved filters and PR creation of step 4, and
+everything under "Later / maybe" — approve and request changes, declining, posting or resolving
+comments, review tasks, triggering pipelines, a CLI mode. Also not built: the activity feed,
+side-by-side diffs, whole-file views and conflict display (deliberate step-2 non-goals), and
+side-by-side conflict resolution for a failed sync — a conflict aborts and is handed back to the user.
 
 ## Port plan (done)
 
@@ -59,7 +85,7 @@ side-by-side diffs, whole-file views and conflict display (deliberate step-2 non
 | --- | --- | --- |
 | `pkg/tui` | **Reuse** — the main asset | Kept. Panes renamed and re-shaped for PRs; app/message/layout structure unchanged. JQL, create/edit/transition, mentions, hierarchy, ADF and the navstack were deleted |
 | `pkg/jira` | **Replace** with `pkg/bitbucket` | Deleted. `pkg/bitbucket` + `bitbuckettest` + `demo` replace it |
-| `pkg/git` | **Reuse** mostly as-is | Kept; branch checkout carries over |
+| `pkg/git` | **Reuse** mostly as-is | Kept; branch checkout carries over, and step 3 added `sync.go` |
 | `pkg/config` | **Adapt** | New schema; auth is an API token or access token |
 | `pkg/ascii` | Reuse | Kept |
 | `cmd/lazyjira` | **Rename** | `cmd/lazybitbucket` |
@@ -107,7 +133,8 @@ Everything user-visible is `lazybitbucket`:
 - Config dir resolution (`pkg/config`): `LAZYBITBUCKET_CONFIG_DIR` → `$XDG_CONFIG_HOME/lazybitbucket` →
   `os.UserConfigDir()/lazybitbucket` → `~/.config/lazybitbucket`. Files: `config.yml`, `auth.json` (0600).
 - Env overrides: `BITBUCKET_WORKSPACE`, `BITBUCKET_REPOSITORIES`, `BITBUCKET_EMAIL`, `BITBUCKET_TOKEN`,
-  `BITBUCKET_API_URL`.
+  `BITBUCKET_API_URL`, and `LAZYBITBUCKET_READ_ONLY` (`1|true|yes`, one-way: it can only turn read-only
+  mode on, as can `--read-only`).
 - Packaging: GitHub `lsst25/lazybitbucket`, brew tap `lsst25/homebrew-tap`, AUR `lazybitbucket-bin` and
   `lazybitbucket-git`, nix attr `.#lazybitbucket`, nfpm package `lazybitbucket`.
 - `LICENSE` keeps the upstream copyright notice, and the `CHANGELOG.md` compare links **stay** pointed at
@@ -116,7 +143,9 @@ Everything user-visible is `lazybitbucket`:
 Auth: Atlassian removed app passwords on 2026-07-28. There is no app-password mode. Two credential
 shapes: a token alone (API token or access token) sent as `Authorization: Bearer`, or an Atlassian
 account email plus an API token sent as HTTP Basic — the Basic username must be the **account email**,
-not a Bitbucket username, or the server answers 401.
+not a Bitbucket username, or the server answers 401. The five read scopes cover browsing; the write
+actions additionally want `write:pullrequest:bitbucket` (merging included),
+which read-only mode makes unnecessary.
 
 ## Conventions
 

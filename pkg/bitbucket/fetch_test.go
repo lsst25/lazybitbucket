@@ -122,6 +122,30 @@ func (s *stubClient) GetPipelineStepLog(
 	return "", nil
 }
 
+func (s *stubClient) MergePullRequest(
+	context.Context, string, string, int, MergeOptions,
+) (MergeResult, error) {
+	return MergeResult{PullRequest: nil, TaskURL: ""}, nil
+}
+
+func (s *stubClient) GetMergeTaskStatus(context.Context, string) (MergeTaskStatus, error) {
+	return MergeTaskStatus{Status: "", MergeResult: nil}, nil
+}
+
+func (s *stubClient) UpdatePullRequest(
+	context.Context, string, string, int, PullRequestUpdate,
+) (*PullRequest, error) {
+	return nil, nil
+}
+
+func (s *stubClient) ListEffectiveDefaultReviewers(context.Context, string, string) ([]Account, error) {
+	return nil, nil
+}
+
+func (s *stubClient) ListWorkspaceMembers(context.Context, string, ListOptions) ([]Account, error) {
+	return nil, nil
+}
+
 func (s *stubClient) SetOnRequest(func(RequestLog)) {}
 
 func noOptions() ListPullRequestsOptions {

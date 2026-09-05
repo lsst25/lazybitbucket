@@ -35,7 +35,8 @@ var (
 // userAgent identifies this build to the Bitbucket API.
 func userAgent() string { return "lazybitbucket/" + version }
 
-// makeClient builds a read-only Bitbucket client for the given credentials.
+// makeClient builds a Bitbucket client for the given credentials, refusing
+// every write when the configuration asks for read-only (browse-only) mode.
 // Basic auth is used when authMethod is "basic", or when it is unset and an
 // email is present; every other combination sends the token as a Bearer, so an
 // explicit "bearer" ignores a stray email left over in the config file.
@@ -49,6 +50,7 @@ func makeClient(cfg *config.Config, authMethod, email, token string) *bitbucket.
 		Token:     token,
 		Email:     email,
 		UserAgent: userAgent(),
+		ReadOnly:  cfg.Bitbucket.ReadOnly,
 	})
 }
 
@@ -239,6 +241,11 @@ func printTokenHelp() {
 	fmt.Println("    read:pipeline:bitbucket")
 	fmt.Println("    read:user:bitbucket")
 	fmt.Println("    read:workspace:bitbucket")
+	fmt.Println("  Merging and editing a pull request need one more:")
+	fmt.Println("    write:pullrequest:bitbucket   (title, description, reviewers, draft, merge)")
+	fmt.Println("  Leave it off and every read still works; a write comes back 403. Read-only")
+	fmt.Println("  mode (--read-only, or bitbucket.readOnly) does not need it and refuses writes")
+	fmt.Println("  before they are sent.")
 	fmt.Println("  A repository, project or workspace access token works too; it just cannot")
 	fmt.Println("  read the current user, so the Mine and Reviewing tabs stay empty.")
 	fmt.Println()

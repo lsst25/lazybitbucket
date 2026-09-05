@@ -198,3 +198,86 @@ func TestFakeClient_ReviewMethodsRecordTheirArguments(t *testing.T) {
 	testkit.AssertEqual(t, "diff context", fake.GetPullRequestDiffCalls[0].Opts.Context, 5)
 	testkit.AssertEqual(t, "diff url", fake.GetPullRequestDiffCalls[0].Opts.DiffURL, "https://api.example/diff")
 }
+
+func TestFakeClient_RecordsWriteCalls(t *testing.T) {
+	t.Parallel()
+
+	const (
+		prID    = 101
+		taskURL = "https://api.example/2.0/repositories/acme/api-gateway/pullrequests/101/merge/task-status/t-1"
+	)
+	merged := &bitbucket.PullRequest{ID: prID, State: bitbucket.PullRequestMerged}
+
+	fake := &FakeClient{T: t}
+	fake.MergePullRequestFunc = func(_ context.Context, _, _ string, _ int,
+		_ bitbucket.MergeOptions,
+	) (bitbucket.MergeResult, error) {
+		return bitbucket.MergeResult{PullRequest: nil, TaskURL: taskURL}, nil
+	}
+	fake.GetMergeTaskStatusFunc = func(_ context.Context, _ string) (bitbucket.MergeTaskStatus, error) {
+		return bitbucket.MergeTaskStatus{Status: bitbucket.MergeTaskSuccess, MergeResult: merged}, nil
+	}
+	fake.UpdatePullRequestFunc = func(_ context.Context, _, _ string, _ int,
+		_ bitbucket.PullRequestUpdate,
+	) (*bitbucket.PullRequest, error) {
+		return merged, nil
+	}
+	fake.ListEffectiveDefaultReviewersFunc = func(_ context.Context, _, _ string) ([]bitbucket.Account, error) {
+		return []bitbucket.Account{{DisplayName: "Grace Hopper"}}, nil
+	}
+	fake.ListWorkspaceMembersFunc = func(_ context.Context, _ string,
+		_ bitbucket.ListOptions,
+	) ([]bitbucket.Account, error) {
+		return []bitbucket.Account{{DisplayName: "Ada Lovelace"}, {DisplayName: "Linus Torvalds"}}, nil
+	}
+
+	ctx := t.Context()
+	closeBranch := true
+	title := "Rate limit the gateway"
+
+	result, err := fake.MergePullRequest(ctx, testWorkspace, testRepo, prID, bitbucket.MergeOptions{
+		Strategy: bitbucket.MergeSquash, CloseSourceBranch: &closeBranch, Message: "ship it",
+	})
+	if err != nil {
+		t.Fatalf("MergePullRequest: %v", err)
+	}
+	task, err := fake.GetMergeTaskStatus(ctx, result.TaskURL)
+	if err != nil {
+		t.Fatalf("GetMergeTaskStatus: %v", err)
+	}
+	updated, err := fake.UpdatePullRequest(ctx, testWorkspace, testRepo, prID, bitbucket.PullRequestUpdate{
+		Title: &title, Description: nil, Draft: nil, Reviewers: []string{"{uuid}"},
+	})
+	if err != nil {
+		t.Fatalf("UpdatePullRequest: %v", err)
+	}
+	defaults, err := fake.ListEffectiveDefaultReviewers(ctx, testWorkspace, testRepo)
+	if err != nil {
+		t.Fatalf("ListEffectiveDefaultReviewers: %v", err)
+	}
+	members, err := fake.ListWorkspaceMembers(ctx, testWorkspace, bitbucket.ListOptions{MaxItems: 500})
+	if err != nil {
+		t.Fatalf("ListWorkspaceMembers: %v", err)
+	}
+
+	testkit.AssertEqual(t, "task url", result.TaskURL, taskURL)
+	testkit.AssertEqual(t, "task status", task.Status, bitbucket.MergeTaskSuccess)
+	testkit.AssertEqual(t, "updated id", updated.ID, prID)
+	testkit.AssertEqual(t, "default reviewers", len(defaults), 1)
+	testkit.AssertEqual(t, "members", len(members), 2)
+
+	testkit.AssertEqual(t, "MergePullRequest", fake.CallCount("MergePullRequest"), 1)
+	testkit.AssertEqual(t, "GetMergeTaskStatus", fake.CallCount("GetMergeTaskStatus"), 1)
+	testkit.AssertEqual(t, "UpdatePullRequest", fake.CallCount("UpdatePullRequest"), 1)
+	testkit.AssertEqual(t, "ListEffectiveDefaultReviewers", fake.CallCount("ListEffectiveDefaultReviewers"), 1)
+	testkit.AssertEqual(t, "ListWorkspaceMembers", fake.CallCount("ListWorkspaceMembers"), 1)
+
+	testkit.AssertEqual(t, "merge strategy", fake.MergePullRequestCalls[0].Opts.Strategy, bitbucket.MergeSquash)
+	testkit.AssertEqual(t, "merge message", fake.MergePullRequestCalls[0].Opts.Message, "ship it")
+	testkit.AssertEqual(t, "merge pull request", fake.MergePullRequestCalls[0].ID, prID)
+	testkit.AssertEqual(t, "task url recorded", fake.GetMergeTaskStatusCalls[0].TaskURL, taskURL)
+	testkit.AssertEqual(t, "update title", *fake.UpdatePullRequestCalls[0].Update.Title, title)
+	testkit.AssertEqual(t, "update reviewers", len(fake.UpdatePullRequestCalls[0].Update.Reviewers), 1)
+	testkit.AssertEqual(t, "default reviewers repo", fake.ListEffectiveDefaultReviewersCalls[0].RepoSlug, testRepo)
+	testkit.AssertEqual(t, "members max items", fake.ListWorkspaceMembersCalls[0].Opts.MaxItems, 500)
+}

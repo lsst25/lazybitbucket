@@ -11,8 +11,10 @@ const (
 	testReviewerUUID = "{b6b5d0ff-32d1-4e3c-816a-9253437180ca}"
 	testOtherUUID    = "{781a664d-34db-4bc7-9c0d-bd3716d0d1de}"
 
-	testMethod = "GET"
-	testPath   = "/repositories/acme/api-gateway/pullrequests/9"
+	testMethod     = "GET"
+	testMethodPost = "POST"
+	testMethodPut  = "PUT"
+	testPath       = "/repositories/acme/api-gateway/pullrequests/9"
 )
 
 // Credentials the client tests build their ClientOpts from.
@@ -56,6 +58,31 @@ const (
 )
 
 const contentTypeText = "text/plain"
+
+// Write endpoint paths, all on the same pull request the read fixtures use.
+const (
+	testMergePath            = testPath + "/merge"
+	testTaskPath             = testMergePath + "/task-status/t-9"
+	testDefaultReviewersPath = testRepoPath + "/effective-default-reviewers"
+	testMembersPath          = "/workspaces/acme/members"
+)
+
+// contentTypeHeader is the header a JSON body must carry.
+const contentTypeHeader = "Content-Type"
+
+// writePRFixture is the smallest pull request body a write endpoint answers
+// with: enough to prove the response was decoded, not the whole document.
+const writePRFixture = `{
+  "type": "pullrequest",
+  "id": 9,
+  "title": "Add rate limiting",
+  "state": "MERGED",
+  "draft": false,
+  "destination": {
+    "branch": {"name": "main"},
+    "repository": {"type": "repository", "name": "api-gateway", "full_name": "acme/api-gateway"}
+  }
+}`
 
 // authorizationHeader is the header the same-host redirect must preserve.
 const authorizationHeader = "Authorization"

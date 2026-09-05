@@ -54,6 +54,59 @@ func TestStatusPanel_SetOnline_TogglesTheIndicator(t *testing.T) {
 	}
 }
 
+func TestStatusPanel_SetReadOnly_MarksTheIdentityLine(t *testing.T) {
+	t.Parallel()
+	panel := makeStatusPanel()
+
+	if strings.Contains(stripANSI(panel.View()), "read-only") {
+		t.Error("a writable session says nothing about read-only mode")
+	}
+
+	panel.SetReadOnly(true)
+	out := stripANSI(panel.View())
+	if !strings.Contains(out, testUser+" → "+testWorkspace+" · read-only") {
+		t.Errorf("View() = %q, want the marker on the identity line", out)
+	}
+	// It shares the first line rather than adding one, so the panel keeps its
+	// height and the app's row reservation stays right.
+	testkit.AssertEqual(t, "lines", strings.Count(out, "read-only"), 1)
+}
+
+func TestStatusPanel_SetReadOnly_KeepsTheMarkerWholeOnANarrowPanel(t *testing.T) {
+	t.Parallel()
+	// An 80-column terminal gives the side panel 28 columns, which is where the
+	// marker used to be truncated away because it shared the account's budget.
+	cases := []struct {
+		name  string
+		width int
+		want  string
+	}{
+		{"side panel of an 80 column terminal", 28, " · read-only"},
+		{"too narrow for the long marker", 16, " ·ro"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			panel := NewStatusPanel(testRepo, testUser, testWorkspace)
+			panel.SetSize(tc.width, 6)
+			panel.SetReadOnly(true)
+
+			out := stripANSI(panel.View())
+			if !strings.Contains(out, tc.want) {
+				t.Errorf("View() = %q, want the marker %q intact", out, tc.want)
+			}
+			if strings.Contains(out, "read-…") {
+				t.Errorf("View() = %q, want no sliced marker", out)
+			}
+			for _, line := range strings.Split(panel.View(), "\n") {
+				if got := lipgloss.Width(line); got > tc.width {
+					t.Errorf("line %q is %d columns wide, want at most %d", stripANSI(line), got, tc.width)
+				}
+			}
+		})
+	}
+}
+
 func TestStatusPanel_SetError_ShowsAndOutranksTheWarning(t *testing.T) {
 	t.Parallel()
 	panel := makeStatusPanel()

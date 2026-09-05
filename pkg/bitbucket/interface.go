@@ -40,9 +40,16 @@ type RequestLog struct {
 	RateLimitRemaining int
 }
 
-// ClientInterface is the read-only Bitbucket Cloud API surface the TUI depends
-// on. Every method takes workspace and repoSlug explicitly: the client is not
-// bound to a workspace. There are deliberately no write methods.
+// ClientInterface is the Bitbucket Cloud API surface the TUI depends on. Every
+// method takes workspace and repoSlug explicitly: the client is not bound to a
+// workspace.
+//
+// Most of it is reads. The write methods are exactly five — MergePullRequest,
+// GetMergeTaskStatus (the poll a queued merge needs), UpdatePullRequest, and the
+// two candidate listings the reviewer picker feeds on — and every one of them
+// fails with ErrReadOnly, before a request is built, on a client constructed
+// with ClientOpts.ReadOnly. Approving, declining, commenting and triggering
+// pipelines are still deliberately absent.
 type ClientInterface interface {
 	GetCurrentUser(ctx context.Context) (*Account, error)
 	GetWorkspace(ctx context.Context, workspace string) (*Workspace, error)
@@ -61,6 +68,22 @@ type ClientInterface interface {
 	GetPipeline(ctx context.Context, workspace, repoSlug, pipelineRef string) (*Pipeline, error)
 	ListPipelineSteps(ctx context.Context, workspace, repoSlug, pipelineRef string) ([]PipelineStep, error)
 	GetPipelineStepLog(ctx context.Context, workspace, repoSlug, pipelineRef, stepUUID string, opts StepLogOptions) (string, error)
+	// MergePullRequest merges the pull request. Bitbucket answers either with
+	// the merged pull request or, for a merge it queued, a task URL to poll.
+	MergePullRequest(ctx context.Context, workspace, repoSlug string, id int, opts MergeOptions) (MergeResult, error)
+	// GetMergeTaskStatus polls a queued merge. taskURL is MergeResult.TaskURL
+	// and must be on the API host.
+	GetMergeTaskStatus(ctx context.Context, taskURL string) (MergeTaskStatus, error)
+	// UpdatePullRequest changes title, description, draft state and reviewers,
+	// and returns the pull request as the server left it. The update must carry
+	// the complete reviewer set — see PullRequestUpdate.Reviewers.
+	UpdatePullRequest(ctx context.Context, workspace, repoSlug string, id int, update PullRequestUpdate) (*PullRequest, error)
+	// ListEffectiveDefaultReviewers returns the repository's default reviewers,
+	// project-inherited ones included. A 403 here is not fatal to the caller.
+	ListEffectiveDefaultReviewers(ctx context.Context, workspace, repoSlug string) ([]Account, error)
+	// ListWorkspaceMembers returns the workspace's accounts, bounded by
+	// opts.MaxItems (0 means 500).
+	ListWorkspaceMembers(ctx context.Context, workspace string, opts ListOptions) ([]Account, error)
 	// SetOnRequest installs the request hook. Implementations may call it from
 	// several goroutines concurrently (FetchPullRequests fans out), so the hook
 	// must be goroutine-safe.

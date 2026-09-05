@@ -74,6 +74,13 @@ type BitbucketConfig struct {
 	Email        string   `yaml:"email"`
 	Token        string   `yaml:"-"`
 	BaseURL      string   `yaml:"baseUrl"`
+	// ReadOnly refuses every request that would modify Bitbucket: the API
+	// client fails a non-GET request with bitbucket.ErrReadOnly before any
+	// socket is opened, and the TUI hides and refuses the write keys. It is
+	// browse-only mode, so it also blocks the sync action (which pushes).
+	// Turned on by `bitbucket.readOnly: true`, the --read-only flag or
+	// LAZYBITBUCKET_READ_ONLY=1|true|yes; none of them can turn it off.
+	ReadOnly bool `yaml:"readOnly"`
 }
 
 type CustomCommandConfig struct {
@@ -202,6 +209,9 @@ type UniversalKeys struct {
 	FocusRepos        string `yaml:"focusRepos"`
 }
 
+// PullRequestKeys are the keys active with a pull request selected, in the
+// pull request list or the detail panel. The five write actions at the bottom
+// are refused in read-only mode (BitbucketConfig.ReadOnly).
 type PullRequestKeys struct {
 	Select     string `yaml:"select"`
 	Open       string `yaml:"open"`
@@ -210,6 +220,19 @@ type PullRequestKeys struct {
 	URLPicker  string `yaml:"urlPicker"`
 	CopyURL    string `yaml:"copyURL"`
 	Checkout   string `yaml:"checkout"`
+	// Merge opens the merge dialog (strategy, close source branch, message).
+	// Default: M.
+	Merge string `yaml:"merge"`
+	// Sync opens the sync-with-target-branch dialog, which runs local git.
+	// Default: S.
+	Sync string `yaml:"sync"`
+	// Edit opens the title/description chooser. Default: E.
+	Edit string `yaml:"edit"`
+	// Reviewers opens the reviewer picker. Default: V.
+	Reviewers string `yaml:"reviewers"`
+	// ToggleDraft flips the pull request between draft and ready for review,
+	// after a confirmation. Default: D.
+	ToggleDraft string `yaml:"toggleDraft"`
 }
 
 // DetailKeys are the keys active while the detail panel is focused: panel
@@ -399,6 +422,22 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("BITBUCKET_API_URL"); v != "" {
 		cfg.Bitbucket.BaseURL = v
+	}
+	if truthyEnv(os.Getenv("LAZYBITBUCKET_READ_ONLY")) {
+		cfg.Bitbucket.ReadOnly = true
+	}
+}
+
+// truthyEnv reports whether an environment variable asks for a boolean switch
+// to be turned on. Anything else — including "0", "false", "no" and an unset
+// variable — leaves the config value alone: the read-only switch can only be
+// turned on from the environment, never off.
+func truthyEnv(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
 	}
 }
 

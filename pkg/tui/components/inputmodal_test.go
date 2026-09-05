@@ -302,3 +302,43 @@ func TestInputModal_UpdateInvisibleIsNoop(t *testing.T) {
 	testkit.AssertEqual(t, "still invisible", m2.IsVisible(), false)
 	testkit.AssertEqual(t, "no cmd", cmd == nil, true)
 }
+
+func TestInputModal_HintViewUsesDefaultHintsTitle(t *testing.T) {
+	t.Parallel()
+	m := NewInputModal()
+	m.SetSize(80, 24)
+	m.Show(testTitle, "")
+	m.SetHints([]string{testBranchName1})
+	plain := stripANSI(m.HintView())
+	if !strings.Contains(plain, defaultHintsTitle) {
+		t.Errorf("expected default hints title %q, got %q", defaultHintsTitle, plain)
+	}
+}
+
+func TestInputModal_SetHintsTitleOverridesTheTitle(t *testing.T) {
+	t.Parallel()
+	m := NewInputModal()
+	m.SetSize(80, 24)
+	m.Show(testTitle, "")
+	m.SetHintsTitle(testHintsTitle)
+	m.SetHints([]string{testBranchName1})
+	plain := stripANSI(m.HintView())
+	if !strings.Contains(plain, testHintsTitle) {
+		t.Errorf("expected hints title %q, got %q", testHintsTitle, plain)
+	}
+	if strings.Contains(plain, defaultHintsTitle) {
+		t.Errorf("default title should be replaced, got %q", plain)
+	}
+}
+
+func TestInputModal_ZeroValueFallsBackToDefaultHintsTitle(t *testing.T) {
+	t.Parallel()
+	var m InputModal
+	m.SetSize(80, 24)
+	m.Show(testTitle, "")
+	m.SetHints([]string{testBranchName1})
+	plain := stripANSI(m.HintView())
+	if !strings.Contains(plain, defaultHintsTitle) {
+		t.Errorf("expected default hints title on a zero value modal, got %q", plain)
+	}
+}

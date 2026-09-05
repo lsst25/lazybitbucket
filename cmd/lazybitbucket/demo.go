@@ -30,6 +30,7 @@ func startDemo(cfg *config.Config) (bitbucket.ClientInterface, tui.AuthMethod, f
 		BaseURL:   srv.URL,
 		Token:     "demo-token",
 		UserAgent: userAgent(),
+		ReadOnly:  cfg.Bitbucket.ReadOnly,
 	})
 	return client, tui.AuthDemo, func() { _ = srv.Close() }, nil
 }

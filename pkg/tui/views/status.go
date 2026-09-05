@@ -22,6 +22,14 @@ const rateLimitUnknown = -1
 
 const statusPanelTitle = "[1] Status"
 
+// readOnlyMarker is what the first line gains in read-only mode. It sits on the
+// identity line rather than on a row of its own so the panel keeps its height.
+const readOnlyMarker = " · read-only"
+
+// shortReadOnlyMarker replaces readOnlyMarker on a panel too narrow to hold it.
+// A sliced "read-…" would be worse than an abbreviation the help bar explains.
+const shortReadOnlyMarker = " ·ro"
+
 // StatusPanel is the [1] panel: the connection indicator, the account, what the
 // list is scoped to, and the most recent error, warning or rate-limit note.
 type StatusPanel struct {
@@ -31,6 +39,7 @@ type StatusPanel struct {
 	online    bool
 	errText   string
 	warnText  string
+	readOnly  bool
 	rateLimit int
 	width     int
 	height    int
@@ -57,6 +66,11 @@ func (s *StatusPanel) SetScope(scope string) { s.scope = scope }
 
 // SetOnline toggles the connection indicator.
 func (s *StatusPanel) SetOnline(online bool) { s.online = online }
+
+// SetReadOnly records that the client refuses every write. The panel says so on
+// its first line, next to the account, because it changes what half the
+// keybindings do and has to be visible without opening the help.
+func (s *StatusPanel) SetReadOnly(readOnly bool) { s.readOnly = readOnly }
 
 // SetError sets the global error line; "" clears it.
 func (s *StatusPanel) SetError(err string) { s.errText = err }
@@ -103,17 +117,36 @@ func (s *StatusPanel) View() string {
 	if userLabel == "" {
 		userLabel = s.workspace
 	}
-	// The indicator plus its trailing space is 2 columns and " → " is 3; the
-	// scope gets at most half the panel so a long repository slug cannot crowd
-	// the account out, and both parts are measured in display columns rather
-	// than bytes.
-	scope := components.TruncateEnd(s.scope, max(contentW/2, 8))
-	maxUser := contentW - (2 + 3 + lipgloss.Width(scope))
+	// The indicator plus its trailing space is 2 columns, leaving this much for
+	// the identity line itself.
+	budget := max(contentW-2, 1)
+
+	// The marker is picked first and its width reserved out of every budget it
+	// competes with, so truncation can never slice it: it is appended after the
+	// rest has been cut. It may take at most half the line, degrading to the
+	// short form — and then to nothing — on a panel too narrow for the long one.
+	marker := ""
+	if s.readOnly {
+		half := budget / 2
+		switch {
+		case lipgloss.Width(readOnlyMarker) <= half:
+			marker = readOnlyMarker
+		case lipgloss.Width(shortReadOnlyMarker) <= half:
+			marker = shortReadOnlyMarker
+		}
+	}
+	markerW := lipgloss.Width(marker)
+
+	// " → " is 3 columns; the scope gets at most half of what the marker leaves
+	// so a long repository slug cannot crowd the account out, and every part is
+	// measured in display columns rather than bytes.
+	scope := components.TruncateEnd(s.scope, max((contentW-markerW)/2, 8))
+	maxUser := contentW - (2 + 3 + lipgloss.Width(scope) + markerW)
 	userLabel = components.TruncateMiddle(userLabel, max(maxUser, 3))
 
 	// Truncate the plain text, not the assembled line: the indicator carries
 	// ANSI and TruncateEnd slices runes, which could cut an escape in half.
-	head := components.TruncateEnd(userLabel+" → "+scope, max(contentW-2, 1))
+	head := components.TruncateEnd(userLabel+" → "+scope, max(budget-markerW, 1)) + marker
 	lines := []string{indicator + " " + head}
 
 	switch {

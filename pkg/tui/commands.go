@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -134,6 +135,70 @@ type fileDiffLoadedMsg struct {
 	err  error
 }
 
+// The write messages. Every one of them is keyed by pull request rather than
+// stamped with an epoch: a write answers for the pull request it named, and the
+// handler patches that pull request wherever it is held even when the user has
+// walked off to another one. What the key does gate is the on-screen half —
+// only the previewed pull request's detail pane and review data are refreshed.
+
+// pullRequestWrittenMsg is the result of every merge and every update: the pull
+// request as the server left it, or the error that stopped it. verb is the
+// action's own name, which is what the help bar reports.
+type pullRequestWrittenMsg struct {
+	key  string
+	verb string
+	pr   *bitbucket.PullRequest
+	err  error
+}
+
+// mergeQueuedMsg is a merge Bitbucket answered 202 to: it names the task to
+// poll and how many polls have already been spent on it.
+type mergeQueuedMsg struct {
+	key       string
+	workspace string
+	slug      string
+	id        int
+	taskURL   string
+	attempt   int
+}
+
+// reviewerCandidatesMsg carries the reviewer picker's rows, already ordered and
+// deduplicated. note is the degradation line for a candidate source that could
+// not be listed, which is not fatal — the picker still opens. err is fatal: the
+// current reviewer set could not be read, and a picker that misstates it would
+// unassign people on confirm.
+//
+// pr is set only when the pull request had to be read to establish that set. It
+// is the freshest copy the app has, so the handler keeps it rather than paying
+// for the same request again on the PUT that follows.
+type reviewerCandidatesMsg struct {
+	key        string
+	pr         *bitbucket.PullRequest
+	candidates []reviewerCandidate
+	note       string
+	err        error
+}
+
+// descriptionEditedMsg is delivered when the editor holding a description temp
+// file exits. The path and the text the file started with travel with it so the
+// handler can read the file back, compare and delete it.
+type descriptionEditedMsg struct {
+	key      string
+	path     string
+	original string
+	err      error
+}
+
+// syncDoneMsg is the result of a sync-with-target run: what happened, in the
+// words the help bar shows, plus the branch git ended up on.
+type syncDoneMsg struct {
+	key     string
+	summary string
+	branch  string
+	pushed  bool
+	err     error
+}
+
 // errorMsg is a failure worth interrupting the user for: it opens the error
 // modal as well as marking the status panel offline.
 type errorMsg struct{ err error }
@@ -142,7 +207,12 @@ type errorMsg struct{ err error }
 type autoFetchTickMsg struct{}
 
 // Git messages. There is no branch-creation path: checkout only.
-type gitCheckoutDoneMsg struct{ name string }
+// gitCheckoutDoneMsg reports a finished checkout. note is an extra sentence
+// for the hint bar — the branch was fast-forwarded, or could not be — or "".
+type gitCheckoutDoneMsg struct {
+	name string
+	note string
+}
 type gitErrorMsg struct{ err error }
 
 func autoFetchTick(every time.Duration) tea.Cmd {
@@ -152,27 +222,90 @@ func autoFetchTick(every time.Duration) tea.Cmd {
 // gitCheckoutBranch checks out an existing local branch, or creates a local
 // branch tracking a remote one. It never creates a branch from scratch: the
 // pull request's source branch exists somewhere or the user must fetch.
-func (a *App) gitCheckoutBranch(name string) tea.Cmd {
+// gitCheckoutBranch checks out the pull request's source branch in the
+// checkout lazybitbucket was started in. It fetches that branch first from the
+// remote that points at the pull request's repository, so a branch pushed after
+// the last fetch is found and a local branch that fell behind is fast-forwarded.
+// It never creates a branch from thin air: a name known neither locally nor on
+// that remote is an error.
+func (a *App) gitCheckoutBranch(workspace, slug, branch string) tea.Cmd {
 	repoPath := a.gitRepoPath
 	return func() tea.Msg {
-		switch git.ResolveBranchAction(repoPath, name) {
-		case git.ActionCheckout:
-			if err := git.Checkout(repoPath, name); err != nil {
+		remote, hasRemote := git.RemoteFor(repoPath, workspace, slug)
+		var fetchErr error
+		if hasRemote {
+			fetchErr = git.Fetch(repoPath, remote, branch)
+		}
+		fetched := hasRemote && fetchErr == nil
+		remoteRef := remote + "/" + branch
+
+		switch {
+		case git.BranchExists(repoPath, branch):
+			if err := git.Checkout(repoPath, branch); err != nil {
 				return gitErrorMsg{err: err}
 			}
-			return gitCheckoutDoneMsg{name: name}
-		case git.ActionCheckoutTracking:
-			if err := git.CheckoutTracking(repoPath, name); err != nil {
+			return gitCheckoutDoneMsg{name: branch, note: catchUpNote(repoPath, branch, remote, fetched)}
+		case fetched && git.IsRemoteBranch(repoPath, remoteRef):
+			if err := git.CheckoutTracking(repoPath, remoteRef); err != nil {
 				return gitErrorMsg{err: err}
 			}
-			local := name
-			if _, after, ok := strings.Cut(name, "/"); ok {
+			return gitCheckoutDoneMsg{name: branch, note: ""}
+		case git.IsRemoteBranch(repoPath, branch):
+			// The name already carries its remote (origin/feature).
+			if err := git.CheckoutTracking(repoPath, branch); err != nil {
+				return gitErrorMsg{err: err}
+			}
+			local := branch
+			if _, after, ok := strings.Cut(branch, "/"); ok {
 				local = after
 			}
-			return gitCheckoutDoneMsg{name: local}
+			return gitCheckoutDoneMsg{name: local, note: ""}
 		default:
-			return gitErrorMsg{err: errors.New("branch " + name + " not found locally or on a remote — fetch first")}
+			return gitErrorMsg{err: checkoutNotFound(workspace, slug, branch, remote, hasRemote, fetchErr)}
 		}
+	}
+}
+
+// catchUpNote fast-forwards the freshly checked-out local branch onto the
+// remote copy that was just fetched, and says what happened when there is
+// something to say. A branch that is ahead or already equal needs nothing; one
+// that has diverged is left alone, because only the user can decide what to do.
+func catchUpNote(repoPath, branch, remote string, fetched bool) string {
+	remoteRef := remote + "/" + branch
+	if !fetched || !git.IsRemoteBranch(repoPath, remoteRef) {
+		return ""
+	}
+	behind, err := git.IsAncestor(repoPath, "HEAD", remoteRef)
+	if err != nil {
+		return ""
+	}
+	ahead, err := git.IsAncestor(repoPath, remoteRef, "HEAD")
+	if err != nil {
+		return ""
+	}
+	switch {
+	case behind && ahead, ahead:
+		return "" // equal, or the checkout is ahead: nothing to bring in
+	case behind:
+		if err := git.FastForward(repoPath, remoteRef); err != nil {
+			return "could not fast-forward to " + remoteRef + ": " + err.Error()
+		}
+		return "fast-forwarded to " + remoteRef
+	default:
+		return branch + " has diverged from " + remoteRef + " — not updated"
+	}
+}
+
+// checkoutNotFound words the failure of a checkout that found no branch.
+func checkoutNotFound(workspace, slug, branch, remote string, hasRemote bool, fetchErr error) error {
+	switch {
+	case !hasRemote:
+		return errors.New("branch " + branch + " not found locally, and no remote of this checkout points at " +
+			workspace + "/" + slug)
+	case fetchErr != nil && !errors.Is(fetchErr, git.ErrNoRemoteBranch):
+		return fmt.Errorf("fetch %s %s: %w", remote, branch, fetchErr)
+	default:
+		return errors.New("branch " + branch + " not found locally or on " + remote)
 	}
 }
 

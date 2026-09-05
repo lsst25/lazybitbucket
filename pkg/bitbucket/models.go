@@ -394,6 +394,24 @@ func (pr *PullRequest) IsReviewer(uuid string) bool {
 	return false
 }
 
+// ReviewerUUIDs is the braced account UUIDs of the requested reviewers, the
+// shape PullRequestUpdate.Reviewers wants. It returns nil when the payload
+// carried no reviewers at all (a list item without the fields projection), which
+// is not the same as a pull request with none: UpdatePullRequest refuses a nil
+// reviewer set rather than clearing the real one.
+func (pr *PullRequest) ReviewerUUIDs() []string {
+	if pr.Reviewers == nil {
+		return nil
+	}
+	uuids := make([]string, 0, len(pr.Reviewers))
+	for _, reviewer := range pr.Reviewers {
+		if reviewer.UUID != "" {
+			uuids = append(uuids, reviewer.UUID)
+		}
+	}
+	return uuids
+}
+
 // ReviewSummary is the approval rollup shown in the PR list and detail panes.
 type ReviewSummary struct {
 	Reviewers        int // distinct reviewers = Reviewers ∪ participants who reviewed

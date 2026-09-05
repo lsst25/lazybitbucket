@@ -40,9 +40,22 @@ const (
 	sideRight
 )
 
-// onSelectFunc is the callback the modal fires when the user picks an item.
-// Only the URL picker uses it now that every write flow is gone.
+// onSelectFunc is the callback the modal fires when the user picks an item:
+// the URL picker's target, and the title/description chooser behind the edit
+// key.
 type onSelectFunc func(components.ModalItem) tea.Cmd
+
+// onChecklistFunc is the callback the modal fires when a checklist is
+// confirmed. The reviewer picker is its only user.
+type onChecklistFunc func([]components.ModalItem) tea.Cmd
+
+// onFormFunc is the callback the form modal fires on confirm; the message
+// carries the fields with their final values.
+type onFormFunc func(components.FormConfirmedMsg) tea.Cmd
+
+// onInputFunc is the callback the input modal fires on confirm, carrying the
+// text as typed.
+type onInputFunc func(string) tea.Cmd
 
 // statusEntry is one pull request's cached build statuses plus the two
 // timestamps the staleness rule reads: the pull request's UpdatedOn as it was
@@ -77,9 +90,38 @@ type App struct {
 	helpBar   components.HelpBar
 	searchBar components.SearchBar
 	modal     components.Modal
+	form      components.FormModal
+	input     components.InputModal
 	overlays  components.OverlayStack
 
-	onSelect onSelectFunc
+	// The four result slots, one per overlay shape. Each is armed from the
+	// moment its overlay opens until that overlay's result message is
+	// dispatched — a hop longer than the overlay is on screen — and nilled on
+	// use and on every cancel, so a stale callback can never fire against a
+	// pull request the user has left. See App.overlayArmed.
+	onSelect    onSelectFunc
+	onChecklist onChecklistFunc
+	onForm      onFormFunc
+	onInput     onInputFunc
+
+	// onFormID is the id of the dialog onForm was armed for. A form result
+	// carries the id of the form that produced it, so one that outlived its
+	// dialog is dropped rather than answered by whatever is armed now.
+	onFormID string
+
+	// readOnly mirrors cfg.Bitbucket.ReadOnly: the write keys refuse to open
+	// anything and the status panel says so.
+	readOnly bool
+
+	// writesInFlight maps a pull request key to the verb of the write running
+	// against it, so a second M or D on the same pull request is refused rather
+	// than racing the first.
+	writesInFlight map[string]string
+
+	// descriptionEditPath is the temp file the description editor is working
+	// on, held across the suspension so the finish handler reads back a path
+	// this process wrote rather than one that travelled through a message.
+	descriptionEditPath string
 
 	side      focusSide
 	leftFocus focusPanel
@@ -153,10 +195,15 @@ type App struct {
 	// that repository's working tree root, which is what a diff path has to be
 	// resolved against. Neither is checked against the pull request's own
 	// repository — nothing maps one to the other.
-	gitRepoPath   string
-	gitRepoRoot   string
-	gitBranch     string
-	gitAutoSelect bool
+	gitRepoPath string
+	gitRepoRoot string
+	gitBranch   string
+	// gitRemoteRepos is the lower-cased "workspace/slug" of every remote of the
+	// checkout lazybitbucket was started in; autoScoped records that the list
+	// was narrowed to one of them once, so the user's later choice is kept.
+	gitRemoteRepos []string
+	autoScoped     bool
+	gitAutoSelect  bool
 
 	renderer views.MarkdownRenderer
 	// now is the clock and debounce the selection debounce window. Both are
@@ -220,35 +267,39 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 	logFlag := new(atomic.Bool)
 
 	app := &App{
-		cfg:           cfg,
-		client:        client,
-		keymap:        KeymapFromConfig(cfg.Keybinding),
-		statusPanel:   statusPanel,
-		prList:        prList,
-		buildsPanel:   views.NewBuildsPanel(),
-		repoList:      views.NewRepoList(),
-		detailView:    views.NewDetailView(renderer, views.ChromaStyleFor(glamourStyle)),
-		logPanel:      logPanel,
-		helpBar:       components.NewHelpBar(nil),
-		searchBar:     components.NewSearchBar(),
-		modal:         components.NewModal(),
-		side:          sideLeft,
-		leftFocus:     focusPullRequests,
-		logFlag:       logFlag,
-		demoMode:      authMethod == AuthDemo,
-		exec:          execExternal,
-		workspace:     workspace,
-		repoSlugs:     append([]string(nil), cfg.Bitbucket.Repositories...),
-		merged:        make(map[string][]bitbucket.PullRequest),
-		inFlight:      make(map[string]bool),
-		prCache:       make(map[string]*bitbucket.PullRequest),
-		statusCache:   make(map[string]statusEntry),
-		pipelineCache: make(map[string]*pipelineEntry),
-		diffStatCache: make(map[string]reviewEntry[[]bitbucket.DiffStatEntry]),
-		commitsCache:  make(map[string]reviewEntry[[]bitbucket.Commit]),
-		threadsCache:  make(map[string]reviewEntry[[]bitbucket.Thread]),
-		fileDiffCache: make(map[string]reviewEntry[*diff.File]),
-		renderer:      renderer,
+		cfg:            cfg,
+		client:         client,
+		keymap:         KeymapFromConfig(cfg.Keybinding),
+		statusPanel:    statusPanel,
+		prList:         prList,
+		buildsPanel:    views.NewBuildsPanel(),
+		repoList:       views.NewRepoList(),
+		detailView:     views.NewDetailView(renderer, views.ChromaStyleFor(glamourStyle)),
+		logPanel:       logPanel,
+		helpBar:        components.NewHelpBar(nil),
+		searchBar:      components.NewSearchBar(),
+		modal:          components.NewModal(),
+		form:           components.NewFormModal(),
+		input:          components.NewInputModal(),
+		readOnly:       cfg.Bitbucket.ReadOnly,
+		side:           sideLeft,
+		leftFocus:      focusPullRequests,
+		logFlag:        logFlag,
+		demoMode:       authMethod == AuthDemo,
+		exec:           execExternal,
+		workspace:      workspace,
+		repoSlugs:      append([]string(nil), cfg.Bitbucket.Repositories...),
+		merged:         make(map[string][]bitbucket.PullRequest),
+		inFlight:       make(map[string]bool),
+		prCache:        make(map[string]*bitbucket.PullRequest),
+		statusCache:    make(map[string]statusEntry),
+		pipelineCache:  make(map[string]*pipelineEntry),
+		diffStatCache:  make(map[string]reviewEntry[[]bitbucket.DiffStatEntry]),
+		commitsCache:   make(map[string]reviewEntry[[]bitbucket.Commit]),
+		threadsCache:   make(map[string]reviewEntry[[]bitbucket.Thread]),
+		fileDiffCache:  make(map[string]reviewEntry[*diff.File]),
+		writesInFlight: make(map[string]string),
+		renderer:       renderer,
 	}
 	// The callback runs on whatever goroutine executes the command, and several
 	// request goroutines may run it at once, so it may only touch the log panel
@@ -292,7 +343,10 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 		app.statusPanel.SetError(warning)
 	}
 
-	app.overlays = components.OverlayStack{&app.modal}
+	// Order is priority: the form and the input are only ever open on their
+	// own, and the modal is what the other two are opened from.
+	app.overlays = components.OverlayStack{&app.modal, &app.form, &app.input}
+	app.statusPanel.SetReadOnly(app.readOnly)
 
 	if interval, err := cfg.ResolveRefreshInterval(); err == nil {
 		app.refreshEvery = interval
@@ -313,6 +367,7 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 			if branch, err := git.CurrentBranch(cwd); err == nil && branch != "" {
 				app.gitBranch = branch
 			}
+			app.gitRemoteRepos = git.RemoteRepositories(cwd)
 		}
 	}
 
@@ -495,6 +550,27 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleModalSelected(msg)
 	case components.ModalCancelledMsg:
 		return a.handleModalCancelled()
+	case components.ChecklistConfirmedMsg:
+		return a.handleChecklistConfirmed(msg)
+	case components.FormConfirmedMsg:
+		return a.handleFormConfirmed(msg)
+	case components.FormCancelledMsg:
+		return a.handleFormCancelled(msg)
+	case components.InputConfirmedMsg:
+		return a.handleInputConfirmed(msg)
+	case components.InputCancelledMsg:
+		return a.handleInputCancelled()
+
+	case pullRequestWrittenMsg:
+		return a.handlePullRequestWritten(msg)
+	case mergeQueuedMsg:
+		return a.handleMergeQueued(msg)
+	case reviewerCandidatesMsg:
+		return a.handleReviewerCandidates(msg)
+	case descriptionEditedMsg:
+		return a.handleDescriptionEdited(msg)
+	case syncDoneMsg:
+		return a.handleSyncDone(msg)
 
 	case customCommandFinishedMsg:
 		return a.handleCustomCommandFinished(msg)
@@ -502,7 +578,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleEditorFinished(msg)
 
 	case gitCheckoutDoneMsg:
-		return a.handleGitBranchSwitch(msg.name)
+		return a.handleGitBranchSwitch(msg.name, msg.note)
 	case gitErrorMsg:
 		a.statusPanel.SetError(msg.err.Error())
 		return a, nil
@@ -628,9 +704,13 @@ func (a *App) renderHelpOverlay(base string) string {
 	return components.Overlay(base, content, a.width, a.height)
 }
 
-func (a *App) handleGitBranchSwitch(name string) (tea.Model, tea.Cmd) {
+func (a *App) handleGitBranchSwitch(name, note string) (tea.Model, tea.Cmd) {
 	a.gitBranch = name
-	a.helpBar.SetStatusMsg("checked out " + name)
+	status := "checked out " + name
+	if note != "" {
+		status += " · " + note
+	}
+	a.helpBar.SetStatusMsg(status)
 	if a.cfg.Git.CloseOnCheckout {
 		return a, tea.Quit
 	}

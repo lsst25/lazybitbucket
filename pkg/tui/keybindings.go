@@ -88,6 +88,37 @@ func (a *App) reviewTabBindings() []Binding {
 	return nil
 }
 
+// writeBindings are the five keys that change the pull request on Bitbucket.
+// They are omitted entirely in read-only mode: a key that answers "read-only
+// mode" is not a keybinding worth listing.
+func (a *App) writeBindings() []Binding {
+	if a.readOnly {
+		return nil
+	}
+	return []Binding{
+		a.bind(ActMerge, "merge the pull request"),
+		a.bind(ActSync, "sync the source branch with the target"),
+		a.bind(ActEdit, "edit the title or description"),
+		a.bind(ActReviewers, "set the reviewers"),
+		a.bind(ActToggleDraft, "toggle draft state"),
+	}
+}
+
+// writeHelpItems is the write half of the pull request help strip.
+func (a *App) writeHelpItems() []components.HelpItem {
+	if a.readOnly {
+		return nil
+	}
+	km := a.keymap
+	return []components.HelpItem{
+		{Key: km.Keys(ActMerge), Description: "merge"},
+		{Key: km.Keys(ActSync), Description: "sync"},
+		{Key: km.Keys(ActEdit), Description: "edit"},
+		{Key: km.Keys(ActReviewers), Description: "reviewers"},
+		{Key: km.Keys(ActToggleDraft), Description: "draft"},
+	}
+}
+
 // tabJumpBindings are the four keys that go straight to a pull request tab.
 func (a *App) tabJumpBindings() []Binding {
 	return []Binding{
@@ -125,6 +156,7 @@ func (a *App) ContextBindings() []Binding {
 		case views.ModePullRequest:
 			bindings = append(bindings, a.reviewTabBindings()...)
 			bindings = append(bindings, a.tabJumpBindings()...)
+			bindings = append(bindings, a.writeBindings()...)
 		case views.ModeRepo, views.ModeSplash:
 			bindings = append(bindings,
 				a.bind(ActBrowser, "open in browser"),
@@ -149,6 +181,7 @@ func (a *App) ContextBindings() []Binding {
 			a.bind(ActCheckout, "check out the source branch"),
 			Binding{Key: "[]", Description: "switch tab"},
 		)
+		bindings = append(bindings, a.writeBindings()...)
 		bindings = append(bindings, a.customCommandBindings(config.CtxPullRequests)...)
 		return bindings
 
@@ -191,6 +224,34 @@ func (a *App) helpBarItems() []components.HelpItem {
 			{Key: "/", Description: "filter"},
 			{Key: "esc", Description: "close"},
 		}
+	case a.form.IsVisible() && a.form.IsEditing():
+		return []components.HelpItem{
+			{Key: "enter", Description: "keep"},
+			{Key: "esc", Description: "revert"},
+		}
+	case a.form.IsVisible():
+		return []components.HelpItem{
+			{Key: "j/k", Description: "move"},
+			{Key: "h/l", Description: "change"},
+			{Key: "space", Description: "toggle"},
+			{Key: "enter", Description: "confirm"},
+			{Key: "esc", Description: "cancel"},
+		}
+	case a.input.IsVisible():
+		return []components.HelpItem{
+			{Key: "enter", Description: "confirm"},
+			{Key: "esc", Description: "cancel"},
+		}
+	// The checklist answers to a different set than the picker: space toggles
+	// and enter saves the whole selection. `h` and `q` also cancel — Modal
+	// hard-codes both — but the strip names the one key people look for.
+	case a.modal.IsVisible() && a.modal.IsChecklist():
+		return []components.HelpItem{
+			{Key: "space", Description: "toggle"},
+			{Key: "enter", Description: "save"},
+			{Key: "/", Description: "filter"},
+			{Key: "esc", Description: "cancel"},
+		}
 	case a.modal.IsVisible():
 		return []components.HelpItem{
 			{Key: "/", Description: "search"},
@@ -227,13 +288,17 @@ func (a *App) helpBarItems() []components.HelpItem {
 
 	switch a.leftFocus {
 	case focusPullRequests:
-		return a.panelHelpItems(config.CtxPullRequests,
+		writes := a.writeHelpItems()
+		head := make([]components.HelpItem, 0, 5+len(writes))
+		head = append(head,
 			components.HelpItem{Key: km.Keys(ActOpen), Description: "detail"},
 			components.HelpItem{Key: km.Keys(ActBrowser), Description: "browser"},
 			components.HelpItem{Key: km.Keys(ActCopyURL), Description: "copy url"},
 			components.HelpItem{Key: km.Keys(ActCheckout), Description: "checkout"},
 			components.HelpItem{Key: "[]", Description: "tabs"},
 		)
+		head = append(head, writes...)
+		return a.panelHelpItems(config.CtxPullRequests, head...)
 	case focusBuilds:
 		return a.panelHelpItems(config.CtxBuilds,
 			components.HelpItem{Key: km.Keys(ActOpen), Description: "pipeline"},

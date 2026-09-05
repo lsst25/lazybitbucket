@@ -7,6 +7,7 @@ const (
 	envEmail        = "BITBUCKET_EMAIL"
 	envToken        = "BITBUCKET_TOKEN"
 	envAPIURL       = "BITBUCKET_API_URL"
+	envReadOnly     = "LAZYBITBUCKET_READ_ONLY"
 
 	configFileName = "config.yml"
 

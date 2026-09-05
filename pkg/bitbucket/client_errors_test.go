@@ -2,6 +2,7 @@ package bitbucket
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -148,6 +149,48 @@ func TestClient_AllMethodsPropagateHTTPErrors(t *testing.T) {
 			},
 			wantErr: "get step log acme/api-gateway " + testPipelineUUID + " {9520b082}",
 		},
+		{
+			name: "MergePullRequest",
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.MergePullRequest(ctx, testWorkspace, testRepoSlug, 101,
+					MergeOptions{Strategy: MergeSquash, CloseSourceBranch: nil, Message: ""})
+				return err
+			},
+			wantErr: "merge acme/api-gateway#101",
+		},
+		{
+			name: "GetMergeTaskStatus",
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.GetMergeTaskStatus(ctx, client.BaseURL()+testTaskPath)
+				return err
+			},
+			wantErr: "get merge task status",
+		},
+		{
+			name: "UpdatePullRequest",
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.UpdatePullRequest(ctx, testWorkspace, testRepoSlug, 101,
+					PullRequestUpdate{Title: stringPtr("t"), Description: nil, Draft: nil, Reviewers: []string{}})
+				return err
+			},
+			wantErr: "update acme/api-gateway#101",
+		},
+		{
+			name: "ListEffectiveDefaultReviewers",
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.ListEffectiveDefaultReviewers(ctx, testWorkspace, testRepoSlug)
+				return err
+			},
+			wantErr: "list default reviewers acme/api-gateway",
+		},
+		{
+			name: "ListWorkspaceMembers",
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.ListWorkspaceMembers(ctx, testWorkspace, ListOptions{MaxItems: 0})
+				return err
+			},
+			wantErr: "list workspace members acme",
+		},
 	}
 
 	for _, tt := range tests {
@@ -169,4 +212,128 @@ func TestClient_AllMethodsPropagateHTTPErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A read-only client must refuse every write before it opens a socket. The
+// server here fails the test if it is ever reached, so "no request was made" is
+// asserted by construction rather than by counting.
+func TestClient_ReadOnlyRefusesEveryWriteWithoutARequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		invoke func(ctx context.Context, client *Client) error
+	}{
+		{
+			name: "MergePullRequest",
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.MergePullRequest(ctx, testWorkspace, testRepoSlug, testPRID,
+					MergeOptions{Strategy: MergeCommit, CloseSourceBranch: truthy(), Message: "no"})
+				return err
+			},
+		},
+		{
+			name: "UpdatePullRequest",
+			invoke: func(ctx context.Context, client *Client) error {
+				_, err := client.UpdatePullRequest(ctx, testWorkspace, testRepoSlug, testPRID,
+					PullRequestUpdate{
+						Title: stringPtr("no"), Description: stringPtr("no"),
+						Draft: truthy(), Reviewers: []string{testReviewerUUID},
+					})
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tt.invoke(t.Context(), readOnlyClient(t))
+			if !IsReadOnly(err) {
+				t.Fatalf("error = %v, want ErrReadOnly", err)
+			}
+			if !errors.Is(err, ErrReadOnly) {
+				t.Errorf("errors.Is(err, ErrReadOnly) = false for %v", err)
+			}
+		})
+	}
+}
+
+// do is the last line of defence: even a write helper that forgot to check
+// read-only mode must not reach the transport.
+func TestClient_ReadOnlyGuardSitsInDo(t *testing.T) {
+	t.Parallel()
+
+	client := readOnlyClient(t)
+	spec := requestSpec{
+		method:       http.MethodPost,
+		fullURL:      client.BaseURL() + testMergePath,
+		relPath:      testMergePath,
+		accept:       contentTypeJSON,
+		contentType:  contentTypeJSON,
+		body:         []byte("{}"),
+		extraHeaders: nil,
+	}
+
+	resp, err := client.do(t.Context(), client.HTTPClient(), spec)
+	if !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("do() error = %v, want ErrReadOnly", err)
+	}
+	testkit.AssertEqual(t, "status", resp.status, 0)
+}
+
+// Reads are untouched by read-only mode: it is "browse only", not "do nothing".
+func TestClient_ReadOnlyStillAllowsReads(t *testing.T) {
+	t.Parallel()
+
+	opts := bearerOpts()
+	opts.ReadOnly = true
+	client, _ := newRecordingClient(t, opts, testkit.StubResponse{Status: http.StatusOK, Body: accountFixture})
+
+	account, err := client.GetCurrentUser(t.Context())
+	if err != nil {
+		t.Fatalf("GetCurrentUser() error = %v", err)
+	}
+	testkit.AssertEqual(t, "DisplayName", account.DisplayName, "Ada Lovelace")
+	testkit.AssertEqual(t, "ReadOnly()", client.ReadOnly(), true)
+}
+
+// The log panel and every APIError must name the verb that actually went out,
+// or a failed merge reads as a failed GET.
+func TestClient_RequestLogAndErrorsCarryTheRealVerb(t *testing.T) {
+	t.Parallel()
+
+	var logs []RequestLog
+	client, _ := writeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, http.StatusNotFound, errorEnvelope("Pull request not found"))
+	})
+	client.SetOnRequest(func(entry RequestLog) { logs = append(logs, entry) })
+
+	_, err := client.UpdatePullRequest(t.Context(), testWorkspace, testRepoSlug, testPRID,
+		PullRequestUpdate{Title: stringPtr("x"), Description: nil, Draft: nil, Reviewers: []string{}})
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error %v is not an *APIError", err)
+	}
+	testkit.AssertEqual(t, "APIError.Method", apiErr.Method, testMethodPut)
+
+	if len(logs) != 1 {
+		t.Fatalf("RequestLog entries = %d, want 1", len(logs))
+	}
+	testkit.AssertEqual(t, "RequestLog.Method", logs[0].Method, testMethodPut)
+	testkit.AssertEqual(t, "RequestLog.Path", logs[0].Path, testPath)
+	testkit.AssertEqual(t, "RequestLog.Status", logs[0].Status, http.StatusNotFound)
+}
+
+// The default base URL is the real API host, which is why every test in this
+// package points its client at an httptest or demo server instead.
+func TestNewClient_DefaultsToTheRealAPIHost(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient(ClientOpts{
+		BaseURL: "", Token: "", Email: "", UserAgent: "", HTTPClient: nil, ReadOnly: false,
+	})
+	testkit.AssertEqual(t, "BaseURL()", client.BaseURL(), DefaultBaseURL)
 }

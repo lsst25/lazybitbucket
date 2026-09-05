@@ -457,3 +457,53 @@ func stillOnline(app *App) bool {
 func containsPlain(view, want string) bool {
 	return strings.Contains(plain(view), want)
 }
+
+func TestReposLoaded_ScopesToTheRepositoryOfTheCheckout(t *testing.T) {
+	t.Parallel()
+	repos := []bitbucket.Repository{
+		{Slug: testRepo, FullName: testWorkspace + "/" + testRepo},
+		{Slug: testRepo2, FullName: testWorkspace + "/" + testRepo2},
+	}
+
+	t.Run("a remote naming a listed repository narrows the list once", func(t *testing.T) {
+		t.Parallel()
+		app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
+		app.gitRemoteRepos = []string{"acme/web-app"}
+
+		_, _ = app.Update(reposLoadedMsg{repos: repos})
+
+		testkit.AssertEqual(t, "repo filter", app.repoFilter, testRepo2)
+		testkit.AssertEqual(t, "active slug", app.repoList.ActiveSlug(), testRepo2)
+		if got := plain(app.helpBar.View()); !strings.Contains(got, "showing "+testRepo2) {
+			t.Errorf("help bar = %q, want the scope note", got)
+		}
+
+		// The user widens the view; a later refresh of the repository list
+		// must not narrow it again.
+		app.repoFilter = ""
+		app.prList.SetRepoFilter("")
+		_, _ = app.Update(reposLoadedMsg{repos: repos})
+		testkit.AssertEqual(t, "repo filter after widening", app.repoFilter, "")
+	})
+
+	t.Run("an unrelated checkout changes nothing", func(t *testing.T) {
+		t.Parallel()
+		app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
+		app.gitRemoteRepos = []string{"someone/else"}
+
+		_, _ = app.Update(reposLoadedMsg{repos: repos})
+
+		testkit.AssertEqual(t, "repo filter", app.repoFilter, "")
+	})
+
+	t.Run("a filter the user already set is kept", func(t *testing.T) {
+		t.Parallel()
+		app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
+		app.gitRemoteRepos = []string{"acme/web-app"}
+		app.repoFilter = testRepo
+
+		_, _ = app.Update(reposLoadedMsg{repos: repos})
+
+		testkit.AssertEqual(t, "repo filter", app.repoFilter, testRepo)
+	})
+}

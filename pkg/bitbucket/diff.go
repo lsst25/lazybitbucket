@@ -109,14 +109,14 @@ func (c *Client) fetchDiffViaRedirect(ctx context.Context, relPath string, query
 	if len(query) > 0 {
 		probeURL += "?" + query.Encode()
 	}
-	probe, err := c.do(ctx, c.noRedirectClient(), probeURL, relPath, acceptText, nil)
+	probe, err := c.do(ctx, c.noRedirectClient(), getSpec(probeURL, relPath, acceptText, nil))
 	if err != nil {
 		return nil, err
 	}
 	if !isRedirect(probe.status) {
 		// An error status has to keep reading as one: 555 for a diff too large
 		// is the whole reason the diff pane fetches per file.
-		return probe.body, c.statusError(relPath, probe)
+		return probe.body, c.statusError(http.MethodGet, relPath, probe)
 	}
 
 	target, err := c.diffRedirectTarget(c.baseURL+relPath, probe.header.Get("Location"))

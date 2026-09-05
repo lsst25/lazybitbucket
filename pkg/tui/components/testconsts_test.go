@@ -29,6 +29,19 @@ const (
 	testFieldID     = "priority"
 	testBranchName1 = "feat/PROJ-1-add-login"
 	testBranchName2 = "fix/PROJ-2-fix-crash"
+
+	testFormID         = "merge"
+	testFormTitle      = "Merge #101 into main"
+	testConfirmLabel   = "merge"
+	testFieldStrategy  = "strategy"
+	testFieldClose     = "close"
+	testFieldMessage   = "message"
+	testOptSquash      = "squash"
+	testOptMergeCommit = "merge commit"
+	testOptFastFwd     = "fast-forward"
+	testFormNoteText   = "3 commits will be squashed"
+	testFormMessage    = "abc"
+	testHintsTitle     = "Existing branches"
 )
 
 var ansiEscapeRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)

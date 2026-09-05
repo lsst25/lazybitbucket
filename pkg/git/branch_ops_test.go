@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
@@ -134,4 +135,53 @@ func TestCheckoutTracking_UnknownRemoteBranchReturnsError(t *testing.T) {
 	if err := CheckoutTracking(dir, "origin/does-not-exist"); err == nil {
 		t.Fatal("CheckoutTracking with unknown remote branch should error")
 	}
+}
+
+// TestCheckoutFamily_RejectsOptionLikeName covers the branch names that reach
+// git from the Bitbucket API. git checkout offers no separator that turns an
+// option-looking argument back into a branch name, so these helpers refuse
+// rather than hand the name to git; see ErrUnsafeName.
+func TestCheckoutFamily_RejectsOptionLikeName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		call func(dir string) error
+	}{
+		{"Checkout", func(dir string) error { return Checkout(dir, branchDash) }},
+		{"CreateBranch", func(dir string) error { return CreateBranch(dir, branchDash) }},
+		{"CreateBranch empty", func(dir string) error { return CreateBranch(dir, "") }},
+		{"CheckoutTracking local side", func(dir string) error {
+			return CheckoutTracking(dir, remoteOrigin+"/"+branchDash)
+		}},
+		{"CheckoutTracking remote side", func(dir string) error {
+			return CheckoutTracking(dir, branchDash+"/x")
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := initRepo(t)
+
+			err := tt.call(dir)
+			if err == nil {
+				t.Fatal("expected an error for an option-like branch name, got nil")
+			}
+			if !errors.Is(err, ErrUnsafeName) {
+				t.Errorf("errors.Is(err, ErrUnsafeName) = false, err = %v", err)
+			}
+			testkit.AssertEqual(t, "current branch", currentBranch(t, dir), branchMain)
+		})
+	}
+}
+
+// currentBranch is CurrentBranch with the error folded into the test.
+func currentBranch(t *testing.T, dir string) string {
+	t.Helper()
+	branch, err := CurrentBranch(dir)
+	if err != nil {
+		t.Fatalf("CurrentBranch: %v", err)
+	}
+	return branch
 }

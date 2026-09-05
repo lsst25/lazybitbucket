@@ -46,7 +46,7 @@ nothing in it may import `pkg/tui` or `pkg/config`.
 | Path | What |
 |------|------|
 | `cmd/lazybitbucket/` | CLI entry point, flag parsing, credential wizard |
-| `pkg/bitbucket/` | Bitbucket Cloud REST client, models, errors. Read-only: no write methods |
+| `pkg/bitbucket/` | Bitbucket Cloud REST client, models, errors. Writes (merge, update) go through one helper that `ClientOpts.ReadOnly` switches off |
 | `pkg/bitbucket/bitbuckettest/` | Strict fake client for unit tests |
 | `pkg/bitbucket/demo/` | Deterministic demo dataset + fake REST server |
 | `pkg/config/` | Config file, credentials, custom command definitions |

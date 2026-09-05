@@ -25,11 +25,11 @@ Details live in issues/PRs, not here.
 
 ## 3. Act on PRs
 
-- [ ] Merge with strategy choice (merge commit / squash / fast-forward), optional close-source-branch
-- [ ] Sync with target branch (rebase or merge), driven through local git
-- [ ] Edit title / description
-- [ ] Set / remove reviewers
-- [ ] Toggle draft state
+- [x] Merge with strategy choice (merge commit / squash / fast-forward), optional close-source-branch
+- [x] Sync with target branch (rebase or merge), driven through local git
+- [x] Edit title / description
+- [x] Set / remove reviewers
+- [x] Toggle draft state
 
 ## 4. Find and create
 

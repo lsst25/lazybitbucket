@@ -19,7 +19,7 @@ func pointerTo[T any](v T) *T { return &v }
 // a temp dir themselves, so paralleltest sees the t.Setenv call.
 func clearBitbucketEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{envWorkspace, envRepositories, envEmail, envToken, envAPIURL} {
+	for _, key := range []string{envWorkspace, envRepositories, envEmail, envToken, envAPIURL, envReadOnly} {
 		t.Setenv(key, "")
 	}
 }
@@ -812,4 +812,212 @@ func detailKeyByYAMLName(t *testing.T, keys DetailKeys, name string) string {
 		t.Fatalf("detailKeyByYAMLName: unknown yaml key %q", name)
 		return ""
 	}
+}
+
+// pullRequestKeysFixture is a fully-populated PullRequestKeys with a distinct
+// value per field, so a wrong or duplicated yaml tag shows up as a mismatch.
+func pullRequestKeysFixture() PullRequestKeys {
+	return PullRequestKeys{
+		Select:      "enter",
+		Open:        "o",
+		FocusRight:  "l",
+		Browser:     "b",
+		URLPicker:   "u",
+		CopyURL:     "y",
+		Checkout:    "c",
+		Merge:       "M",
+		Sync:        "S",
+		Edit:        "E",
+		Reviewers:   "V",
+		ToggleDraft: "D",
+	}
+}
+
+// pullRequestKeyYAMLNames are the yaml keys of every keybinding.pullRequests
+// field, in declaration order.
+var pullRequestKeyYAMLNames = []string{
+	"select", "open", "focusRight", "browser", "urlPicker", "copyURL", "checkout",
+	"merge", "sync", "edit", "reviewers", "toggleDraft",
+}
+
+func TestLoad_ReadsPullRequestKeybindingsFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+
+	want := pullRequestKeysFixture()
+	var body strings.Builder
+	body.WriteString("keybinding:\n  pullRequests:\n")
+	for _, name := range pullRequestKeyYAMLNames {
+		fmt.Fprintf(&body, "    %s: %q\n", name, pullRequestKeyByYAMLName(t, want, name))
+	}
+	writeConfigFile(t, dir, body.String())
+
+	testkit.AssertEqual(t, "Keybinding.PullRequests", loadOrFatal(t).Keybinding.PullRequests, want)
+}
+
+func TestSave_RoundTripsPullRequestKeybindings(t *testing.T) {
+	t.Setenv(envConfigDir, t.TempDir())
+	clearBitbucketEnv(t)
+
+	cfg := DefaultConfig()
+	cfg.Keybinding.PullRequests = pullRequestKeysFixture()
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	written, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	for _, name := range pullRequestKeyYAMLNames {
+		if !strings.Contains(string(written), name+": ") {
+			t.Errorf("saved config is missing the %q pull request key:\n%s", name, written)
+		}
+	}
+
+	testkit.AssertEqual(t, "Keybinding.PullRequests",
+		loadOrFatal(t).Keybinding.PullRequests, pullRequestKeysFixture())
+}
+
+func TestDefaultConfig_LeavesPullRequestKeysEmpty(t *testing.T) {
+	t.Parallel()
+
+	// The defaults live in the TUI's DefaultKeymap; the config file only carries
+	// user overrides, so every key field must stay empty here.
+	testkit.AssertEqual(t, "Keybinding.PullRequests", DefaultConfig().Keybinding.PullRequests, PullRequestKeys{})
+}
+
+// pullRequestKeyByYAMLName maps a yaml key back to its PullRequestKeys field value.
+func pullRequestKeyByYAMLName(t *testing.T, keys PullRequestKeys, name string) string {
+	t.Helper()
+	switch name {
+	case "select":
+		return keys.Select
+	case "open":
+		return keys.Open
+	case "focusRight":
+		return keys.FocusRight
+	case "browser":
+		return keys.Browser
+	case "urlPicker":
+		return keys.URLPicker
+	case "copyURL":
+		return keys.CopyURL
+	case "checkout":
+		return keys.Checkout
+	case "merge":
+		return keys.Merge
+	case "sync":
+		return keys.Sync
+	case "edit":
+		return keys.Edit
+	case "reviewers":
+		return keys.Reviewers
+	case "toggleDraft":
+		return keys.ToggleDraft
+	default:
+		t.Fatalf("pullRequestKeyByYAMLName: unknown yaml key %q", name)
+		return ""
+	}
+}
+
+func TestDefaultConfig_ReadOnlyIsOff(t *testing.T) {
+	t.Parallel()
+
+	testkit.AssertEqual(t, "Bitbucket.ReadOnly", DefaultConfig().Bitbucket.ReadOnly, false)
+}
+
+func TestLoad_ReadsReadOnlyFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, "bitbucket:\n  workspace: "+testWorkspace+"\n  readOnly: true\n")
+
+	cfg := loadOrFatal(t)
+	testkit.AssertEqual(t, "Bitbucket.Workspace", cfg.Bitbucket.Workspace, testWorkspace)
+	testkit.AssertEqual(t, "Bitbucket.ReadOnly", cfg.Bitbucket.ReadOnly, true)
+}
+
+func TestSave_RoundTripsReadOnly(t *testing.T) {
+	t.Setenv(envConfigDir, t.TempDir())
+	clearBitbucketEnv(t)
+
+	cfg := DefaultConfig()
+	cfg.Bitbucket.ReadOnly = true
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	written, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if !strings.Contains(string(written), "readOnly: true") {
+		t.Errorf("saved config is missing readOnly:\n%s", written)
+	}
+
+	testkit.AssertEqual(t, "Bitbucket.ReadOnly", loadOrFatal(t).Bitbucket.ReadOnly, true)
+}
+
+func TestLoad_ReadOnlyEnvOverride(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"unset", "", false},
+		{"one", "1", true},
+		{"true", "true", true},
+		{"mixed case true", "TrUe", true},
+		{"yes", "YES", true},
+		{"padded", "  true  ", true},
+		{"zero leaves it off", "0", false},
+		{"false leaves it off", "false", false},
+		{"no leaves it off", "no", false},
+		{"garbage leaves it off", "maybe", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv(envConfigDir, dir)
+			clearBitbucketEnv(t)
+			t.Setenv(envReadOnly, tc.value)
+
+			testkit.AssertEqual(t, "Bitbucket.ReadOnly", loadOrFatal(t).Bitbucket.ReadOnly, tc.want)
+		})
+	}
+}
+
+func TestLoad_ReadOnlyEnvNeverTurnsTheConfigFileOff(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"empty", ""},
+		{"zero", "0"},
+		{"false", "false"},
+		{"no", "no"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv(envConfigDir, dir)
+			clearBitbucketEnv(t)
+			t.Setenv(envReadOnly, tc.value)
+			writeConfigFile(t, dir, "bitbucket:\n  readOnly: true\n")
+
+			testkit.AssertEqual(t, "Bitbucket.ReadOnly", loadOrFatal(t).Bitbucket.ReadOnly, true)
+		})
+	}
+}
+
+func TestLoad_ReadOnlyEnvWinsOverAFileThatLeavesItOff(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	t.Setenv(envReadOnly, "1")
+	writeConfigFile(t, dir, "bitbucket:\n  readOnly: false\n")
+
+	testkit.AssertEqual(t, "Bitbucket.ReadOnly", loadOrFatal(t).Bitbucket.ReadOnly, true)
 }

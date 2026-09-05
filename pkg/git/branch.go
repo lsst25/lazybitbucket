@@ -8,8 +8,14 @@ import (
 	"strings"
 )
 
-// CreateBranch creates and checks out a new branch
+// CreateBranch creates and checks out a new branch. git checkout has no
+// separator that would turn an option-looking branch name back into a name, so
+// such a name is refused with ErrUnsafeName.
 func CreateBranch(dir, name string) error {
+	if err := checkName("branch", name); err != nil {
+		return err
+	}
+
 	cmd := exec.CommandContext(context.Background(), "git", "-C", dir, "checkout", "-b", name)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -18,8 +24,13 @@ func CreateBranch(dir, name string) error {
 	return nil
 }
 
-// Checkout switches to an existing branch
+// Checkout switches to an existing branch. An option-looking name is refused
+// with ErrUnsafeName, as for CreateBranch.
 func Checkout(dir, name string) error {
+	if err := checkName("branch", name); err != nil {
+		return err
+	}
+
 	cmd := exec.CommandContext(context.Background(), "git", "-C", dir, "checkout", name)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -28,11 +39,19 @@ func Checkout(dir, name string) error {
 	return nil
 }
 
-// CheckoutTracking creates a local tracking branch from a remote branch and checks it out
+// CheckoutTracking creates a local tracking branch from a remote branch and
+// checks it out. An option-looking name on either side is refused with
+// ErrUnsafeName, as for CreateBranch.
 func CheckoutTracking(dir, remoteBranch string) error {
 	_, localName, ok := strings.Cut(remoteBranch, "/")
 	if !ok {
 		return fmt.Errorf("invalid remote branch format: %s", remoteBranch)
+	}
+	if err := checkName("branch", localName); err != nil {
+		return err
+	}
+	if err := checkName("remote branch", remoteBranch); err != nil {
+		return err
 	}
 
 	cmd := exec.CommandContext(context.Background(), "git", "-C", dir, "checkout", "-b", localName, "--track", remoteBranch)
