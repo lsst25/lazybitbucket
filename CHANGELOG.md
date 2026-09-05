@@ -22,6 +22,9 @@ one are upstream lazyjira history, and their compare links still point at upstre
   asked, the macOS system appearance decides; `rendererStyle: auto` follows the same detection.
   The palette gained an `accent` role for the chrome (titles, focused border, active tab, key
   hints, dialog frames): every existing preset keeps it equal to green, Kanagawa uses its blue
+- Inside tmux, `e` opens the file at the cursor's line in a new tmux window, started in the
+  checkout's root and named after the file, instead of suspending the session; `editorInTmux:
+  inline` restores the suspend-and-return behaviour. The description editor still runs inline
 
 - `pkg/bitbucket`: a Bitbucket Cloud REST client — API tokens and access tokens (Bearer) or Atlassian
   email + API token (Basic), pagination that follows `next`, typed `APIError` with not-found /

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,6 +14,7 @@ import (
 
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
+	"github.com/lsst25/lazybitbucket/pkg/config"
 	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
@@ -332,5 +335,155 @@ func TestHandleEditorFinished_ReportsAFailedLaunch(t *testing.T) {
 
 	if !strings.Contains(app.statusPanel.ErrorMessage(), testBoom) {
 		t.Errorf("status error = %q, want the editor failure", app.statusPanel.ErrorMessage())
+	}
+}
+
+func TestShellJoin_QuotesEveryArgument(t *testing.T) {
+	t.Parallel()
+
+	got := shellJoin([]string{"nvim", "+12", "/tmp/it's here/x y.go", "--flag=$HOME", ""})
+
+	testkit.AssertEqual(t, "command line", got,
+		`'nvim' '+12' '/tmp/it'\''s here/x y.go' '--flag=$HOME' ''`)
+}
+
+func TestTmuxWindowArgs_StartsInTheEditorDirectoryUnderTheFileName(t *testing.T) {
+	t.Parallel()
+	editor := exec.CommandContext(t.Context(), "nvim", "+12", "/repo/internal/rate/bucket.go")
+	editor.Dir = "/repo"
+
+	got := tmuxWindowArgs(editor, "bucket.go")
+
+	testkit.AssertSliceEqual(t, "tmux args", got, []string{
+		"new-window", "-c", "/repo", "-n", "bucket.go",
+		`'nvim' '+12' '/repo/internal/rate/bucket.go'`,
+	})
+}
+
+func TestTmuxWindowArgs_OmitsWhatIsNotSet(t *testing.T) {
+	t.Parallel()
+	editor := exec.CommandContext(t.Context(), "nvim", "/tmp/x.md")
+
+	got := tmuxWindowArgs(editor, "")
+
+	testkit.AssertSliceEqual(t, "tmux args", got, []string{"new-window", `'nvim' '/tmp/x.md'`})
+}
+
+// fakeTmux writes a stand-in tmux script that records its arguments, one per
+// line, in a file next to it and exits with the given status. It returns the
+// script's path and the record file's path.
+func fakeTmux(t *testing.T, exitStatus int) (script, record string) {
+	t.Helper()
+	dir := t.TempDir()
+	record = filepath.Join(dir, "args")
+	script = filepath.Join(dir, "tmux")
+	body := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + record + "'\n"
+	if exitStatus != 0 {
+		body += "echo 'no server running on /tmp/tmux-501/default' >&2\n"
+	}
+	body += "exit " + strconv.Itoa(exitStatus) + "\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script, record
+}
+
+func TestOpenInEditor_InsideTmuxOpensAWindowInsteadOfSuspending(t *testing.T) {
+	t.Parallel()
+	app, root := editorApp(t, &bitbuckettest.FakeClient{T: t})
+	app.inTmux = true
+	var record string
+	app.tmuxPath, record = fakeTmux(t, 0)
+
+	cmd := app.openInEditor(testFileGo, 12)
+
+	if cmd == nil {
+		t.Fatal("inside tmux the editor key must still produce a command")
+	}
+	msgs := collectMsgs(cmd)
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want the tmux result", len(msgs))
+	}
+	if msg, ok := msgs[0].(tmuxWindowMsg); !ok || msg.err != nil {
+		t.Fatalf("msg = %#v, want a tmuxWindowMsg without error", msgs[0])
+	}
+	recorded, err := os.ReadFile(filepath.Clean(record))
+	if err != nil {
+		t.Fatalf("the stand-in tmux was not run: %v", err)
+	}
+	testkit.AssertSliceEqual(t, "tmux args", strings.Split(strings.TrimRight(string(recorded), "\n"), "\n"), []string{
+		"new-window", "-c", root, "-n", "bucket.go",
+		"'nvim' '+12' '" + filepath.Join(root, testFileGo) + "'",
+	})
+}
+
+func TestOpenInEditor_InsideTmuxReportsATmuxFailure(t *testing.T) {
+	t.Parallel()
+	app, _ := editorApp(t, &bitbuckettest.FakeClient{T: t})
+	app.inTmux = true
+	app.tmuxPath, _ = fakeTmux(t, 1)
+
+	msgs := collectMsgs(app.openInEditor(testFileGo, 1))
+
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want one", len(msgs))
+	}
+	msg, ok := msgs[0].(tmuxWindowMsg)
+	if !ok || msg.err == nil {
+		t.Fatalf("msg = %#v, want a tmuxWindowMsg carrying tmux's error", msgs[0])
+	}
+	if !strings.Contains(msg.err.Error(), "no server running") {
+		t.Errorf("err = %v, want tmux's own words", msg.err)
+	}
+	_, _ = app.Update(msg)
+	if !strings.Contains(app.statusPanel.ErrorMessage(), "no server running") {
+		t.Errorf("status error = %q, want the tmux failure", app.statusPanel.ErrorMessage())
+	}
+}
+
+func TestOpenInEditor_InsideTmuxInlineSuspendsAsUsual(t *testing.T) {
+	t.Parallel()
+	app, _ := editorApp(t, &bitbuckettest.FakeClient{T: t})
+	app.inTmux = true
+	app.cfg.EditorInTmux = config.EditorInTmuxInline
+	var record string
+	app.tmuxPath, record = fakeTmux(t, 0)
+
+	if cmd := app.openInEditor(testFileGo, 1); cmd == nil {
+		t.Fatal("the editor should open inline")
+	}
+
+	if _, err := os.Stat(record); err == nil {
+		t.Error("editorInTmux: inline must not ask tmux for a window")
+	}
+}
+
+func TestOpenInEditor_OutsideTmuxNeverCallsTmux(t *testing.T) {
+	t.Parallel()
+	app, _ := editorApp(t, &bitbuckettest.FakeClient{T: t})
+	app.inTmux = false
+	var record string
+	app.tmuxPath, record = fakeTmux(t, 0)
+
+	if cmd := app.openInEditor(testFileGo, 1); cmd == nil {
+		t.Fatal("the editor should open")
+	}
+
+	if _, err := os.Stat(record); err == nil {
+		t.Error("outside tmux the editor must suspend, not open a window")
+	}
+}
+
+func TestHandleTmuxWindow_SuccessIsSilent(t *testing.T) {
+	t.Parallel()
+	app := reviewApp(t, &bitbuckettest.FakeClient{T: t})
+
+	_, cmd := app.Update(tmuxWindowMsg{err: nil})
+
+	if cmd != nil {
+		t.Error("a window that opened needs no follow-up command")
+	}
+	if app.statusPanel.ErrorMessage() != "" {
+		t.Errorf("status error = %q, want none", app.statusPanel.ErrorMessage())
 	}
 }

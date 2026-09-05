@@ -22,6 +22,27 @@ const (
 	RendererStyleNoTTY = "notty"
 )
 
+// Valid values for Config.EditorInTmux. Empty string is treated as
+// EditorInTmuxWindow.
+const (
+	// EditorInTmuxWindow opens the file in a new tmux window when lazybitbucket
+	// itself runs inside tmux, leaving the session on screen.
+	EditorInTmuxWindow = "window"
+	// EditorInTmuxInline suspends the session and runs the editor in its own
+	// pane, the way it works outside tmux.
+	EditorInTmuxInline = "inline"
+)
+
+func validateEditorInTmux(value string) error {
+	switch value {
+	case "", EditorInTmuxWindow, EditorInTmuxInline:
+		return nil
+	default:
+		return fmt.Errorf("invalid editorInTmux %q: must be one of %s, %s",
+			value, EditorInTmuxWindow, EditorInTmuxInline)
+	}
+}
+
 func validateRendererStyle(value string) error {
 	switch value {
 	case "", RendererStyleAuto, RendererStyleDark, RendererStyleLight, RendererStyleNoTTY:
@@ -62,7 +83,11 @@ type Config struct {
 	// Editor is the command the diff view's open-in-editor key runs to open the
 	// selected file at the cursor's line. Resolved through ResolveEditor, which
 	// falls back to $VISUAL, $EDITOR and DefaultEditor.
-	Editor        string `yaml:"editor"`
+	Editor string `yaml:"editor"`
+	// EditorInTmux decides what the open-in-editor key does when lazybitbucket
+	// runs inside tmux: "window" (the default) opens the file in a new tmux
+	// window, "inline" suspends the session as it does outside tmux.
+	EditorInTmux  string `yaml:"editorInTmux"`
 	RendererStyle string `yaml:"rendererStyle"`
 }
 
@@ -346,6 +371,13 @@ func (c *Config) ResolveEditor() string {
 	return DefaultEditor
 }
 
+// EditorOpensTmuxWindow reports whether the open-in-editor key should open a
+// new tmux window when the session runs inside tmux: `editorInTmux` unset or
+// "window". It says nothing about whether tmux is actually running.
+func (c *Config) EditorOpensTmuxWindow() bool {
+	return c.EditorInTmux == "" || c.EditorInTmux == EditorInTmuxWindow
+}
+
 // ResolveBaseURL returns the Bitbucket REST base URL without a trailing slash,
 // falling back to DefaultBaseURL.
 func (c *Config) ResolveBaseURL() string {
@@ -459,6 +491,9 @@ func validate(cfg *Config) error {
 		return err
 	}
 	if err := validateRendererStyle(cfg.RendererStyle); err != nil {
+		return err
+	}
+	if err := validateEditorInTmux(cfg.EditorInTmux); err != nil {
 		return err
 	}
 	if _, err := cfg.ResolveRefreshInterval(); err != nil {

@@ -336,6 +336,11 @@ func TestLoad_RejectsInvalidValues(t *testing.T) {
 			"solarized",
 		},
 		{
+			"unknown editorInTmux mode",
+			"editorInTmux: split\n",
+			`invalid editorInTmux "split"`,
+		},
+		{
 			"invalid custom command template",
 			"customCommands:\n  - key: \"y\"\n    name: broken\n    command: \"echo {{.Unclosed\"\n",
 			"template parse error",
@@ -1020,4 +1025,45 @@ func TestLoad_ReadOnlyEnvWinsOverAFileThatLeavesItOff(t *testing.T) {
 	writeConfigFile(t, dir, "bitbucket:\n  readOnly: false\n")
 
 	testkit.AssertEqual(t, "Bitbucket.ReadOnly", loadOrFatal(t).Bitbucket.ReadOnly, true)
+}
+
+func TestValidateEditorInTmux(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{"empty defaults to window", "", false},
+		{"window", EditorInTmuxWindow, false},
+		{"inline", EditorInTmuxInline, false},
+		{"unknown value errors", "split", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateEditorInTmux(tc.value)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("validateEditorInTmux(%q) = nil, want error", tc.value)
+				}
+				if !strings.Contains(err.Error(), tc.value) {
+					t.Errorf("error %q should include the bad value %q", err, tc.value)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("validateEditorInTmux(%q) = %v, want nil", tc.value, err)
+			}
+		})
+	}
+}
+
+func TestEditorOpensTmuxWindow(t *testing.T) {
+	t.Parallel()
+	cases := map[string]bool{"": true, EditorInTmuxWindow: true, EditorInTmuxInline: false}
+	for value, want := range cases {
+		cfg := &Config{EditorInTmux: value}
+		testkit.AssertEqual(t, "EditorOpensTmuxWindow("+value+")", cfg.EditorOpensTmuxWindow(), want)
+	}
 }

@@ -20,6 +20,10 @@ import (
 // exits.
 type editorFinishedMsg struct{ err error }
 
+// tmuxWindowMsg is delivered when tmux has been asked to open the editor in a
+// new window. err is tmux's own complaint when it could not.
+type tmuxWindowMsg struct{ err error }
+
 // editorDialect is how one family of editors takes a file position on its
 // command line. There is no common syntax, so the editor's own name is the
 // only way to know.
@@ -126,9 +130,11 @@ func (a *App) buildTempFileEditorCmd(path string) (*exec.Cmd, error) {
 	return exec.CommandContext(a.context(), name, args...), nil
 }
 
-// openInEditor suspends the TUI and opens one file at one line in the
-// configured editor. Errors are reported on the status panel rather than
-// raised: failing to find a file must not tear the session down.
+// openInEditor opens one file at one line in the configured editor. Inside
+// tmux, unless editorInTmux says otherwise, the editor gets a new tmux window
+// and the session stays on screen; anywhere else the TUI suspends and hands the
+// terminal over. Errors are reported on the status panel rather than raised:
+// failing to find a file must not tear the session down.
 func (a *App) openInEditor(path string, line int) tea.Cmd {
 	cmd, err := a.buildEditorCmd(path, line)
 	if err != nil {
@@ -137,10 +143,78 @@ func (a *App) openInEditor(path string, line int) tea.Cmd {
 	}
 	a.noteBranchMismatch()
 
+	if a.inTmux && a.cfg.EditorOpensTmuxWindow() {
+		return a.openInTmuxWindow(cmd, filepath.Base(path))
+	}
+
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return tea.ExecProcess(cmd, func(execErr error) tea.Msg {
 		return editorFinishedMsg{err: execErr}
 	})
+}
+
+// openInTmuxWindow asks tmux for a new window running the editor command. tmux
+// selects the window as it creates it, so the editor is on screen at once, and
+// closes it when the editor exits, which brings the session back — nothing
+// here waits for that. tmux's exit status is the only feedback there is, so the
+// command is run to completion off the main loop and its complaint, if any,
+// comes back as a tmuxWindowMsg.
+func (a *App) openInTmuxWindow(editor *exec.Cmd, windowName string) tea.Cmd {
+	tmux := exec.CommandContext(a.context(), a.tmuxExecutable(), tmuxWindowArgs(editor, windowName)...)
+	return func() tea.Msg {
+		out, err := tmux.CombinedOutput()
+		if err != nil {
+			if text := strings.TrimSpace(string(out)); text != "" {
+				return tmuxWindowMsg{err: fmt.Errorf("tmux new-window: %s", text)}
+			}
+			return tmuxWindowMsg{err: fmt.Errorf("tmux new-window: %w", err)}
+		}
+		return tmuxWindowMsg{err: nil}
+	}
+}
+
+// tmuxExecutable is the tmux to run: the one on $PATH unless a test has
+// substituted its own.
+func (a *App) tmuxExecutable() string {
+	if a.tmuxPath != "" {
+		return a.tmuxPath
+	}
+	return "tmux"
+}
+
+// tmuxWindowArgs is the tmux command line that opens editor in a new window:
+// started in the editor's working directory, named after the file so the
+// window list reads well, running the editor command as one shell string. tmux
+// hands that string to a shell, so every argument is single-quoted — a path
+// with a space or a quote in it must reach the editor intact.
+func tmuxWindowArgs(editor *exec.Cmd, windowName string) []string {
+	args := []string{"new-window"}
+	if editor.Dir != "" {
+		args = append(args, "-c", editor.Dir)
+	}
+	if windowName != "" {
+		args = append(args, "-n", windowName)
+	}
+	return append(args, shellJoin(editor.Args))
+}
+
+// shellJoin renders args as one POSIX shell command line, each argument in
+// single quotes with embedded single quotes spliced as '\”.
+func shellJoin(args []string) string {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+	}
+	return strings.Join(quoted, " ")
+}
+
+// handleTmuxWindow reports a tmux that could not open the window. Success
+// needs no message: the editor is already on screen in the new window.
+func (a *App) handleTmuxWindow(msg tmuxWindowMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		a.statusPanel.SetError("editor: " + msg.err.Error())
+	}
+	return a, nil
 }
 
 // noteBranchMismatch warns when the checkout is not on the pull request's

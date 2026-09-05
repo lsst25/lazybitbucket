@@ -27,7 +27,7 @@ make build-demo
 - **Tabs** — Open / Mine / Reviewing out of the box, configurable per state and filter
 - **Detail pane** — four tabs per PR: Overview (branches, author, reviewers with approval state, Markdown description), Files, Commits and Comments. A tab is fetched the first time you open it, so a PR you only skim costs one request
 - **Diff pane** — the changed files with status and `+/−` counts, and a syntax-highlighted per-file unified diff with a line cursor; `n` / `p` walk the files, `enter` opens one
-- **Open in your editor** — `e` opens the file under the cursor at that line in `$EDITOR` (`nvim` by default), in your local checkout
+- **Open in your editor** — `e` opens the file under the cursor at that line in `$EDITOR` (`nvim` by default), in your local checkout; inside tmux it gets a new tmux window and the session stays put
 - **Commits** — hash, author, age and subject per commit; `enter` expands the full message
 - **Review threads** — inline comments read as threads anchored to a file and line, with replies and resolved state; commented lines are marked `●` in the diff and `enter` jumps to the thread
 - **Builds** — the commit statuses of the selected PR, with drill-down into the pipeline run, its steps and each step's log

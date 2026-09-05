@@ -204,6 +204,12 @@ type App struct {
 	gitRemoteRepos []string
 	autoScoped     bool
 	gitAutoSelect  bool
+	// inTmux records that the session runs inside tmux ($TMUX was set at
+	// start-up), where the editor key can open a window instead of suspending.
+	// tmuxPath is the tmux executable to run; empty means "tmux" on $PATH, and
+	// tests point it at a stand-in.
+	inTmux   bool
+	tmuxPath string
 
 	renderer views.MarkdownRenderer
 	// now is the clock and debounce the selection debounce window. Both are
@@ -356,6 +362,8 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 	if warning := refreshRateWarning(len(app.repoSlugs), app.refreshEvery); warning != "" {
 		app.setWarning(warning)
 	}
+
+	app.inTmux = os.Getenv("TMUX") != ""
 
 	if git.GitAvailable() {
 		cwd, _ := os.Getwd()
@@ -574,6 +582,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case customCommandFinishedMsg:
 		return a.handleCustomCommandFinished(msg)
+	case tmuxWindowMsg:
+		return a.handleTmuxWindow(msg)
 	case editorFinishedMsg:
 		return a.handleEditorFinished(msg)
 
