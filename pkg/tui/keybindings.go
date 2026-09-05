@@ -123,6 +123,33 @@ func (a *App) writeHelpItems() []components.HelpItem {
 	}
 }
 
+// pipelineWriteBindings are the two keys that act on the pipeline behind a
+// build. They are listed only where they work — the Builds panel and the two
+// pipeline views — and, like the pull request writes, not at all in read-only
+// mode.
+func (a *App) pipelineWriteBindings() []Binding {
+	if a.readOnly {
+		return nil
+	}
+	return []Binding{
+		a.bind(ActRerunPipeline, "rerun the pipeline"),
+		a.bind(ActStopPipeline, "stop the running pipeline"),
+	}
+}
+
+// pipelineWriteHelpItems is the write half of the builds and pipeline help
+// strips.
+func (a *App) pipelineWriteHelpItems() []components.HelpItem {
+	if a.readOnly {
+		return nil
+	}
+	km := a.keymap
+	return []components.HelpItem{
+		{Key: km.Keys(ActRerunPipeline), Description: "rerun"},
+		{Key: km.Keys(ActStopPipeline), Description: "stop"},
+	}
+}
+
 // tabJumpBindings are the four keys that go straight to a pull request tab.
 func (a *App) tabJumpBindings() []Binding {
 	return []Binding{
@@ -146,6 +173,7 @@ func (a *App) ContextBindings() []Binding {
 				a.bind(ActOpen, "open the step log"),
 				a.bind(ActBrowser, "open the pipeline in a browser"),
 			)
+			bindings = append(bindings, a.pipelineWriteBindings()...)
 		case views.ModeFileDiff:
 			bindings = append(bindings,
 				a.bind(ActBack, "back to the changed files"),
@@ -197,6 +225,7 @@ func (a *App) ContextBindings() []Binding {
 			a.bind(ActFocusRight, "next panel"),
 			a.bind(ActFocusLeft, "previous panel"),
 		)
+		bindings = append(bindings, a.pipelineWriteBindings()...)
 		bindings = append(bindings, a.customCommandBindings(config.CtxBuilds)...)
 		return bindings
 
@@ -265,13 +294,14 @@ func (a *App) helpBarItems() []components.HelpItem {
 	}
 
 	if a.side == sideRight {
-		head := make([]components.HelpItem, 0, 4)
+		head := make([]components.HelpItem, 0, 6)
 		switch a.detailView.Mode() {
 		case views.ModePipeline, views.ModeStepLog:
 			head = append(head,
 				components.HelpItem{Key: km.Keys(ActOpen), Description: "step log"},
 				components.HelpItem{Key: km.Keys(ActBack), Description: "back"},
 			)
+			head = append(head, a.pipelineWriteHelpItems()...)
 		case views.ModeFileDiff:
 			head = append(head,
 				components.HelpItem{Key: km.Keys(ActNextFile) + "/" + km.Keys(ActPrevFile), Description: "file"},
@@ -304,10 +334,14 @@ func (a *App) helpBarItems() []components.HelpItem {
 		head = append(head, writes...)
 		return a.panelHelpItems(config.CtxPullRequests, head...)
 	case focusBuilds:
-		return a.panelHelpItems(config.CtxBuilds,
+		writes := a.pipelineWriteHelpItems()
+		head := make([]components.HelpItem, 0, 2+len(writes))
+		head = append(head,
 			components.HelpItem{Key: km.Keys(ActOpen), Description: "pipeline"},
 			components.HelpItem{Key: km.Keys(ActBrowser), Description: "browser"},
 		)
+		head = append(head, writes...)
+		return a.panelHelpItems(config.CtxBuilds, head...)
 	case focusRepos:
 		return a.panelHelpItems(config.CtxRepos,
 			components.HelpItem{Key: km.Keys(ActSelect), Description: "filter"},

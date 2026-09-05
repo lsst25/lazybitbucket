@@ -468,6 +468,15 @@ func (a *App) handlePullRequestAction(action Action) (tea.Model, tea.Cmd, bool) 
 
 	case ActApprove:
 		return a, a.handleActionApprove(), true
+
+	// The two pipeline writes. They act on the run behind a build rather than
+	// on the pull request, and answer with a hint where there is no run to act
+	// on; see pipeline_actions.go.
+	case ActRerunPipeline:
+		return a, a.handleActionRerunPipeline(), true
+
+	case ActStopPipeline:
+		return a, a.handleActionStopPipeline(), true
 	}
 	return nil, nil, false
 }

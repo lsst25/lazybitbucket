@@ -28,9 +28,10 @@ func (c *Client) ApprovePullRequest(
 	if err != nil {
 		return nil, fmt.Errorf("approve %s/%s#%d: %w", workspace, repoSlug, id, err)
 	}
-	// writeJSON decodes the body only on a 200. Any other 2xx — or a 200 whose
-	// body is not a participant — would otherwise hand back a zero Participant
-	// that the caller then reads as "approved by nobody".
+	// writeJSON decodes the body on a 200 or a 201, and this endpoint only ever
+	// answers 200. Any other status — or a 200 whose body is not a participant —
+	// would otherwise hand back a zero Participant that the caller then reads as
+	// "approved by nobody".
 	if status != http.StatusOK || participant.User.UUID == "" {
 		return nil, fmt.Errorf("approve %s/%s#%d: unexpected status %d without a participant body",
 			workspace, repoSlug, id, status)

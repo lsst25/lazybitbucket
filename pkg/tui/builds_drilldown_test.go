@@ -117,6 +117,28 @@ func TestOpenBuild_WithoutABuildNumberFallsBackToTheBrowser(t *testing.T) {
 	testkit.AssertEqual(t, "opened url", *opened, status.URL)
 }
 
+// A run that answers after the user has already backed out of the drill-down is
+// kept for their next visit, but must not pull the panel back into a view they
+// left.
+func TestOpenBuild_ARunThatLoadsAfterTheUserBackedOutIsCachedNotShown(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	stubPipeline(fake)
+	app := drilldownApp(t, fake)
+
+	_, cmd := app.handleActivate()
+	// Backspace lands before the run does: the user changed their mind.
+	if !app.detailView.Back() {
+		t.Fatal("the loading pipeline view should back out to the pull request")
+	}
+	runAll(t, app, cmd)
+
+	testkit.AssertEqual(t, "mode", app.detailView.Mode(), views.ModePullRequest)
+	if _, ok := app.pipelineCache["acme/api-gateway#412"]; !ok {
+		t.Error("the run should still be cached for the next visit")
+	}
+}
+
 func TestOpenBuild_NilStatusIsANoop(t *testing.T) {
 	t.Parallel()
 	app := drilldownApp(t, &bitbuckettest.FakeClient{T: t})

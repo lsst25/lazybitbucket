@@ -925,6 +925,125 @@ func TestClientApproveOwnPullRequest(t *testing.T) {
 	testkit.AssertEqual(t, "UserMessage()", apiErr.UserMessage(), msgCannotApproveOwn)
 }
 
+// TestClientRunPipeline is the rerun round trip the P key makes: read the run,
+// hand its target straight back, and get a fresh run against the same commit.
+func TestClientRunPipeline(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+
+	source, err := client.GetPipeline(t.Context(), Workspace, repoAPIGateway, strconv.Itoa(buildFailed))
+	if err != nil {
+		t.Fatalf("GetPipeline(%d): %v", buildFailed, err)
+	}
+	testkit.AssertEqual(t, "the fixture failed", source.State.Summary(), resultFailed)
+
+	created, err := client.RunPipeline(t.Context(), Workspace, repoAPIGateway, source.Target)
+	if err != nil {
+		t.Fatalf("RunPipeline: %v", err)
+	}
+	testkit.AssertEqual(t, "build number", created.BuildNumber, buildRerun)
+	testkit.AssertEqual(t, "state", created.State.Name, statePending)
+	testkit.AssertEqual(t, "trigger", created.Trigger.Name, triggerManual)
+	if created.Creator == nil {
+		t.Fatalf("the created run has no creator: %+v", created)
+	}
+	testkit.AssertEqual(t, "creator", created.Creator.UUID, uuidDemo)
+	// The rerun repeats the original commit, not the branch head.
+	testkit.AssertEqual(t, "target commit", created.Target.Commit.Hash, source.Target.Commit.Hash)
+	testkit.AssertEqual(t, "target pull request",
+		created.Target.PullRequest.ID, source.Target.PullRequest.ID)
+
+	// Reading the run back is what the detail pane does next, and it finds the
+	// run under way with the steps of the run it repeats.
+	running, err := client.GetPipeline(t.Context(), Workspace, repoAPIGateway, strconv.Itoa(buildRerun))
+	if err != nil {
+		t.Fatalf("GetPipeline(%d): %v", buildRerun, err)
+	}
+	testkit.AssertEqual(t, "state after the first read", running.State.Summary(), stageRunning)
+
+	steps, err := client.ListPipelineSteps(t.Context(), Workspace, repoAPIGateway, created.UUID)
+	if err != nil {
+		t.Fatalf("ListPipelineSteps: %v", err)
+	}
+	testkit.AssertEqual(t, "len(steps)", len(steps), 4)
+	testkit.AssertEqual(t, "the first step is under way", steps[0].State.Summary(), stateInProgress)
+
+	// The Builds panel reads statuses, so the rerun has one of its own.
+	statuses, err := client.ListPullRequestStatuses(t.Context(), Workspace, repoAPIGateway, 103)
+	if err != nil {
+		t.Fatalf("ListPullRequestStatuses: %v", err)
+	}
+	testkit.AssertEqual(t, "len(statuses)", len(statuses), 2)
+	testkit.AssertEqual(t, "the rerun's status", statuses[1].State, bitbucket.StatusInProgress)
+}
+
+// TestClientStopPipeline is the other half of the pair: the 204 answers
+// nothing, so what the X key is worth is the state the next read finds.
+func TestClientStopPipeline(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+	uuid := findPipeline(t, server.Data, repoAPIGateway, buildRunning).UUID
+
+	if err := client.StopPipeline(t.Context(), Workspace, repoAPIGateway, uuid); err != nil {
+		t.Fatalf("StopPipeline: %v", err)
+	}
+
+	stopped, err := client.GetPipeline(t.Context(), Workspace, repoAPIGateway, uuid)
+	if err != nil {
+		t.Fatalf("GetPipeline: %v", err)
+	}
+	testkit.AssertEqual(t, "state", stopped.State.Summary(), resultStopped)
+	if stopped.State.Result == nil || stopped.State.Result.Terminator == nil {
+		t.Fatalf("a stopped run carries no terminator: %+v", stopped.State)
+	}
+	testkit.AssertEqual(t, "terminator", stopped.State.Result.Terminator.UUID, uuidDemo)
+
+	statuses, err := client.ListPullRequestStatuses(t.Context(), Workspace, repoAPIGateway, 102)
+	if err != nil {
+		t.Fatalf("ListPullRequestStatuses: %v", err)
+	}
+	testkit.AssertEqual(t, "the status followed the run", statuses[0].State, bitbucket.StatusStopped)
+}
+
+// TestClientStopCompletedPipeline is the refusal the dialog has to be able to
+// read out in the server's own words.
+func TestClientStopCompletedPipeline(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+	uuid := findPipeline(t, server.Data, repoAPIGateway, buildFailed).UUID
+
+	err := client.StopPipeline(t.Context(), Workspace, repoAPIGateway, uuid)
+
+	var apiErr *bitbucket.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("StopPipeline(a completed run) error = %v, want an *APIError", err)
+	}
+	testkit.AssertEqual(t, "status", apiErr.Status, http.StatusBadRequest)
+	testkit.AssertEqual(t, "method", apiErr.Method, http.MethodPost)
+	testkit.AssertEqual(t, "UserMessage()", apiErr.UserMessage(), msgPipelineCompleted)
+}
+
+// TestClientRunPipelineUnknownRepositoryIsNotFound is the 404 a rerun of a run
+// in a repository the token cannot see comes back as.
+func TestClientRunPipelineUnknownRepositoryIsNotFound(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+	target := findPipeline(t, server.Data, repoAPIGateway, buildFailed).Target
+
+	_, err := client.RunPipeline(t.Context(), Workspace, unknownSlug, target)
+	if !bitbucket.IsNotFound(err) {
+		t.Fatalf("RunPipeline(%s) error = %v, want a not-found error", unknownSlug, err)
+	}
+}
+
 // TestClientReadOnlyRefusesWritesWithoutAskingTheServer is the guarantee the
 // browse-only mode is worth having: the refusal happens in the client, so the
 // server never hears about the write at all.
@@ -959,6 +1078,28 @@ func TestClientReadOnlyRefusesWritesWithoutAskingTheServer(t *testing.T) {
 	unapproveErr := client.UnapprovePullRequest(t.Context(), Workspace, repoWebApp, 40)
 	if !bitbucket.IsReadOnly(unapproveErr) {
 		t.Fatalf("UnapprovePullRequest on a read-only client = %v, want ErrReadOnly", unapproveErr)
+	}
+
+	// The pipeline writes carry their own validation, so the target is a usable
+	// one: a refusal for the wrong reason would prove nothing about the mode.
+	_, runErr := client.RunPipeline(t.Context(), Workspace, repoAPIGateway, bitbucket.PipelineTarget{
+		Type:              targetTypeRef,
+		Selector:          nil,
+		Commit:            &bitbucket.CommitRef{Type: "commit", Hash: hashMainAPI},
+		RefType:           refTypeBranch,
+		RefName:           branchMain,
+		Source:            "",
+		Destination:       "",
+		DestinationCommit: nil,
+		PullRequest:       nil,
+	})
+	if !bitbucket.IsReadOnly(runErr) {
+		t.Fatalf("RunPipeline on a read-only client = %v, want ErrReadOnly", runErr)
+	}
+
+	stopErr := client.StopPipeline(t.Context(), Workspace, repoAPIGateway, pipelineUUID(buildRunning))
+	if !bitbucket.IsReadOnly(stopErr) {
+		t.Fatalf("StopPipeline on a read-only client = %v, want ErrReadOnly", stopErr)
 	}
 
 	// Nothing reached the server: it has seen no request at all, and the pull

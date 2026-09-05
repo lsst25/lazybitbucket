@@ -40,6 +40,7 @@ make build-demo
 - **Edit** — `E` changes the title inline, or opens the description in `$EDITOR` and sends back what you saved
 - **Reviewers and draft** — `V` is a checklist over the current reviewers, the repository's default reviewers and the workspace members; `D` flips the PR between draft and ready for review
 - **Approve** — `A` approves the PR, and `A` again withdraws the approval you gave; the dialog always names the direction, and your own PRs are refused the way Bitbucket refuses them
+- **Rerun and stop pipelines** — `P` starts a finished pipeline run again with the same commit and selector, `X` signals a running one to stop; both work on the Builds panel and inside the pipeline and step-log views, behind a confirmation that names the run
 - **Read-only mode** — `--read-only` (or `bitbucket.readOnly: true`) makes the whole thing browse-only: the client refuses every non-GET request before it is sent, and the action keys disappear. Nothing else is ever written either — lazybitbucket cannot request changes, decline or comment
 - **Git integration** — check out the source branch of the selected PR; the PR matching your current branch is selected at startup
 - **Custom commands** — bind shell commands to keys with template access to the focused PR, repo, build, or the changed file and line under the cursor
@@ -140,13 +141,14 @@ A token without scopes does not work. These five read scopes cover everything la
 
 API token scopes are a different namespace from OAuth 2.0 scopes and do **not** imply each other, so tick all five.
 
-The six [pull request actions](docs/Keybindings.md#pull-request-actions) need one more:
+The actions that change something need a write scope, one each:
 
 | Scope | Needed for |
 |-------|------------|
-| `write:pullrequest:bitbucket` | editing the title or description, setting reviewers, toggling draft, approving, and merging |
+| `write:pullrequest:bitbucket` | the six [pull request actions](docs/Keybindings.md#pull-request-actions): editing the title or description, setting reviewers, toggling draft, approving, and merging |
+| `write:pipeline:bitbucket` | [rerunning and stopping pipeline runs](docs/Keybindings.md#rerun-and-stop-a-pipeline) from the Builds panel (`P` / `X`) |
 
-Leave it off and every read still works while a write comes back `403` — no harm done, just a message in the hint bar. If you would rather not have the possibility at all, use [read-only mode](docs/Config.md#read-only-mode), which does not need it and refuses writes before they are sent. Sync needs no scope of its own: it is local git, so what it needs is push permission on the remote. On a repository, project or workspace access token the same permission is spelled `pullrequest:write`.
+The two are independent: the pull request actions do not need the pipeline scope, and `P` / `X` do not need the pull request one. Leave them off and every read still works while a write comes back `403` — no harm done, just a message in the hint bar. If you would rather not have the possibility at all, use [read-only mode](docs/Config.md#read-only-mode), which needs neither and refuses writes before they are sent. Sync needs no scope of its own: it is local git, so what it needs is push permission on the remote. On a repository, project or workspace access token the same permission is spelled `pullrequest:write`.
 
 ### Auth options
 
@@ -240,6 +242,8 @@ Press `?` inside the app for all keybindings.
 | `V` | Set the reviewers |
 | `D` | Toggle draft |
 | `A` | Approve, or remove your approval |
+| `P` | Rerun the pipeline run of the selected build |
+| `X` | Stop the running pipeline run of the selected build |
 | `i` `d` `m` `t` | Jump to the Overview / Files / Commits / Comments tab of the PR |
 | `n` / `p` | Next / previous changed file |
 | `e` | Open the file under the cursor in your editor |

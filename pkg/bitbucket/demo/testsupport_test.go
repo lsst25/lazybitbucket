@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"testing"
 
@@ -202,12 +203,24 @@ func defaultReviewersPath(slug string) string {
 	return pathRepositories + "/" + slug + "/effective-default-reviewers"
 }
 
+// statusesPath is the build statuses of one pull request.
+func statusesPath(slug string, id int) string {
+	return pullRequestPath(slug, id) + segmentStatuses
+}
+
 func pipelinesPath(slug string) string {
 	return pathRepositories + "/" + slug + segmentPipelines
 }
 
 func pipelinePath(slug string, buildNumber int) string {
 	return pipelinesPath(slug) + "/" + strconv.Itoa(buildNumber)
+}
+
+// stopPipelinePath is where a run is signalled to stop. ref is a build number
+// or a braced UUID — the endpoint's {pipeline_uuid} takes either, and the
+// client sends the UUID percent-encoded, which is why this escapes it.
+func stopPipelinePath(slug, ref string) string {
+	return pipelinesPath(slug) + "/" + url.PathEscape(ref) + segmentStopPipeline
 }
 
 // iteratorPage mirrors the envelope of an iterator-paginated collection: no

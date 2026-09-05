@@ -117,6 +117,12 @@ type App struct {
 	// than racing the first.
 	writesInFlight map[string]string
 
+	// pipelineWrites is the same guard for the two pipeline writes, keyed by
+	// pipelineCacheKey. It is a separate map because a pull request key and a
+	// pipeline key share the "ws/slug#N" shape: pull request #412 and build
+	// #412 of the same repository would otherwise block each other.
+	pipelineWrites map[string]string
+
 	// descriptionEditPath is the temp file the description editor is working
 	// on, held across the suspension so the finish handler reads back a path
 	// this process wrote rather than one that travelled through a message.
@@ -318,6 +324,7 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 		threadsCache:   make(map[string]reviewEntry[[]bitbucket.Thread]),
 		fileDiffCache:  make(map[string]reviewEntry[fileDiffData]),
 		writesInFlight: make(map[string]string),
+		pipelineWrites: make(map[string]string),
 		renderer:       renderer,
 	}
 	// The callback runs on whatever goroutine executes the command, and several
@@ -590,6 +597,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleReviewerCandidates(msg)
 	case approvalStateMsg:
 		return a.handleApprovalState(msg)
+	case pipelineActionStateMsg:
+		return a.handlePipelineActionState(msg)
+	case pipelineWrittenMsg:
+		return a.handlePipelineWritten(msg)
 	case descriptionEditedMsg:
 		return a.handleDescriptionEdited(msg)
 	case syncDoneMsg:

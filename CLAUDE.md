@@ -16,7 +16,8 @@ integration, release packaging. What it does not have is any concept of a pull r
 ROADMAP steps 0, 1, 2 and 3 are **implemented**. The domain layer is Bitbucket, `pkg/jira` is gone, the
 binary, config dir and packaging are renamed, the review surface — diff pane, editor hand-off, commits
 and review threads — is in, and the tool now acts on a PR as well as reading it: merge, sync, edit
-title/description, reviewers, draft, approve, plus a browse-only read-only mode.
+title/description, reviewers, draft, approve — and on the pipeline behind a build: rerun and stop —
+plus a browse-only read-only mode.
 
 What exists:
 
@@ -25,8 +26,13 @@ What exists:
   with six values and `Label()`, `MergeResult.Queued()` for the 202) and `GetMergeTaskStatus`,
   `UpdatePullRequest` (`PullRequestUpdate`: title, description, draft, reviewers),
   `ApprovePullRequest` (POST with no body, answers a `Participant`) and `UnapprovePullRequest`
-  (DELETE, answers 204), plus `ListEffectiveDefaultReviewers` and `ListWorkspaceMembers`. Writes go
-  through `writeJSON` → `do` on the no-redirect client, are never retried, and are refused with `ErrReadOnly`
+  (DELETE, answers 204), plus `ListEffectiveDefaultReviewers` and `ListWorkspaceMembers`, and the two
+  pipeline writes `RunPipeline` (POST `/pipelines` with the target of an existing run — the rerun,
+  answered 201 with the new run) and `StopPipeline` (POST `…/stopPipeline`, 204), guarded by
+  `ErrPipelineTarget`, which refuses a target that cannot be turned into a request body before any
+  request. Writes go through `writeJSON` → `do` on the no-redirect client (it decodes the answer on
+  200 **or** 201, the run endpoint being a 201 Created), are never retried, and are refused with
+  `ErrReadOnly`
   (predicate `IsReadOnly`) when `ClientOpts.ReadOnly` is set. `ErrEmptyUpdate` and
   `ErrReviewersUnknown` guard the update body — `Reviewers` is the complete set and is always sent,
   because Bitbucket clears what a PUT omits. `APIError` carries `Fields` (`error.fields`) and
@@ -44,8 +50,9 @@ What exists:
   returning). Git runs with `GIT_TERMINAL_PROMPT=0` so a credential prompt cannot hang the UI.
 - `pkg/config` — `bitbucket` (workspace, repositories, email, baseUrl, `readOnly`), `pullRequestTabs`,
   `gui.pullRequestListFields`, `refreshInterval`, `editor`, custom command contexts
-  `pullrequests`/`builds`/`repos`/`detail`/`diff`, and `keybinding.pullRequests` with
-  `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`/`approve`.
+  `pullrequests`/`builds`/`repos`/`detail`/`diff`, `keybinding.pullRequests` with
+  `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`/`approve`, and `keybinding.builds` with
+  `rerun`/`stop` — the only group besides `pullRequests` that carries write actions.
 - `pkg/tui` — panels Status `[1]`, Pull Requests `[2]`, Builds `[3]`, Repos `[4]`, Detail `[0]`. PR list
   with Open/Mine/Reviewing tabs and configurable columns, Builds panel with drill-down into a pipeline
   run, its steps and each step's log, repo filter, `/` search, URL picker, copy URL, browser hand-off,
@@ -64,7 +71,14 @@ What exists:
   one key in two directions: it approves, or removes the approval the current user already gave, and it
   decides from `pr.Participants` — a row that carries none is read back first (`approvalStateMsg`) so
   the dialog title is never a lie, an author is refused locally with `cannot approve your own pull
-  request`, and a nil `currentUser` (access token) makes it approve-only. The status panel shows
+  request`, and a nil `currentUser` (access token) makes it approve-only. Two further writes act on
+  the pipeline behind a build rather than on the PR: `P` rerun and `X` stop, in `pipeline_actions.go`,
+  live on the selected Builds row and in the detail panel's `ModePipeline`/`ModeStepLog` and nowhere
+  else. They track their own in-flight map (`pipelineWrites`, keyed by `pipelineCacheKey` — a PR key
+  and a pipeline key share the `ws/slug#N` shape and would collide), read the run back before the
+  dialog (`pipelineActionStateMsg`) so a refusal names the run's real state rather than the build
+  status's, and do not require the PR to be `OPEN`, because a merged PR's pipeline can still be
+  rerun. A rerun drills the detail panel into the run it created. The status panel shows
   `read-only` next to the auth method.
 - `cmd/lazybitbucket` — CLI (`auth`, `logout`, `version`;
   `--demo --log --debug --workspace --repo --read-only`), credential wizard.
@@ -74,16 +88,16 @@ Hard constraints that still hold:
 - **Every write goes through `writeJSON`/`do` and is refused under `ClientOpts.ReadOnly`** with
   `ErrReadOnly`, before a request is built. `writeJSON` sends no body and no `Content-Type` for a nil
   payload, which is what the approve endpoints take. Read-only is browse-only: the TUI blocks sync too,
-  because it pushes. Requesting changes, declining, commenting, tasks and pipeline triggers still have
-  no methods at all.
+  because it pushes. Requesting changes, declining, commenting, review tasks and running an arbitrary
+  custom pipeline definition still have no methods at all.
 - **No test may reach the real API.** Unit tests use `bitbuckettest.FakeClient` or `httptest`;
   integration tests use `pkg/bitbucket/demo`; **every `bitbucket.NewClient` in a test passes a local
   `BaseURL`** — never the default, which is the real host.
 - `pkg/bitbucket` and `pkg/bitbucket/demo` import nothing from `pkg/tui` or `pkg/config`.
 
 Not built yet (ROADMAP step 4+): the richer search / saved filters and PR creation of step 4, and
-everything under "Later / maybe" — requesting changes, declining, posting or resolving comments,
-review tasks, triggering pipelines, a CLI mode. Also not built: the activity feed,
+everything left under "Later / maybe" — requesting changes, declining, posting or resolving comments,
+review tasks, triggering a custom pipeline definition, a CLI mode. Also not built: the activity feed,
 side-by-side diffs, whole-file views and conflict display (deliberate step-2 non-goals), and
 side-by-side conflict resolution for a failed sync — a conflict aborts and is handed back to the user.
 
@@ -151,9 +165,9 @@ Everything user-visible is `lazybitbucket`:
 Auth: Atlassian removed app passwords on 2026-07-28. There is no app-password mode. Two credential
 shapes: a token alone (API token or access token) sent as `Authorization: Bearer`, or an Atlassian
 account email plus an API token sent as HTTP Basic — the Basic username must be the **account email**,
-not a Bitbucket username, or the server answers 401. The five read scopes cover browsing; the write
-actions additionally want `write:pullrequest:bitbucket` (merging and approving included),
-which read-only mode makes unnecessary.
+not a Bitbucket username, or the server answers 401. The five read scopes cover browsing; the six PR write
+actions additionally want `write:pullrequest:bitbucket` (merging and approving included) and the two
+pipeline ones `write:pipeline:bitbucket`, both of which read-only mode makes unnecessary.
 
 ## Conventions
 

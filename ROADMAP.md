@@ -40,5 +40,6 @@ Details live in issues/PRs, not here.
 ## Later / maybe
 
 - [ ] Request changes, post and resolve comments (approving is done — see step 3)
-- [ ] Trigger or re-run pipelines
+- [x] Re-run a completed pipeline and stop a running one (`P` / `X`)
+- [ ] Trigger a custom pipeline definition
 - [ ] CLI mode for scripting

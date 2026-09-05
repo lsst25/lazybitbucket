@@ -419,10 +419,15 @@ func (d *DetailView) SetPipelineLoading(key string, buildNumber int) {
 
 // SetPipeline shows a pipeline run and its steps. A run for another pull
 // request is dropped.
+//
+// A refetch of the run already in view — the read-back after a stop — keeps the
+// user's place: the cursor stays on the step it was on, clamped to the steps
+// that came back, and so does the scroll offset. Any other run starts at the top.
 func (d *DetailView) SetPipeline(key string, p *bitbucket.Pipeline, steps []bitbucket.PipelineStep) {
 	if d.pr == nil || d.pr.Key() != key {
 		return
 	}
+	sameRun := d.mode == ModePipeline && d.pipeline != nil && p != nil && d.pipeline.UUID == p.UUID
 	d.clearStepLog()
 	d.clearFileDiff()
 	d.mode = ModePipeline
@@ -432,6 +437,10 @@ func (d *DetailView) SetPipeline(key string, p *bitbucket.Pipeline, steps []bitb
 	d.pipelineErr = ""
 	if p != nil {
 		d.pipelineBuild = p.BuildNumber
+	}
+	if sameRun {
+		d.listCursor = min(d.listCursor, max(len(steps)-1, 0))
+		return
 	}
 	d.scrollY = 0
 	d.listCursor = 0
@@ -508,6 +517,12 @@ func (d *DetailView) stepMatches(pipelineUUID, stepUUID string) bool {
 
 // Pipeline returns the pipeline run in view, nil when there is none.
 func (d *DetailView) Pipeline() *bitbucket.Pipeline { return d.pipeline }
+
+// PipelineBuild is the build number of the run the pipeline view shows, 0
+// outside it. It is tracked separately from Pipeline() because it is set the
+// moment the drill-down starts: a key pressed while the run is still loading
+// still has to know which run it is about.
+func (d *DetailView) PipelineBuild() int { return d.pipelineBuild }
 
 // SelectedStep returns the step under the block cursor, nil outside the
 // pipeline view.
@@ -1339,7 +1354,7 @@ func (d *DetailView) pipelineHeader(width int) []string {
 		head += " · " + age + " ago"
 	}
 
-	lines := []string{" " + head, " " + gray.Render(pipelineTargetLine(p.Target))}
+	lines := []string{" " + head, " " + gray.Render(PipelineTargetLine(p.Target))}
 	if p.State.Result != nil && p.State.Result.Error != nil {
 		errText := p.State.Result.Error.Key
 		if msg := p.State.Result.Error.Message; msg != "" {
@@ -1353,7 +1368,13 @@ func (d *DetailView) pipelineHeader(width int) []string {
 	return lines
 }
 
-func pipelineTargetLine(target bitbucket.PipelineTarget) string {
+// PipelineTargetLine is the one-line description of what a run was for: the
+// pull request it ran on, the branch it ran for, or — when the target is a
+// shape this line has no words for — its bare type. It is exported because the
+// rerun and stop dialogs name the run with the same sentence the pipeline view
+// heads it with; a dialog that described the run differently would read as
+// being about another one.
+func PipelineTargetLine(target bitbucket.PipelineTarget) string {
 	if pr := target.PullRequest; pr != nil {
 		return fmt.Sprintf("PR #%d %s → %s", pr.ID, target.Source, target.Destination)
 	}

@@ -75,6 +75,13 @@ const (
 	ActReviewers   Action = "reviewers"
 	ActToggleDraft Action = "toggleDraft"
 	ActApprove     Action = "approve"
+
+	// The two pipeline writes. They act on the run behind a build rather than
+	// on the pull request, so they are live in the Builds panel and in the
+	// detail panel's pipeline and step-log views and nowhere else — but they
+	// open a dialog and are hidden in read-only mode like the six above.
+	ActRerunPipeline Action = "rerunPipeline"
+	ActStopPipeline  Action = "stopPipeline"
 )
 
 // Keymap maps actions to key strings. Several keys may trigger one action.
@@ -140,6 +147,9 @@ func DefaultKeymap() Keymap {
 		ActReviewers:   {"V"},
 		ActToggleDraft: {"D"},
 		ActApprove:     {"A"},
+
+		ActRerunPipeline: {"P"},
+		ActStopPipeline:  {"X"},
 	}
 }
 
@@ -185,6 +195,11 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	set(ActReviewers, kcfg.PullRequests.Reviewers)
 	set(ActToggleDraft, kcfg.PullRequests.ToggleDraft)
 	set(ActApprove, kcfg.PullRequests.Approve)
+
+	// The Builds group carries the two pipeline writes and nothing else: every
+	// other key that works on a build row is the pull request group's.
+	set(ActRerunPipeline, kcfg.Builds.Rerun)
+	set(ActStopPipeline, kcfg.Builds.Stop)
 
 	set(ActFocusLeft, kcfg.Detail.FocusLeft)
 	set(ActBack, kcfg.Detail.Back)

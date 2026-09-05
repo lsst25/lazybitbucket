@@ -233,10 +233,15 @@ func DefaultPullRequestTabs() []PullRequestTabConfig {
 // the Repos and Builds panels reuse the select/open/focus-right actions from
 // `pullRequests`. A separate group would silently overwrite the pull request
 // bindings — the dead-config bug lazyjira had with `projects`.
+//
+// `builds` exists only because the two pipeline writes have no counterpart in
+// any other panel; it carries nothing the `pullRequests` group already binds,
+// so it cannot shadow those actions the way a `repos` group would.
 type KeybindingConfig struct {
 	Universal    UniversalKeys   `yaml:"universal"`
 	Navigation   NavigationKeys  `yaml:"navigation"`
 	PullRequests PullRequestKeys `yaml:"pullRequests"`
+	Builds       BuildsKeys      `yaml:"builds"`
 	Detail       DetailKeys      `yaml:"detail"`
 }
 
@@ -294,6 +299,20 @@ type PullRequestKeys struct {
 	// Approve approves the pull request, or withdraws the approval you have
 	// already given, after a confirmation. Default: A.
 	Approve string `yaml:"approve"`
+}
+
+// BuildsKeys are the two pipeline actions, active with a build selected in the
+// Builds panel and while the detail panel shows a pipeline run or a step log.
+// Both are refused in read-only mode (BitbucketConfig.ReadOnly). Select, open
+// and focus-right on the Builds panel still come from PullRequestKeys — see
+// KeybindingConfig.
+type BuildsKeys struct {
+	// Rerun starts a new run with the same target as the selected, completed
+	// run, after a confirmation. Default: P.
+	Rerun string `yaml:"rerun"`
+	// Stop signals the selected running pipeline to stop, after a confirmation.
+	// Default: X.
+	Stop string `yaml:"stop"`
 }
 
 // DetailKeys are the keys active while the detail panel is focused: panel

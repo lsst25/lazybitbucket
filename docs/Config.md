@@ -95,8 +95,12 @@ keybinding:
         reviewers: V
         toggleDraft: D
         approve: A
+    builds:
+        rerun: P
+        stop: X
     # There is no `repos` group: the Repos and Builds panels reuse
-    # pullRequests.select, pullRequests.open and pullRequests.focusRight.
+    # pullRequests.select, pullRequests.open and pullRequests.focusRight;
+    # `builds` adds only the two pipeline actions.
     detail:
         focusLeft: h
         back: backspace
@@ -158,7 +162,7 @@ bitbucket:
   readOnly: true
 ```
 
-Read-only means **browse only**. The API client refuses every non-GET request with an error before a socket is opened, so nothing lazybitbucket does can reach Bitbucket and change it, and the six [pull request actions](Keybindings.md#pull-request-actions) — `M`, `S`, `E`, `V`, `D` and `A` — are hidden from the help surfaces and answer `read-only mode: cannot <action>` if you press them anyway. Sync is refused too: it is driven by local git rather than the API, but it ends in a push, which is a write.
+Read-only means **browse only**. The API client refuses every non-GET request with an error before a socket is opened, so nothing lazybitbucket does can reach Bitbucket and change it, and the six [pull request actions](Keybindings.md#pull-request-actions) — `M`, `S`, `E`, `V`, `D` and `A` — together with the two [pipeline actions](Keybindings.md#rerun-and-stop-a-pipeline) `P` and `X` are hidden from the help surfaces and answer `read-only mode: cannot <action>` if you press them anyway. Sync is refused too: it is driven by local git rather than the API, but it ends in a push, which is a write.
 
 Three ways to turn it on, and none of them can turn it off:
 
@@ -544,17 +548,20 @@ keybinding:
     reviewers: "V"
     toggleDraft: "D"
     approve: "A"
+  builds:
+    rerun: "P"
+    stop: "X"
   detail:
     back: "backspace"
 ```
 
 Only include keys you want to change. Missing keys keep their defaults.
 
-There is deliberately **no `keybinding.repos` group**. The keymap is keyed by action, and the Repos and Builds panels reuse `pullRequests.select`, `pullRequests.open` and `pullRequests.focusRight`; a separate group would silently overwrite the pull request bindings. Remapping `pullRequests.select` remaps it on all three panels.
+There is deliberately **no `keybinding.repos` group**. The keymap is keyed by action, and the Repos and Builds panels reuse `pullRequests.select`, `pullRequests.open` and `pullRequests.focusRight`; a separate group would silently overwrite the pull request bindings. Remapping `pullRequests.select` remaps it on all three panels. There **is** a `keybinding.builds` group, but it holds only the two pipeline actions `rerun` and `stop`, which no other panel has; selecting, opening and focus-right on the Builds panel still come from `pullRequests`.
 
 The `navigation` section controls list navigation keys used across all panels. These default to vim-style keys (`j`/`k`/`g`/`G`/`ctrl+d`/`ctrl+u`).
 
-The `pullRequests` section also carries the six [pull request actions](Keybindings.md#pull-request-actions) — `merge`, `sync`, `edit`, `reviewers`, `toggleDraft` and `approve` (`M`/`S`/`E`/`V`/`D`/`A`) — which act on the selected pull request from the list and from the detail panel alike. The keys *inside* the dialogs they open are fixed and not remappable.
+The `pullRequests` section also carries the six [pull request actions](Keybindings.md#pull-request-actions) — `merge`, `sync`, `edit`, `reviewers`, `toggleDraft` and `approve` (`M`/`S`/`E`/`V`/`D`/`A`) — which act on the selected pull request from the list and from the detail panel alike. The `builds` section carries the two [pipeline actions](Keybindings.md#rerun-and-stop-a-pipeline) — `rerun` and `stop` (`P`/`X`) — which act on the pipeline run behind the selected build, from the Builds panel and from the detail panel's pipeline and step-log views. The keys *inside* the dialogs any of them open are fixed and not remappable.
 
 The `detail` section includes keys for scrolling the detail panel from any left panel without switching focus (defaults: `J`/`K` for line scroll, `ctrl+f`/`ctrl+b` for half-page), plus the keys the detail panel answers to itself: `overviewTab`/`filesTab`/`commitsTab`/`commentsTab` (`i`/`d`/`m`/`t`) jump straight to one pull request tab, `nextFile`/`prevFile` (`n`/`p`) step through the changed files, and `openEditor` (`e`) opens the file under the cursor in [your editor](#editor). Those seven only act while the detail panel is focused.
 
@@ -573,7 +580,9 @@ The current branch is also used at startup: if it matches the source branch of a
 
 ## Pull request actions
 
-`M` merge, `S` sync, `E` edit, `V` reviewers, `D` draft and `A` approve are the only keys that change anything. There is nothing to configure for them beyond the [key names](#keybindings) and [`bitbucket.readOnly`](#read-only-mode), which refuses all six; the dialogs remember nothing between invocations. `A` needs the same `write:pullrequest:bitbucket` scope the other API writes do, and refuses your own pull requests locally — Bitbucket does not let an author approve their own work. What each dialog looks like is in [Keybindings](Keybindings.md#pull-request-actions) — what follows is the behaviour behind them.
+`M` merge, `S` sync, `E` edit, `V` reviewers, `D` draft and `A` approve are the only keys that change a pull request. There is nothing to configure for them beyond the [key names](#keybindings) and [`bitbucket.readOnly`](#read-only-mode), which refuses all six; the dialogs remember nothing between invocations. `A` needs the same `write:pullrequest:bitbucket` scope the other API writes do, and refuses your own pull requests locally — Bitbucket does not let an author approve their own work. What each dialog looks like is in [Keybindings](Keybindings.md#pull-request-actions) — what follows is the behaviour behind them.
+
+`P` rerun and `X` stop are writes as well, but against a pipeline run rather than a pull request: they are bound under [`keybinding.builds`](#keybindings), `readOnly` refuses them like the other six, and they need `write:pipeline:bitbucket` — a scope neither the six actions nor anything lazybitbucket reads asks for. [Rerun and stop a pipeline](Keybindings.md#rerun-and-stop-a-pipeline) has the dialogs and the refusals.
 
 ### Merge strategies
 

@@ -68,9 +68,10 @@ func (c *Client) UpdatePullRequest(
 	if err != nil {
 		return nil, fmt.Errorf("update %s/%s#%d: %w", workspace, repoSlug, id, err)
 	}
-	// writeJSON decodes the body only on a 200. Any other 2xx — or a 200 whose
-	// body is not a pull request — would otherwise hand back a zero PullRequest
-	// that the caller then treats as the server's truth.
+	// writeJSON decodes the body on a 200 or a 201, and this endpoint only ever
+	// answers 200. Any other status — or a 200 whose body is not a pull request —
+	// would otherwise hand back a zero PullRequest that the caller then treats as
+	// the server's truth.
 	if status != http.StatusOK || updated.ID == 0 {
 		return nil, fmt.Errorf("update %s/%s#%d: unexpected status %d without a pull request body",
 			workspace, repoSlug, id, status)

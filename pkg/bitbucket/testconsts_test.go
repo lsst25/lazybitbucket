@@ -68,6 +68,11 @@ const (
 	testMembersPath          = "/workspaces/acme/members"
 )
 
+// testStopPipelinePath is the stop endpoint of the run the pipeline fixtures
+// use, with the braced UUID percent-encoded as it goes on the wire.
+const testStopPipelinePath = testPipelinesPath +
+	"/%7B210f1f44-67d9-4b63-b755-7f46d0af56d4%7D/stopPipeline"
+
 // contentTypeHeader is the header a JSON body must carry.
 const contentTypeHeader = "Content-Type"
 

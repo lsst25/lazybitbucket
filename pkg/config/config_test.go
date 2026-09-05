@@ -969,6 +969,100 @@ func pullRequestKeyByYAMLName(t *testing.T, keys PullRequestKeys, name string) s
 	}
 }
 
+// buildsKeysFixture is a fully-populated BuildsKeys with a distinct value per
+// field, so a wrong or duplicated yaml tag shows up as a mismatch.
+func buildsKeysFixture() BuildsKeys {
+	return BuildsKeys{
+		Rerun: "P",
+		Stop:  "X",
+	}
+}
+
+// buildsKeyYAMLNames are the yaml keys of every keybinding.builds field, in
+// declaration order.
+var buildsKeyYAMLNames = []string{"rerun", "stop"}
+
+func TestLoad_ReadsBuildsKeybindingsFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+
+	want := buildsKeysFixture()
+	var body strings.Builder
+	body.WriteString("keybinding:\n  builds:\n")
+	for _, name := range buildsKeyYAMLNames {
+		fmt.Fprintf(&body, "    %s: %q\n", name, buildsKeyByYAMLName(t, want, name))
+	}
+	writeConfigFile(t, dir, body.String())
+
+	testkit.AssertEqual(t, "Keybinding.Builds", loadOrFatal(t).Keybinding.Builds, want)
+}
+
+func TestSave_RoundTripsBuildsKeybindings(t *testing.T) {
+	t.Setenv(envConfigDir, t.TempDir())
+	clearBitbucketEnv(t)
+
+	cfg := DefaultConfig()
+	cfg.Keybinding.Builds = buildsKeysFixture()
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	written, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if !strings.Contains(string(written), "builds:") {
+		t.Errorf("saved config is missing the builds key group:\n%s", written)
+	}
+	for _, name := range buildsKeyYAMLNames {
+		if !strings.Contains(string(written), name+": ") {
+			t.Errorf("saved config is missing the %q builds key:\n%s", name, written)
+		}
+	}
+
+	testkit.AssertEqual(t, "Keybinding.Builds", loadOrFatal(t).Keybinding.Builds, buildsKeysFixture())
+}
+
+func TestDefaultConfig_LeavesBuildsKeysEmpty(t *testing.T) {
+	t.Parallel()
+
+	// Like the pull request keys, the pipeline action defaults (P and X) live in
+	// the TUI's DefaultKeymap; the config file only carries user overrides.
+	testkit.AssertEqual(t, "Keybinding.Builds", DefaultConfig().Keybinding.Builds, BuildsKeys{})
+}
+
+// buildsKeyByYAMLName maps a yaml key back to its BuildsKeys field value.
+func buildsKeyByYAMLName(t *testing.T, keys BuildsKeys, name string) string {
+	t.Helper()
+	switch name {
+	case "rerun":
+		return keys.Rerun
+	case "stop":
+		return keys.Stop
+	default:
+		t.Fatalf("buildsKeyByYAMLName: unknown yaml key %q", name)
+		return ""
+	}
+}
+
+// TestLoad_BuildsKeysDoNotCollideWithPullRequestKeys guards the reason
+// KeybindingConfig has a `builds` group at all: it must be a separate yaml
+// mapping that leaves the pull request bindings untouched.
+func TestLoad_BuildsKeysDoNotCollideWithPullRequestKeys(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, "keybinding:\n"+
+		"  pullRequests:\n    select: \" \"\n    merge: m\n"+
+		"  builds:\n    rerun: r\n    stop: s\n")
+
+	cfg := loadOrFatal(t)
+	testkit.AssertEqual(t, "Keybinding.PullRequests.Select", cfg.Keybinding.PullRequests.Select, " ")
+	testkit.AssertEqual(t, "Keybinding.PullRequests.Merge", cfg.Keybinding.PullRequests.Merge, "m")
+	testkit.AssertEqual(t, "Keybinding.Builds", cfg.Keybinding.Builds, BuildsKeys{Rerun: "r", Stop: "s"})
+}
+
 func TestDefaultConfig_ReadOnlyIsOff(t *testing.T) {
 	t.Parallel()
 

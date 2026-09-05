@@ -9,8 +9,10 @@ const (
 	pathRepositories = "/repositories/" + Workspace
 
 	segmentPullRequests = "/pullrequests"
+	segmentStatuses     = "/statuses"
 	segmentPipelines    = "/pipelines"
 	segmentSteps        = "/steps"
+	segmentStopPipeline = "/stopPipeline"
 
 	queryPageLenTwo = "?pagelen=2"
 
@@ -50,4 +52,21 @@ const (
 
 	headerContentType = "Content-Type"
 	headerLocation    = "Location"
+)
+
+// The pipeline write fixtures, the runs the two pipeline routes are shown on.
+// They are all in api-gateway, which is the only repository with a run in every
+// state the actions care about.
+const (
+	// buildRunning is the dataset's only IN_PROGRESS run, and therefore the
+	// only one a stop succeeds against.
+	buildRunning = 413
+	// buildFailed is the FAILED run a rerun is worth doing, and buildRerun is
+	// the run that rerunning it creates.
+	buildFailed = 414
+	buildRerun  = 415
+
+	// triggerManual is the trigger every run started through the API carries,
+	// however the run it repeats was triggered.
+	triggerManual = "MANUAL"
 )

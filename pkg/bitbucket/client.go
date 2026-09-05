@@ -69,9 +69,9 @@ const noFields = "-"
 // SetOnRequest must be called before the first request.
 //
 // Reads are GETs; the write methods (MergePullRequest, UpdatePullRequest,
-// ApprovePullRequest and UnapprovePullRequest) go through writeJSON. A client
-// built with ClientOpts.ReadOnly refuses every non-GET request with ErrReadOnly
-// before a socket is opened.
+// ApprovePullRequest, UnapprovePullRequest, RunPipeline and StopPipeline) go
+// through writeJSON. A client built with ClientOpts.ReadOnly refuses every
+// non-GET request with ErrReadOnly before a socket is opened.
 type Client struct {
 	baseURL    string
 	authHeader string
@@ -406,8 +406,10 @@ func (c *Client) getRaw(
 // a merge should do behind the caller's back. statusError already treats a 3xx
 // as an error, so a redirected write surfaces as an *APIError.
 //
-// out is only unmarshalled on a 200 — an empty 202 body would otherwise decode
-// into a zero-value struct and look like a successful answer.
+// out is only unmarshalled on a 200 or a 201 — the run endpoint answers 201
+// Created with the pipeline document, while an empty 202 body (a queued merge)
+// would otherwise decode into a zero-value struct and look like a successful
+// answer.
 func (c *Client) writeJSON(
 	ctx context.Context, method, relPath string, payload, out any,
 ) (int, http.Header, error) {
@@ -445,10 +447,17 @@ func (c *Client) writeJSON(
 	if err := c.statusError(method, relPath, resp); err != nil {
 		return resp.status, resp.header, err
 	}
-	if resp.status != http.StatusOK {
+	if !decodedStatus(resp.status) {
 		return resp.status, resp.header, nil
 	}
 	return resp.status, resp.header, unmarshalBody(method, relPath, resp.body, out)
+}
+
+// decodedStatus reports whether writeJSON hands the response body to out for
+// this status. The write methods check it before trusting what they decoded,
+// so their guards and writeJSON cannot drift apart.
+func decodedStatus(status int) bool {
+	return status == http.StatusOK || status == http.StatusCreated
 }
 
 func unmarshalBody(method, relPath string, body []byte, out any) error {

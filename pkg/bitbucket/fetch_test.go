@@ -146,6 +146,14 @@ func (s *stubClient) UnapprovePullRequest(context.Context, string, string, int) 
 	return nil
 }
 
+func (s *stubClient) RunPipeline(context.Context, string, string, PipelineTarget) (*Pipeline, error) {
+	return nil, nil
+}
+
+func (s *stubClient) StopPipeline(context.Context, string, string, string) error {
+	return nil
+}
+
 func (s *stubClient) ListEffectiveDefaultReviewers(context.Context, string, string) ([]Account, error) {
 	return nil, nil
 }

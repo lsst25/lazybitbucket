@@ -258,17 +258,25 @@ func (a *App) handlePrefetched(msg prefetchedMsg) (tea.Model, tea.Cmd) {
 	return a, a.prefetchNext()
 }
 
-// handlePipelineLoaded shows a pipeline run and its steps.
+// handlePipelineLoaded caches a pipeline run and its steps, and shows them when
+// the detail panel is still on that run. A response that lands after the user
+// backed out of the drill-down, or opened another run, is kept for their next
+// visit but must not pull the panel back into a view they left.
 func (a *App) handlePipelineLoaded(msg pipelineLoadedMsg) (tea.Model, tea.Cmd) {
 	a.logFlag.Store(false)
+	showing := a.detailView.Mode() == views.ModePipeline && a.detailView.PipelineBuild() == msg.build
 	if msg.err != nil {
-		a.detailView.SetPipelineError(msg.key, msg.err.Error())
+		if showing {
+			a.detailView.SetPipelineError(msg.key, msg.err.Error())
+		}
 		a.statusPanel.SetError(msg.err.Error())
 		return a, nil
 	}
 	a.statusPanel.SetOnline(true)
 	a.pipelineCache[pipelineCacheKey(msg.key, msg.build)] = &pipelineEntry{pipeline: msg.pipeline, steps: msg.steps}
-	a.detailView.SetPipeline(msg.key, msg.pipeline, msg.steps)
+	if showing {
+		a.detailView.SetPipeline(msg.key, msg.pipeline, msg.steps)
+	}
 	return a, nil
 }
 

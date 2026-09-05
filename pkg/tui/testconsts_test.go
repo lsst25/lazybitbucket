@@ -21,6 +21,16 @@ const (
 	// testDescription is the pull request body the description editor edits.
 	testDescription = "See https://example.test/spec for the design."
 
+	// The two pipeline runs the rerun and stop flows act on: the build the
+	// fixtures put under the Builds panel cursor, and the run a rerun of it
+	// creates.
+	testBuild    = 412
+	testNewBuild = 413
+
+	// testRunCreator is who the fixture runs say started them, which is the
+	// third thing the pipeline dialogs name a run by.
+	testRunCreator = "Rita Runner"
+
 	// testTaskURL is the queued-merge task a 202 would point at.
 	testTaskURL = "https://api.example.test/2.0/repositories/acme/api-gateway/pullrequests/101/merge/task-status/t-1"
 

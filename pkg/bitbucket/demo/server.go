@@ -61,12 +61,16 @@ type Server struct {
 
 	server *http.Server
 
-	// dataMu guards Data and mergeTasks: the merge and update routes write what
-	// every other route reads. It is separate from mu, which guards the two
-	// pieces of server state that have nothing to do with the dataset, so the
-	// two locks never nest.
+	// dataMu guards Data, mergeTasks and pendingRuns: the merge, update and
+	// pipeline routes write what every other route reads. It is separate from
+	// mu, which guards the two pieces of server state that have nothing to do
+	// with the dataset, so the two locks never nest.
 	dataMu     sync.RWMutex
 	mergeTasks map[string]*mergeTask
+	// pendingRuns holds the UUIDs of the runs POST .../pipelines created and
+	// nobody has read yet. The first read promotes them to IN_PROGRESS; see
+	// promotePendingRun.
+	pendingRuns map[string]bool
 
 	mu         sync.Mutex
 	lastAuth   string
@@ -90,14 +94,15 @@ func NewServerWithDataset(data *Dataset) (*Server, error) {
 	}
 
 	server := &Server{
-		URL:        "http://" + listener.Addr().String(),
-		Data:       data,
-		server:     nil,
-		dataMu:     sync.RWMutex{},
-		mergeTasks: map[string]*mergeTask{},
-		mu:         sync.Mutex{},
-		lastAuth:   "",
-		pageLenCap: 0,
+		URL:         "http://" + listener.Addr().String(),
+		Data:        data,
+		server:      nil,
+		dataMu:      sync.RWMutex{},
+		mergeTasks:  map[string]*mergeTask{},
+		pendingRuns: map[string]bool{},
+		mu:          sync.Mutex{},
+		lastAuth:    "",
+		pageLenCap:  0,
 	}
 	server.server = &http.Server{Handler: server.handler(), ReadHeaderTimeout: readHeaderTimeout}
 
@@ -222,6 +227,10 @@ func (s *Server) handler() http.Handler {
 		s.handleMergeTaskStatus)
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/effective-default-reviewers",
 		s.handleEffectiveDefaultReviewers)
+	// The pipeline writes: starting a run — which is how one is rerun — and
+	// signalling a running one to stop.
+	mux.HandleFunc("POST /repositories/{ws}/{slug}/pipelines", s.handleRunPipeline)
+	mux.HandleFunc("POST /repositories/{ws}/{slug}/pipelines/{ref}/stopPipeline", s.handleStopPipeline)
 	mux.HandleFunc("GET /workspaces/{ws}/members", s.handleWorkspaceMembers)
 	// The redirect targets. A revspec holds a slash and a %0D, so the wildcard
 	// has to swallow the rest of the path.
@@ -389,6 +398,10 @@ func (s *Server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePipeline(w http.ResponseWriter, r *http.Request) {
+	// A run this server started is PENDING until somebody looks at it. The
+	// promotion needs the write lock, so it happens before the read lock.
+	s.promotePendingRun(r)
+
 	s.dataMu.RLock()
 	defer s.dataMu.RUnlock()
 
@@ -401,6 +414,10 @@ func (s *Server) handlePipeline(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePipelineSteps(w http.ResponseWriter, r *http.Request) {
+	// Reading the steps counts as looking at the run, so it promotes it too —
+	// the detail pane asks for the steps as soon as it drills into a run.
+	s.promotePendingRun(r)
+
 	s.dataMu.RLock()
 	defer s.dataMu.RUnlock()
 

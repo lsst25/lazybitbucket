@@ -84,6 +84,7 @@ func newAppWithFake(t *testing.T, fake *bitbuckettest.FakeClient) *App {
 	app.debounce = time.Nanosecond
 	app.refreshEvery = 0
 	app.writesInFlight = map[string]string{}
+	app.pipelineWrites = map[string]string{}
 	// The overlay stack is what NewAppWithAuth builds, and it decides whether a
 	// key reaches a handler at all. A hand-built app without it silently skips
 	// interception, so every unit test gets the real one.

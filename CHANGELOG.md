@@ -38,8 +38,8 @@ one are upstream lazyjira history, and their compare links still point at upstre
 - `pkg/bitbucket`: a Bitbucket Cloud REST client — API tokens and access tokens (Bearer) or Atlassian
   email + API token (Basic), pagination that follows `next`, typed `APIError` with not-found /
   unauthorized / forbidden / rate-limited predicates, and a concurrent multi-repository pull request
-  fetch. Its writes are merging and editing a pull request, and only those: approving, declining,
-  commenting and triggering pipelines have no methods at all
+  fetch. Its writes are merging and editing a pull request, approving one, and rerunning or stopping
+  a pipeline run; declining, commenting and running an arbitrary custom pipeline have no methods at all
 - `pkg/bitbucket/bitbuckettest`: strict fake client for unit tests
 - `pkg/bitbucket/demo`: a deterministic demo dataset and fake REST server, an ordinary untagged
   package, used by `--demo` and by integration tests
@@ -98,18 +98,28 @@ one are upstream lazyjira history, and their compare links still point at upstre
   carry it, so a stale view cannot silently unapprove. Your own pull request is refused locally —
   Bitbucket answers that one `400` — and credentials with no account behind them (an access token)
   get an approve-only key
+- Rerun a finished pipeline run (`P`) and stop a running one (`X`), from the Builds panel and from the
+  detail panel while it shows a pipeline run or a step log. A rerun repeats the original run's target —
+  same commit, same selector, same pull request — and the new run is opened in the detail panel;
+  a stop signals the run and reports `stop requested`. Both read the run back before they ask, so the
+  dialog names its real state, and both refuse locally what the run cannot do (rerunning one that is
+  still going, stopping one that is over). They need the `write:pipeline:bitbucket` scope, are bound
+  under the new `keybinding.builds` group, and are refused in read-only mode like the pull request
+  writes
 - Read-only mode — `bitbucket.readOnly: true`, the `--read-only` flag or `LAZYBITBUCKET_READ_ONLY=1`,
   none of which can turn it off again. The client refuses every non-GET request with `ErrReadOnly`
-  before a socket is opened, the status panel shows `read-only`, and the six action keys disappear
-  from the help surfaces and answer with a hint-bar message. Sync is refused too: it ends in a push
+  before a socket is opened, the status panel shows `read-only`, and the six pull request action keys
+  and the two pipeline ones disappear from the help surfaces and answer with a hint-bar message.
+  Sync is refused too: it ends in a push
 - `pkg/bitbucket`: `MergePullRequest`, `GetMergeTaskStatus`, `UpdatePullRequest`,
-  `ApprovePullRequest`, `UnapprovePullRequest`, `ListEffectiveDefaultReviewers` and
-  `ListWorkspaceMembers`, plus `MergeStrategy` with the six documented values, `MergeOptions`,
-  `PullRequestUpdate`, `PullRequest.ReviewerUUIDs` and the `IsReadOnly` predicate
+  `ApprovePullRequest`, `UnapprovePullRequest`, `ListEffectiveDefaultReviewers`,
+  `ListWorkspaceMembers`, `RunPipeline` and `StopPipeline`, plus `MergeStrategy` with the six
+  documented values, `MergeOptions`, `PullRequestUpdate`, `PullRequest.ReviewerUUIDs` and the
+  `IsReadOnly` predicate
 - `pkg/git`: `IsClean`, `RemoteFor`, `Fetch`, `MergeBranch`, `RebaseOnto`, `Push` and `ErrConflict`
 - `pkg/bitbucket/demo`: write routes on the fake server (`PUT`/merge/merge task status,
-  `POST` and `DELETE` on approve, effective default reviewers, workspace members) with
-  production-shaped validation, and two
+  `POST` and `DELETE` on approve, running and stopping a pipeline, effective default reviewers,
+  workspace members) with production-shaped validation, and two
   designated fixtures — `api-gateway` #103 answers the queued `202` and its task, `web-app` #41
   answers the `409` of a lost race
 - `--demo` (needs a `-tags demo` build), `--workspace`, the repeatable `--repo` flag and `--read-only`
@@ -129,7 +139,8 @@ one are upstream lazyjira history, and their compare links still point at upstre
   `auth.json` or `BITBUCKET_TOKEN`
 - Custom command contexts are now `pullrequests`, `builds`, `repos`, `detail` and `diff`, with `PR`,
   `Repo`, `Build` and `File` template scopes
-- Keybinding groups are `universal`, `navigation`, `pullRequests` and `detail`; `detail` gained
+- Keybinding groups are `universal`, `navigation`, `pullRequests`, `builds` and `detail`; `builds`
+  holds the two pipeline actions `rerun` and `stop` (`P`/`X`) and nothing else; `detail` gained
   `overviewTab`, `filesTab`, `commitsTab`, `commentsTab`, `nextFile`, `prevFile` and `openEditor`.
   There is no `repos` group any more: the Repos and Builds panels reuse `pullRequests.select`,
   `pullRequests.open` and `pullRequests.focusRight`, so those bindings can no longer be silently

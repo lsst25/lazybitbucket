@@ -4,7 +4,7 @@ Press `?` inside lazybitbucket to see the keys that apply to the panel you are i
 
 Keys are remappable in `config.yml` under the `keybinding` section — see [Configuration](Config.md#keybindings). Setting a key **replaces** every default for that action: `navigation.down: n` means `j`, `down` and `ctrl+j` stop navigating down.
 
-There is no `keybinding.repos` group. The Repos and Builds panels reuse the pull request `select`, `open` and `focusRight` actions, so remapping those remaps them everywhere.
+There is no `keybinding.repos` group. The Repos and Builds panels reuse the pull request `select`, `open` and `focusRight` actions, so remapping those remaps them everywhere. There is a `keybinding.builds` group, but it carries only the two pipeline actions — `rerun` and `stop` — which no other panel has.
 
 ## Panels
 
@@ -73,7 +73,7 @@ From any left panel except Status, these scroll the detail panel without moving 
 
 ## Pull request actions
 
-The six keys above are the only ones that change anything on Bitbucket. They work from the pull request list and from the detail panel alike — whatever has focus, they act on the pull request the list cursor is on — and each one opens a dialog first. Nothing is sent until you confirm; `esc` closes a dialog without a request.
+The six keys above are the only ones that change a pull request — `P` and `X` write too, but to a pipeline run rather than the pull request (see [Rerun and stop a pipeline](#rerun-and-stop-a-pipeline)). They work from the pull request list and from the detail panel alike — whatever has focus, they act on the pull request the list cursor is on — and each one opens a dialog first. Nothing is sent until you confirm; `esc` closes a dialog without a request.
 
 A refusal is a one-line message in the hint bar and no dialog:
 
@@ -88,7 +88,7 @@ While a write is in flight the hint bar says `merging #101…`; when it lands it
 
 ### Dialog keys
 
-The merge, sync, draft and approve dialogs are the same form widget, and its keys are fixed — they are not remappable:
+The merge, sync, draft, approve, rerun and stop dialogs are the same form widget, and its keys are fixed — they are not remappable:
 
 | Key | Action |
 |-----|--------|
@@ -194,8 +194,52 @@ The Builds panel lists the commit statuses of the selected pull request.
 | `o` | Open the build result in a browser | `pullRequests.browser` |
 | `l` / `right` | Next panel (Repos) | `pullRequests.focusRight` |
 | `h` / `left` / `esc` | Previous panel (Pull Requests) | `detail.focusLeft` |
+| `P` | Rerun the pipeline run of the selected build — see [Rerun and stop a pipeline](#rerun-and-stop-a-pipeline) | `builds.rerun` |
+| `X` | Stop the running pipeline of the selected build | `builds.stop` |
 
 A status whose URL carries no pipeline build number opens in the browser instead.
+
+### Rerun and stop a pipeline
+
+`P` and `X` are the only Builds panel keys that change anything on Bitbucket, and what they change is the pipeline run behind the selected build rather than the pull request. They work in the detail panel too, while it shows a pipeline run or a step log, so the log of a step that failed and the key that runs it again are one keystroke apart. Both open a dialog first; `esc` closes it without a request.
+
+- `P` **rerun** starts a new run with the same target as one that has finished — same commit, same selector, same pull request. It is what *Rerun* does in the web UI. The target comes from the old run, so a rerun replays the commit that run was for, not whatever the branch points at now; push and let Bitbucket start its own run if what you want is the branch head.
+- `X` **stop** signals a run that is still `PENDING` or `IN_PROGRESS` to stop. Bitbucket acknowledges the signal, not the outcome: the run keeps its state until it has wound itself down, so it turns `STOPPED` a refresh or two later.
+
+Both read the run back before they ask (`checking pipeline #414…`). They have to — a Builds panel row is a commit status, which names a run through the build number in its URL and says nothing about that run's state. The dialog is built from that fresh copy:
+
+```
+ Rerun pipeline #414?
+ ─────────────────────────────
+ FAILED · PUSH · by Linus Torvalds
+ PR #103 bugfix/upstream-timeout → main
+ ─────────────────────────────
+ enter: rerun   esc: cancel
+```
+
+The two rows are the run's state, trigger and creator, and its target — the same target line the pipeline view carries under its header. `X` asks `Stop pipeline #413?` with the same two rows, and confirms with `enter: stop`.
+
+A refusal is a one-line message in the hint bar and no dialog:
+
+| Message | Reason |
+|---------|--------|
+| `select a build in the Builds panel (3) first` | The key was pressed where there is no run to act on — the pull request list, a file diff, a review thread |
+| `this build is not a Bitbucket pipeline` | The selected status comes from some other CI system, so its URL carries no build number to act on |
+| `cannot rerun: pipeline #413 is still running` | `P` on a run that has not finished. Stop it first, or wait for it |
+| `cannot stop: pipeline #414 has already completed` | `X` on a run that is over |
+| `read-only mode: cannot rerun pipeline` | [Read-only mode](Config.md#read-only-mode) is on. It hides both keys and refuses both |
+| `rerun pipeline already in progress` | The previous rerun or stop on this run has not answered yet |
+
+The first two are decided before anything is fetched; the two `cannot …` lines come out of the read-back, so they describe the run as the server has it rather than as the build column drew it.
+
+While the write is in flight the hint bar says `rerunning pipeline #414…` or `stopping pipeline #413…`. Then:
+
+- A rerun reports the run it created — `pipeline #415 started (rerun of #414)` — and, as long as its pull request is still the one on screen, the detail panel drills straight into it, the same view `enter` on a build opens, so its steps fill in as Bitbucket schedules them. The pull request's build statuses are refetched as well, so the new run also appears in the Builds panel.
+- A stop says `stop requested for pipeline #413` and forgets what it had cached about the run: the build statuses are refetched at once, and so is the run itself when the detail panel is showing it. From a step log nothing moves — the log you were reading stays on screen, and the run is read again the next time you open it; `r` there refreshes the pull request and its build statuses, not the run on screen.
+
+A rejected write is reported in Bitbucket's own words — `stop pipeline failed: The specified pipeline has already completed.` when a run ends between the read-back and your `enter`.
+
+Both keys need the `write:pipeline:bitbucket` scope. It is neither one of the five read scopes nor the `write:pullrequest:bitbucket` the six pull request actions use, and the two write scopes are independent, so a token can carry either without the other — see [the scopes in the README](../README.md#get-a-token). Unlike those six actions these two do not care what state the pull request is in: the pipelines of a merged pull request can still be rerun.
 
 ## Repos `[4]`
 
@@ -273,6 +317,10 @@ A `●` in the marker column means the line carries at least one inline comment 
 | `backspace` | Back one level: step log → pipeline → pull request | `detail.back` |
 | `h` / `left` / `esc` | Back one level, then to the left panels | `detail.focusLeft` |
 | `o` | Open the pipeline run in a browser | `pullRequests.browser` |
+| `P` | Rerun this run | `builds.rerun` |
+| `X` | Stop this run | `builds.stop` |
+
+`P` and `X` act on the run on screen here — including from inside a step log, which is where a failed step is usually read — and behave exactly as they do on the Builds panel; see [Rerun and stop a pipeline](#rerun-and-stop-a-pipeline).
 
 ## Help popup
 

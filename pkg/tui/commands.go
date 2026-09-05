@@ -206,6 +206,35 @@ type approvalStateMsg struct {
 	err error
 }
 
+// pipelineActionStateMsg carries the run a pipeline key read before opening its
+// dialog. Neither key can be answered from what the app already holds: the
+// build row's status is the pull request's view of the run and lags it, and a
+// cached run is as old as the last time the drill-down was opened — so a
+// refusal built on either could name a state the run left minutes ago.
+//
+// verb says which key asked, because the refusal, the dialog and the failure
+// line all differ between the two, and build is the run's number, which is what
+// every one of those lines names.
+type pipelineActionStateMsg struct {
+	key      string
+	build    int
+	verb     string
+	pipeline *bitbucket.Pipeline
+	err      error
+}
+
+// pipelineWrittenMsg is the result of a rerun or a stop. build is the run that
+// was acted on — the one that was rerun, not the one the rerun created — and
+// pipeline is the run the server created, which only a rerun has: the stop
+// endpoint answers 204 and nothing else.
+type pipelineWrittenMsg struct {
+	key      string
+	build    int
+	verb     string
+	pipeline *bitbucket.Pipeline
+	err      error
+}
+
 // descriptionEditedMsg is delivered when the editor holding a description temp
 // file exits. The path and the text the file started with travel with it so the
 // handler can read the file back, compare and delete it.

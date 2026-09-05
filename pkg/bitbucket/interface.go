@@ -44,13 +44,15 @@ type RequestLog struct {
 // method takes workspace and repoSlug explicitly: the client is not bound to a
 // workspace.
 //
-// Most of it is reads. The write methods are exactly four — MergePullRequest,
-// UpdatePullRequest, ApprovePullRequest and UnapprovePullRequest — and every one
-// of them fails with ErrReadOnly, before a request is built, on a client
-// constructed with ClientOpts.ReadOnly. GetMergeTaskStatus (the poll a queued
-// merge needs) and the two candidate listings the reviewer picker feeds on are
-// GETs that only a write flow ever issues. Requesting changes, declining,
-// commenting and triggering pipelines are still deliberately absent.
+// Most of it is reads. The write methods are exactly six — MergePullRequest,
+// UpdatePullRequest, ApprovePullRequest, UnapprovePullRequest, RunPipeline and
+// StopPipeline — and every one of them fails with ErrReadOnly, before a request
+// is built, on a client constructed with ClientOpts.ReadOnly. GetMergeTaskStatus
+// (the poll a queued merge needs) and the two candidate listings the reviewer
+// picker feeds on are GETs that only a write flow ever issues. Requesting
+// changes, declining and commenting are still deliberately absent, as is
+// starting an arbitrary custom pipeline: RunPipeline only repeats the target of
+// a run that already exists.
 type ClientInterface interface {
 	GetCurrentUser(ctx context.Context) (*Account, error)
 	GetWorkspace(ctx context.Context, workspace string) (*Workspace, error)
@@ -86,6 +88,14 @@ type ClientInterface interface {
 	// UnapprovePullRequest withdraws the credentials' own approval. The endpoint
 	// answers 204, so there is nothing to return but the failure.
 	UnapprovePullRequest(ctx context.Context, workspace, repoSlug string, id int) error
+	// RunPipeline starts a new run for target — the target of an existing run —
+	// and returns the run the server created, PENDING and triggered MANUAL. It
+	// is how a run is rerun; a target it cannot repeat is refused locally with
+	// ErrPipelineTarget.
+	RunPipeline(ctx context.Context, workspace, repoSlug string, target PipelineTarget) (*Pipeline, error)
+	// StopPipeline signals a running pipeline to stop. pipelineUUID is
+	// Pipeline.UUID (braced); a run that already completed answers 400.
+	StopPipeline(ctx context.Context, workspace, repoSlug, pipelineUUID string) error
 	// ListEffectiveDefaultReviewers returns the repository's default reviewers,
 	// project-inherited ones included. A 403 here is not fatal to the caller.
 	ListEffectiveDefaultReviewers(ctx context.Context, workspace, repoSlug string) ([]Account, error)

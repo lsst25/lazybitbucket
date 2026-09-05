@@ -175,6 +175,22 @@ type UnapprovePullRequestCall struct {
 	ID        int
 }
 
+// RunPipelineCall records one RunPipeline call.
+type RunPipelineCall struct {
+	Ctx       context.Context
+	Workspace string
+	RepoSlug  string
+	Target    bitbucket.PipelineTarget
+}
+
+// StopPipelineCall records one StopPipeline call.
+type StopPipelineCall struct {
+	Ctx          context.Context
+	Workspace    string
+	RepoSlug     string
+	PipelineUUID string
+}
+
 // ListEffectiveDefaultReviewersCall records one ListEffectiveDefaultReviewers call.
 type ListEffectiveDefaultReviewersCall struct {
 	Ctx       context.Context
@@ -228,6 +244,8 @@ type FakeClient struct {
 	UpdatePullRequestFunc             func(ctx context.Context, workspace, repoSlug string, id int, update bitbucket.PullRequestUpdate) (*bitbucket.PullRequest, error)
 	ApprovePullRequestFunc            func(ctx context.Context, workspace, repoSlug string, id int) (*bitbucket.Participant, error)
 	UnapprovePullRequestFunc          func(ctx context.Context, workspace, repoSlug string, id int) error
+	RunPipelineFunc                   func(ctx context.Context, workspace, repoSlug string, target bitbucket.PipelineTarget) (*bitbucket.Pipeline, error)
+	StopPipelineFunc                  func(ctx context.Context, workspace, repoSlug, pipelineUUID string) error
 	ListEffectiveDefaultReviewersFunc func(ctx context.Context, workspace, repoSlug string) ([]bitbucket.Account, error)
 	ListWorkspaceMembersFunc          func(ctx context.Context, workspace string, opts bitbucket.ListOptions) ([]bitbucket.Account, error)
 
@@ -256,6 +274,8 @@ type FakeClient struct {
 	UpdatePullRequestCalls             []UpdatePullRequestCall
 	ApprovePullRequestCalls            []ApprovePullRequestCall
 	UnapprovePullRequestCalls          []UnapprovePullRequestCall
+	RunPipelineCalls                   []RunPipelineCall
+	StopPipelineCalls                  []StopPipelineCall
 	ListEffectiveDefaultReviewersCalls []ListEffectiveDefaultReviewersCall
 	ListWorkspaceMembersCalls          []ListWorkspaceMembersCall
 
@@ -321,6 +341,10 @@ func (f *FakeClient) CallCount(method string) int {
 		return len(f.ApprovePullRequestCalls)
 	case "UnapprovePullRequest":
 		return len(f.UnapprovePullRequestCalls)
+	case "RunPipeline":
+		return len(f.RunPipelineCalls)
+	case "StopPipeline":
+		return len(f.StopPipelineCalls)
 	case "ListEffectiveDefaultReviewers":
 		return len(f.ListEffectiveDefaultReviewersCalls)
 	case "ListWorkspaceMembers":
@@ -629,6 +653,36 @@ func (f *FakeClient) UnapprovePullRequest(ctx context.Context, workspace, repoSl
 		return nil
 	}
 	return fn(ctx, workspace, repoSlug, id)
+}
+
+// RunPipeline records the call and dispatches RunPipelineFunc.
+func (f *FakeClient) RunPipeline(ctx context.Context, workspace, repoSlug string, target bitbucket.PipelineTarget) (*bitbucket.Pipeline, error) {
+	f.mu.Lock()
+	f.RunPipelineCalls = append(f.RunPipelineCalls,
+		RunPipelineCall{Ctx: ctx, Workspace: workspace, RepoSlug: repoSlug, Target: target})
+	fn := f.RunPipelineFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("RunPipeline")
+		return nil, nil
+	}
+	return fn(ctx, workspace, repoSlug, target)
+}
+
+// StopPipeline records the call and dispatches StopPipelineFunc.
+func (f *FakeClient) StopPipeline(ctx context.Context, workspace, repoSlug, pipelineUUID string) error {
+	f.mu.Lock()
+	f.StopPipelineCalls = append(f.StopPipelineCalls,
+		StopPipelineCall{Ctx: ctx, Workspace: workspace, RepoSlug: repoSlug, PipelineUUID: pipelineUUID})
+	fn := f.StopPipelineFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("StopPipeline")
+		return nil
+	}
+	return fn(ctx, workspace, repoSlug, pipelineUUID)
 }
 
 // ListEffectiveDefaultReviewers records the call and dispatches ListEffectiveDefaultReviewersFunc.
