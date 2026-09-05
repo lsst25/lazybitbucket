@@ -392,7 +392,7 @@ func (m *PullRequestList) buildTitle(maxTitleW int) string {
 		return tabPrefix + "Pull Requests"
 	}
 
-	activeStyle := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
+	activeStyle := lipgloss.NewStyle().Foreground(theme.ColorAccent).Bold(true)
 	inactiveStyle := lipgloss.NewStyle().Foreground(theme.ColorWhite)
 	sep := lipgloss.NewStyle().Foreground(theme.ColorGray).Render(tabSep)
 

@@ -464,7 +464,7 @@ func (m *Modal) viewReadOnly() string {
 }
 
 func (m *Modal) viewSelectable() string {
-	titleStyle := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
+	titleStyle := lipgloss.NewStyle().Foreground(theme.ColorAccent).Bold(true)
 
 	contentW := m.selectionContentW()
 	if m.checklist {
@@ -508,7 +508,7 @@ func (m *Modal) viewSelectable() string {
 	}
 	lines = visible
 
-	borderStyle := lipgloss.NewStyle().Foreground(theme.ColorGreen)
+	borderStyle := lipgloss.NewStyle().Foreground(theme.ColorAccent)
 	bv := borderStyle.Render("│")
 
 	topLine := borderStyle.Render("╭" + strings.Repeat("─", contentW) + "╮")
@@ -550,8 +550,8 @@ func (m *Modal) renderItems(titleStyle lipgloss.Style, contentW int) []string {
 	lines = append(lines, " "+titleStyle.Render(m.title))
 	lines = append(lines, "")
 
-	checkGreen := lipgloss.NewStyle().Foreground(theme.ColorGreen)
-	activeMarker := checkGreen.Render("*")
+	checkStyle := lipgloss.NewStyle().Foreground(theme.ColorAccent)
+	activeMarker := checkStyle.Render("*")
 	sepStyle := lipgloss.NewStyle().Foreground(theme.ColorGray)
 	for i, item := range m.items {
 		if item.Separator {
@@ -576,7 +576,7 @@ func (m *Modal) renderItems(titleStyle lipgloss.Style, contentW int) []string {
 					lines = append(lines, style.Render("  "+text))
 				}
 			case sel:
-				lines = append(lines, style.Render(checkGreen.Render("✓")+" "+text))
+				lines = append(lines, style.Render(checkStyle.Render("✓")+" "+text))
 			default:
 				lines = append(lines, style.Render("  "+text))
 			}
@@ -594,7 +594,7 @@ func (m *Modal) renderItems(titleStyle lipgloss.Style, contentW int) []string {
 			case item.Active:
 				lines = append(lines, style.Render(activeMarker+text))
 			case item.Internal:
-				lines = append(lines, style.Render(lipgloss.NewStyle().Foreground(theme.ColorGreen).Render(" "+text)))
+				lines = append(lines, style.Render(lipgloss.NewStyle().Foreground(theme.ColorAccent).Render(" "+text)))
 			default:
 				lines = append(lines, style.Render(" "+text))
 			}

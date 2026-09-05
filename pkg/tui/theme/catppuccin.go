@@ -13,6 +13,7 @@ func fromCatppuccin(f catppuccin.Flavor) *Theme {
 	hex := func(c catppuccin.Color) lipgloss.Color { return lipgloss.Color(c.Hex) }
 	return buildTheme(
 		ColorPalette{
+			Accent:    hex(f.Green()),
 			Green:     hex(f.Green()),
 			Blue:      hex(f.Blue()),
 			Red:       hex(f.Red()),

@@ -59,11 +59,11 @@ func (h HelpBar) View() string {
 
 	availW := h.width
 
-	// Status message (green) on the left.
+	// Status message (accent colour) on the left.
 	prefix := ""
 	if h.statusMsg != "" {
-		greenStyle := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
-		prefix = " " + greenStyle.Render(h.statusMsg) + " "
+		statusStyle := lipgloss.NewStyle().Foreground(theme.ColorAccent).Bold(true)
+		prefix = " " + statusStyle.Render(h.statusMsg) + " "
 		availW -= lipgloss.Width(prefix)
 	}
 

@@ -239,7 +239,7 @@ func (r *RepoList) renderRow(item RepoItem, width int, selected bool) string {
 	case selected && r.Focused:
 		return r.theme.SelectedItem.Width(width).Render(line)
 	case active:
-		coloredMarker := lipgloss.NewStyle().Foreground(theme.ColorGreen).Render(marker)
+		coloredMarker := lipgloss.NewStyle().Foreground(theme.ColorAccent).Render(marker)
 		return r.theme.NormalItem.Width(width).Render(coloredMarker + label + count)
 	default:
 		return r.theme.NormalItem.Width(width).Render(line)

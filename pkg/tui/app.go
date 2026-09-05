@@ -669,8 +669,8 @@ func (a *App) renderHelpOverlay(base string) string {
 
 	popupW := min(maxKey+40, a.width-4)
 
-	keyNormal := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
-	keySel := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true).Background(theme.ColorHighlight)
+	keyNormal := lipgloss.NewStyle().Foreground(theme.ColorAccent).Bold(true)
+	keySel := lipgloss.NewStyle().Foreground(theme.ColorAccent).Bold(true).Background(theme.ColorHighlight)
 	descSel := lipgloss.NewStyle().Background(theme.ColorHighlight)
 
 	lines := make([]string, 0, len(bindings)+2)

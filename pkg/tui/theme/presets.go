@@ -17,7 +17,7 @@ type Preset struct {
 
 // DefaultDarkPresetName / DefaultLightPresetName back the "auto" preset
 // selector. The choice between them is made by looking at the terminal
-// background via lipgloss.HasDarkBackground.
+// background via HasDarkBackground.
 const (
 	DefaultDarkPresetName  = "catppuccin-mocha"
 	DefaultLightPresetName = "catppuccin-latte"
@@ -52,6 +52,39 @@ var presetList = []Preset{
 		Description: "Catppuccin Mocha (dark pastel, deepest)",
 		Build:       catppuccinMocha,
 	},
+	{
+		Name:        "kanagawa-wave",
+		Description: "Kanagawa Wave (dark, the default variant)",
+		Build:       kanagawaWave,
+	},
+	{
+		Name:        "kanagawa-dragon",
+		Description: "Kanagawa Dragon (dark, desaturated)",
+		Build:       kanagawaDragon,
+	},
+	{
+		Name:        "kanagawa-lotus",
+		Description: "Kanagawa Lotus (light)",
+		IsLight:     true,
+		Build:       kanagawaLotus,
+	},
+}
+
+// Family pairs the dark and the light preset of one theme. Selecting a family
+// by name picks whichever variant matches the terminal background, the way a
+// terminal that follows the system appearance switches its own colours. "auto"
+// is the family of the bundled defaults.
+type Family struct {
+	Name  string
+	Dark  string
+	Light string
+}
+
+// familyList is the registry of theme families, in display order.
+var familyList = []Family{
+	{Name: "auto", Dark: DefaultDarkPresetName, Light: DefaultLightPresetName},
+	{Name: "catppuccin", Dark: "catppuccin-mocha", Light: "catppuccin-latte"},
+	{Name: "kanagawa", Dark: "kanagawa-wave", Light: "kanagawa-lotus"},
 }
 
 // Presets returns a copy of the bundled preset list in display order.
@@ -71,4 +104,22 @@ func FindPreset(name string) *Preset {
 		}
 	}
 	return nil
+}
+
+// Families returns a copy of the theme families in display order.
+func Families() []Family {
+	out := make([]Family, len(familyList))
+	copy(out, familyList)
+	return out
+}
+
+// FindFamily looks up a family by case-insensitive name. ok is false when no
+// family matches.
+func FindFamily(name string) (family Family, ok bool) {
+	for _, f := range familyList {
+		if strings.EqualFold(f.Name, name) {
+			return f, true
+		}
+	}
+	return Family{}, false
 }

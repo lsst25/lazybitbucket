@@ -297,7 +297,7 @@ func (f *FormModal) View() string {
 		return ""
 	}
 	contentW := f.contentWidth()
-	titleStyle := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
+	titleStyle := lipgloss.NewStyle().Foreground(theme.ColorAccent).Bold(true)
 	footerStyle := lipgloss.NewStyle().Foreground(theme.ColorGray)
 
 	lines := []string{" " + titleStyle.Render(TruncateEnd(f.title, contentW-1)), ""}
@@ -305,7 +305,7 @@ func (f *FormModal) View() string {
 	lines = append(lines, "", " "+footerStyle.Render(TruncateEnd(f.footer(), contentW-1)))
 	lines = f.clampHeight(lines)
 
-	borderStyle := lipgloss.NewStyle().Foreground(theme.ColorGreen)
+	borderStyle := lipgloss.NewStyle().Foreground(theme.ColorAccent)
 	bv := borderStyle.Render("│")
 
 	var body strings.Builder

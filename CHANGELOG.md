@@ -16,6 +16,12 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 - Started inside a checkout whose remote points at one of the listed repositories, the pull request
   list opens scoped to that repository
+- Kanagawa themes: `kanagawa-wave`, `kanagawa-dragon` and `kanagawa-lotus` presets, and theme
+  families — `kanagawa`, `catppuccin` and the existing `auto` — that pick the dark or the light
+  variant from the terminal background. Under `tmux` and `screen`, where the terminal cannot be
+  asked, the macOS system appearance decides; `rendererStyle: auto` follows the same detection.
+  The palette gained an `accent` role for the chrome (titles, focused border, active tab, key
+  hints, dialog frames): every existing preset keeps it equal to green, Kanagawa uses its blue
 
 - `pkg/bitbucket`: a Bitbucket Cloud REST client — API tokens and access tokens (Bearer) or Atlassian
   email + API token (Basic), pagination that follows `next`, typed `APIError` with not-found /

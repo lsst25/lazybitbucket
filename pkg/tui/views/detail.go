@@ -1109,7 +1109,7 @@ func (d *DetailView) shortTitlePrefix() string {
 
 // renderTabBar styles the labels onto prefix and records their column spans.
 func (d *DetailView) renderTabBar(labels []tabLabel, prefix string, texts []string) string {
-	activeStyle := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
+	activeStyle := lipgloss.NewStyle().Foreground(theme.ColorAccent).Bold(true)
 	inactiveStyle := lipgloss.NewStyle().Foreground(theme.ColorWhite)
 	sep := lipgloss.NewStyle().Foreground(theme.ColorGray).Render(tabBarSep)
 
@@ -1525,19 +1525,19 @@ const splashArt = `█   ███ ███ █ █ ██  ███ ███
 ███ █ █ ███  █  ██  ███  █  ██  ███ ███ █ █ ███  █`
 
 func (d *DetailView) renderSplash(contentWidth, innerH int) string {
-	green := lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
+	accent := lipgloss.NewStyle().Foreground(theme.ColorAccent).Bold(true)
 	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
-	label := lipgloss.NewStyle().Foreground(theme.ColorGreen)
+	label := lipgloss.NewStyle().Foreground(theme.ColorAccent)
 	val := lipgloss.NewStyle()
 
 	artLines := strings.Split(splashArt, "\n")
 	lines := make([]string, 0, len(artLines)+9)
 	if contentWidth >= splashArtWidth {
 		for _, l := range artLines {
-			lines = append(lines, "  "+green.Render(l))
+			lines = append(lines, "  "+accent.Render(l))
 		}
 	} else {
-		lines = append(lines, "  "+green.Render("lazybitbucket"))
+		lines = append(lines, "  "+accent.Render("lazybitbucket"))
 	}
 
 	s := d.splash

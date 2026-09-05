@@ -12,6 +12,11 @@ import (
 // ColorPalette holds the semantic color values for a theme.
 // The default theme uses ANSI 16 codes; Catppuccin themes use hex values.
 type ColorPalette struct {
+	// Accent paints the chrome: panel titles, the focused border, the active
+	// tab, key hints and dialog frames. Every preset except Kanagawa sets it to
+	// Green, the look the app has always had; Kanagawa uses its blue, and
+	// Green keeps meaning "success" — approvals, passing builds, added lines.
+	Accent    lipgloss.Color
 	Green     lipgloss.Color
 	Blue      lipgloss.Color
 	Red       lipgloss.Color
@@ -29,7 +34,8 @@ type ColorPalette struct {
 // by SetTheme so that existing call sites (theme.ColorBlue, etc.) continue
 // to work without changes.
 var (
-	ColorGreen     = lipgloss.Color("2")   // ANSI green — active borders, accents
+	ColorAccent    = lipgloss.Color("2")   // chrome: titles, focused border, active tab, key hints
+	ColorGreen     = lipgloss.Color("2")   // ANSI green — success, approvals, added lines
 	ColorBlue      = lipgloss.Color("4")   // ANSI blue — help bar, selected bg
 	ColorRed       = lipgloss.Color("1")   // ANSI red — errors, unstaged
 	ColorYellow    = lipgloss.Color("3")   // ANSI yellow — warnings, in-progress
@@ -72,6 +78,7 @@ func DefaultTheme() *Theme { return Default }
 // defaultPalette returns the ANSI 16 color palette used by the default theme.
 func defaultPalette() ColorPalette {
 	return ColorPalette{
+		Accent:    lipgloss.Color("2"),
 		Green:     lipgloss.Color("2"),
 		Blue:      lipgloss.Color("4"),
 		Red:       lipgloss.Color("1"),
@@ -113,7 +120,7 @@ func buildTheme(p ColorPalette, authors []lipgloss.Color) *Theme {
 	return &Theme{
 		Title: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(p.Green),
+			Foreground(p.Accent),
 
 		Subtitle: lipgloss.NewStyle().
 			Foreground(p.Gray),
@@ -129,7 +136,7 @@ func buildTheme(p ColorPalette, authors []lipgloss.Color) *Theme {
 
 		ActiveBorder: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(p.Green),
+			BorderForeground(p.Accent),
 
 		InactiveBorder: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -146,7 +153,7 @@ func buildTheme(p ColorPalette, authors []lipgloss.Color) *Theme {
 			Foreground(p.Yellow),
 
 		KeyStyle: lipgloss.NewStyle().
-			Foreground(p.Green),
+			Foreground(p.Accent),
 
 		ValueStyle: lipgloss.NewStyle(),
 
@@ -167,6 +174,7 @@ func buildTheme(p ColorPalette, authors []lipgloss.Color) *Theme {
 // syncColors updates the package-level color variables and the author palette
 // to match the current Default theme.
 func syncColors() {
+	ColorAccent = Default.Colors.Accent
 	ColorGreen = Default.Colors.Green
 	ColorBlue = Default.Colors.Blue
 	ColorRed = Default.Colors.Red
@@ -194,8 +202,9 @@ func syncColors() {
 //  2. Colors (shared overrides applied to every preset).
 //  3. ColorsDark or ColorsLight, whichever matches the preset's IsLight flag.
 //
-// Override map keys are lowercase palette field names: "green", "blue",
-// "red", "yellow", "cyan", "magenta", "white", "gray", "orange", "highlight".
+// Override map keys are lowercase palette field names: "accent", "green",
+// "blue", "red", "yellow", "cyan", "magenta", "white", "gray", "orange",
+// "highlight".
 // Unknown keys and empty values are silently ignored so configs stay
 // forward-compatible.
 type Options struct {
@@ -212,19 +221,19 @@ type Options struct {
 // Preset resolution:
 //   - "" (unset): the bundled "default" ANSI 16 preset, matching the
 //     pre-themeing behavior.
-//   - "auto": chosen at runtime from the terminal background
-//     (DefaultDarkPresetName or DefaultLightPresetName).
-//   - any other value: looked up case-insensitively; unknown names
-//     return an error.
+//   - a family name ("auto", "catppuccin", "kanagawa"): its dark or light
+//     preset, chosen at runtime from the terminal background.
+//   - any other value: looked up case-insensitively among the presets;
+//     unknown names return an error.
 func Init(opts Options) error {
 	var preset *Preset
-	switch strings.ToLower(strings.TrimSpace(opts.Preset)) {
-	case "":
+	name := strings.ToLower(strings.TrimSpace(opts.Preset))
+	if name == "" {
 		preset = FindPreset("default")
-	case "auto":
-		preset = autoDetectPreset()
-	default:
-		preset = FindPreset(opts.Preset)
+	} else if family, ok := FindFamily(name); ok {
+		preset = autoDetectPreset(family)
+	} else {
+		preset = FindPreset(name)
 		if preset == nil {
 			return fmt.Errorf("unknown theme: %q", opts.Preset)
 		}
@@ -254,21 +263,19 @@ func SetTheme(name string) error {
 	return Init(Options{Preset: name})
 }
 
-// autoDetectPreset returns the preset chosen when GUI.Theme is set to
-// "auto". Falls back to the dark default if neither preset is registered,
-// which should be impossible but keeps the binary working if someone
-// strips presets.go.
-func autoDetectPreset() *Preset {
-	if lipgloss.HasDarkBackground() {
-		if p := FindPreset(DefaultDarkPresetName); p != nil {
-			return p
-		}
-	} else {
-		if p := FindPreset(DefaultLightPresetName); p != nil {
-			return p
-		}
+// autoDetectPreset returns the variant of family that matches the terminal
+// background. Falls back to the family's dark preset, then to the first
+// bundled preset, if a name in the family is not registered — impossible
+// unless someone strips presets.go, but it keeps the binary rendering.
+func autoDetectPreset(family Family) *Preset {
+	name := family.Dark
+	if !HasDarkBackground() {
+		name = family.Light
 	}
-	if p := FindPreset(DefaultDarkPresetName); p != nil {
+	if p := FindPreset(name); p != nil {
+		return p
+	}
+	if p := FindPreset(family.Dark); p != nil {
 		return p
 	}
 	return &presetList[0]
@@ -336,6 +343,8 @@ func applyOverrides(p ColorPalette, m map[string]string, scope string) ColorPale
 			c = lipgloss.Color("-1")
 		}
 		switch strings.ToLower(key) {
+		case "accent":
+			p.Accent = c
 		case "green":
 			p.Green = c
 		case "blue":

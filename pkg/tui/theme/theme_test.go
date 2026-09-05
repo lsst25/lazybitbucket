@@ -1,6 +1,7 @@
 package theme
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
@@ -73,6 +74,9 @@ func TestSetThemeAllFlavors(t *testing.T) {
 		"catppuccin-frappe",
 		"catppuccin-macchiato",
 		"catppuccin-mocha",
+		"kanagawa-wave",
+		"kanagawa-dragon",
+		"kanagawa-lotus",
 	}
 	for _, name := range flavors {
 		t.Run(name, func(t *testing.T) {
@@ -88,6 +92,113 @@ func TestSetThemeAllFlavors(t *testing.T) {
 		})
 	}
 	_ = SetTheme("default")
+}
+
+func TestSetThemeKanagawaWave(t *testing.T) {
+	if err := SetTheme("kanagawa-wave"); err != nil {
+		t.Fatalf("SetTheme(kanagawa-wave): %v", err)
+	}
+	if ColorGreen != lipgloss.Color("#98BB6C") {
+		t.Errorf("ColorGreen = %q, want springGreen #98BB6C", ColorGreen)
+	}
+	if ColorBlue != lipgloss.Color("#7E9CD8") {
+		t.Errorf("ColorBlue = %q, want crystalBlue #7E9CD8", ColorBlue)
+	}
+	if ColorHighlight != lipgloss.Color("#2D4F67") {
+		t.Errorf("ColorHighlight = %q, want waveBlue2 #2D4F67", ColorHighlight)
+	}
+	if ColorAccent != lipgloss.Color("#7E9CD8") {
+		t.Errorf("ColorAccent = %q, want crystalBlue #7E9CD8", ColorAccent)
+	}
+	if Default.Title.GetForeground() != ColorAccent || Default.SuccessText.GetForeground() != ColorGreen {
+		t.Error("Title must paint with the accent and SuccessText with green")
+	}
+	_ = SetTheme("default")
+}
+
+func TestAccentIsGreenOutsideKanagawa(t *testing.T) {
+	// The accent role was split out of Green for Kanagawa; every other preset
+	// keeps the two equal so the look users have does not change.
+	for _, p := range Presets() {
+		built := p.Build()
+		isKanagawa := strings.HasPrefix(p.Name, "kanagawa-")
+		if !isKanagawa && built.Colors.Accent != built.Colors.Green {
+			t.Errorf("%s: Accent %q != Green %q", p.Name, built.Colors.Accent, built.Colors.Green)
+		}
+		if isKanagawa && built.Colors.Accent == built.Colors.Green {
+			t.Errorf("%s: Accent should be the theme's blue, got its green %q", p.Name, built.Colors.Accent)
+		}
+	}
+}
+
+func TestInitOverridesAccent(t *testing.T) {
+	err := Init(Options{Preset: "kanagawa-wave", Colors: map[string]string{"accent": "#98BB6C"}})
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if ColorAccent != lipgloss.Color("#98BB6C") {
+		t.Errorf("accent override not applied: %q", ColorAccent)
+	}
+	if ColorBlue != lipgloss.Color("#7E9CD8") {
+		t.Errorf("overriding accent must leave Blue alone: %q", ColorBlue)
+	}
+	_ = SetTheme("default")
+}
+
+func TestSetThemeFamilyPicksAVariantOfThatFamily(t *testing.T) {
+	// A family name resolves to its dark or its light preset depending on
+	// the terminal background, which a test cannot predict — but the result
+	// must be one of the two, and never a preset of another family.
+	for _, family := range Families() {
+		t.Run(family.Name, func(t *testing.T) {
+			if err := SetTheme(family.Name); err != nil {
+				t.Fatalf("SetTheme(%s): %v", family.Name, err)
+			}
+			dark := FindPreset(family.Dark).Build().Colors
+			light := FindPreset(family.Light).Build().Colors
+			if Default.Colors != dark && Default.Colors != light {
+				t.Errorf("%s resolved to a palette that is neither %s nor %s: %+v",
+					family.Name, family.Dark, family.Light, Default.Colors)
+			}
+		})
+	}
+	_ = SetTheme("default")
+}
+
+func TestSetThemeFamilyIsCaseInsensitive(t *testing.T) {
+	if err := SetTheme(" Kanagawa "); err != nil {
+		t.Fatalf("SetTheme(' Kanagawa '): %v", err)
+	}
+	wave := FindPreset("kanagawa-wave").Build().Colors
+	lotus := FindPreset("kanagawa-lotus").Build().Colors
+	if Default.Colors != wave && Default.Colors != lotus {
+		t.Errorf("' Kanagawa ' did not resolve to a Kanagawa palette: %+v", Default.Colors)
+	}
+	_ = SetTheme("default")
+}
+
+func TestFindFamily(t *testing.T) {
+	family, ok := FindFamily("KANAGAWA")
+	if !ok {
+		t.Fatal("FindFamily should be case-insensitive")
+	}
+	if family.Dark != "kanagawa-wave" || family.Light != "kanagawa-lotus" {
+		t.Errorf("kanagawa family = %+v, want wave/lotus", family)
+	}
+	for _, f := range Families() {
+		if FindPreset(f.Dark) == nil || FindPreset(f.Light) == nil {
+			t.Errorf("family %s names an unregistered preset: dark %q, light %q", f.Name, f.Dark, f.Light)
+		}
+		if FindPreset(f.Dark).IsLight || !FindPreset(f.Light).IsLight {
+			t.Errorf("family %s: dark/light variants have the wrong IsLight flag", f.Name)
+		}
+	}
+	if _, ok := FindFamily("kanagawa-wave"); ok {
+		t.Error("a preset name must not be found as a family")
+	}
+	if _, ok := FindFamily("nord"); ok {
+		t.Error("an unknown name must not be found as a family")
+	}
 }
 
 func TestSetThemeUnknown(t *testing.T) {

@@ -1,9 +1,8 @@
 package views
 
 import (
-	"github.com/charmbracelet/lipgloss"
-
 	"github.com/lsst25/lazybitbucket/pkg/config"
+	"github.com/lsst25/lazybitbucket/pkg/tui/theme"
 )
 
 const (
@@ -12,8 +11,11 @@ const (
 	glamourStyleNoTTY = "notty"
 )
 
+// ResolveGlamourStyle maps the configured rendererStyle to a glamour style
+// name. "auto" and an unknown value follow the terminal background, detected
+// the same way the theme presets are (see theme.HasDarkBackground).
 func ResolveGlamourStyle(style string) string {
-	return resolveGlamourStyle(style, lipgloss.HasDarkBackground)
+	return resolveGlamourStyle(style, theme.HasDarkBackground)
 }
 
 func resolveGlamourStyle(style string, hasDarkBackground func() bool) string {

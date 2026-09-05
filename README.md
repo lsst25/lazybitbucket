@@ -41,7 +41,7 @@ make build-demo
 - **Read-only mode** — `--read-only` (or `bitbucket.readOnly: true`) makes the whole thing browse-only: the client refuses every non-GET request before it is sent, and the action keys disappear. Nothing else is ever written either — lazybitbucket cannot approve, decline or comment
 - **Git integration** — check out the source branch of the selected PR; the PR matching your current branch is selected at startup
 - **Custom commands** — bind shell commands to keys with template access to the focused PR, repo, build, or the changed file and line under the cursor
-- **Themes** — default ANSI palette plus all four Catppuccin flavors (Latte, Frappé, Macchiato, Mocha)
+- **Themes** — default ANSI palette, all four Catppuccin flavors (Latte, Frappé, Macchiato, Mocha) and the three Kanagawa variants (Wave, Dragon, Lotus), with light/dark selection that follows your terminal
 - **Adaptive** — side-by-side or stacked layout, mouse support
 
 ## Installation
@@ -188,11 +188,11 @@ These override both `config.yml` and `auth.json`, which makes them handy for a p
 
 ## Themes
 
-lazybitbucket supports the default ANSI 16 palette, Catppuccin presets, auto light/dark selection, and custom palette overrides. Set `gui.theme` in `~/.config/lazybitbucket/config.yml`:
+lazybitbucket supports the default ANSI 16 palette, Catppuccin and Kanagawa presets, light/dark selection that follows your terminal background, and custom palette overrides. Set `gui.theme` in `~/.config/lazybitbucket/config.yml` to a preset, or to a family name such as `kanagawa` that picks Wave or Lotus from the background:
 
 ```yaml
 gui:
-  theme: catppuccin-mocha
+  theme: kanagawa   # or a preset: catppuccin-mocha, kanagawa-lotus, ...
 ```
 
 See the [Themes docs](docs/Config.md#themes) for supported values, palette overrides, and examples.

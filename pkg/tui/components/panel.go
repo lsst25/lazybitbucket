@@ -20,7 +20,7 @@ type ScrollInfo struct {
 func RenderCollapsedBar(title, footer string, width int, focused bool) string {
 	borderColor := theme.ColorNone
 	if focused {
-		borderColor = theme.ColorGreen
+		borderColor = theme.ColorAccent
 	}
 	borderStyle := lipgloss.NewStyle().Foreground(borderColor)
 
@@ -60,7 +60,7 @@ func RenderPanelWithColor(title, footer, content string, width, innerHeight int,
 func RenderPanelFull(title, footer, content string, width, innerHeight int, focused bool, scroll *ScrollInfo) string {
 	borderColor := theme.ColorNone
 	if focused {
-		borderColor = theme.ColorGreen
+		borderColor = theme.ColorAccent
 	}
 	return renderPanelImpl(title, footer, content, width, innerHeight, borderColor, scroll)
 }
@@ -70,7 +70,7 @@ func renderPanelImpl(title, footer, content string, width, innerHeight int, bord
 
 	var styledTitle string
 	switch borderColor {
-	case theme.ColorGreen:
+	case theme.ColorAccent:
 		styledTitle = th.Title.Render(title)
 	case theme.ColorNone:
 		styledTitle = lipgloss.NewStyle().Foreground(borderColor).Render(title)
