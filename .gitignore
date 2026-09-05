@@ -21,6 +21,10 @@ config.yml
 # Nix
 /result
 
+# Documentation is part of the repository even where a global excludes file
+# ignores a "docs" directory: a repository pattern outranks core.excludesFile.
+!docs/
+
 # Coverage
 cover.out
 

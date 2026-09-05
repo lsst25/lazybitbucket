@@ -138,6 +138,14 @@ func (s *stubClient) UpdatePullRequest(
 	return nil, nil
 }
 
+func (s *stubClient) ApprovePullRequest(context.Context, string, string, int) (*Participant, error) {
+	return nil, nil
+}
+
+func (s *stubClient) UnapprovePullRequest(context.Context, string, string, int) error {
+	return nil
+}
+
 func (s *stubClient) ListEffectiveDefaultReviewers(context.Context, string, string) ([]Account, error) {
 	return nil, nil
 }

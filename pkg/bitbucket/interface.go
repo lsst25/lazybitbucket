@@ -44,12 +44,13 @@ type RequestLog struct {
 // method takes workspace and repoSlug explicitly: the client is not bound to a
 // workspace.
 //
-// Most of it is reads. The write methods are exactly five — MergePullRequest,
-// GetMergeTaskStatus (the poll a queued merge needs), UpdatePullRequest, and the
-// two candidate listings the reviewer picker feeds on — and every one of them
-// fails with ErrReadOnly, before a request is built, on a client constructed
-// with ClientOpts.ReadOnly. Approving, declining, commenting and triggering
-// pipelines are still deliberately absent.
+// Most of it is reads. The write methods are exactly four — MergePullRequest,
+// UpdatePullRequest, ApprovePullRequest and UnapprovePullRequest — and every one
+// of them fails with ErrReadOnly, before a request is built, on a client
+// constructed with ClientOpts.ReadOnly. GetMergeTaskStatus (the poll a queued
+// merge needs) and the two candidate listings the reviewer picker feeds on are
+// GETs that only a write flow ever issues. Requesting changes, declining,
+// commenting and triggering pipelines are still deliberately absent.
 type ClientInterface interface {
 	GetCurrentUser(ctx context.Context) (*Account, error)
 	GetWorkspace(ctx context.Context, workspace string) (*Workspace, error)
@@ -78,6 +79,13 @@ type ClientInterface interface {
 	// and returns the pull request as the server left it. The update must carry
 	// the complete reviewer set — see PullRequestUpdate.Reviewers.
 	UpdatePullRequest(ctx context.Context, workspace, repoSlug string, id int, update PullRequestUpdate) (*PullRequest, error)
+	// ApprovePullRequest records the credentials' own approval and returns the
+	// participant row the server built for it. Approving one's own pull request
+	// is a 400.
+	ApprovePullRequest(ctx context.Context, workspace, repoSlug string, id int) (*Participant, error)
+	// UnapprovePullRequest withdraws the credentials' own approval. The endpoint
+	// answers 204, so there is nothing to return but the failure.
+	UnapprovePullRequest(ctx context.Context, workspace, repoSlug string, id int) error
 	// ListEffectiveDefaultReviewers returns the repository's default reviewers,
 	// project-inherited ones included. A 403 here is not fatal to the caller.
 	ListEffectiveDefaultReviewers(ctx context.Context, workspace, repoSlug string) ([]Account, error)

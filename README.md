@@ -39,7 +39,8 @@ make build-demo
 - **Sync with the target branch** — `S` merges or rebases the source branch onto its target and pushes, through git in your own checkout, because Bitbucket's "Sync now" has no API. Conflicts abort and are left to you
 - **Edit** — `E` changes the title inline, or opens the description in `$EDITOR` and sends back what you saved
 - **Reviewers and draft** — `V` is a checklist over the current reviewers, the repository's default reviewers and the workspace members; `D` flips the PR between draft and ready for review
-- **Read-only mode** — `--read-only` (or `bitbucket.readOnly: true`) makes the whole thing browse-only: the client refuses every non-GET request before it is sent, and the action keys disappear. Nothing else is ever written either — lazybitbucket cannot approve, decline or comment
+- **Approve** — `A` approves the PR, and `A` again withdraws the approval you gave; the dialog always names the direction, and your own PRs are refused the way Bitbucket refuses them
+- **Read-only mode** — `--read-only` (or `bitbucket.readOnly: true`) makes the whole thing browse-only: the client refuses every non-GET request before it is sent, and the action keys disappear. Nothing else is ever written either — lazybitbucket cannot request changes, decline or comment
 - **Git integration** — check out the source branch of the selected PR; the PR matching your current branch is selected at startup
 - **Custom commands** — bind shell commands to keys with template access to the focused PR, repo, build, or the changed file and line under the cursor
 - **Themes** — default ANSI palette, all four Catppuccin flavors (Latte, Frappé, Macchiato, Mocha) and the three Kanagawa variants (Wave, Dragon, Lotus), with light/dark selection that follows your terminal
@@ -139,11 +140,11 @@ A token without scopes does not work. These five read scopes cover everything la
 
 API token scopes are a different namespace from OAuth 2.0 scopes and do **not** imply each other, so tick all five.
 
-The five [pull request actions](docs/Keybindings.md#pull-request-actions) need one more:
+The six [pull request actions](docs/Keybindings.md#pull-request-actions) need one more:
 
 | Scope | Needed for |
 |-------|------------|
-| `write:pullrequest:bitbucket` | editing the title or description, setting reviewers, toggling draft, and merging |
+| `write:pullrequest:bitbucket` | editing the title or description, setting reviewers, toggling draft, approving, and merging |
 
 Leave it off and every read still works while a write comes back `403` — no harm done, just a message in the hint bar. If you would rather not have the possibility at all, use [read-only mode](docs/Config.md#read-only-mode), which does not need it and refuses writes before they are sent. Sync needs no scope of its own: it is local git, so what it needs is push permission on the remote. On a repository, project or workspace access token the same permission is spelled `pullrequest:write`.
 
@@ -238,6 +239,7 @@ Press `?` inside the app for all keybindings.
 | `E` | Edit the title or the description |
 | `V` | Set the reviewers |
 | `D` | Toggle draft |
+| `A` | Approve, or remove your approval |
 | `i` `d` `m` `t` | Jump to the Overview / Files / Commits / Comments tab of the PR |
 | `n` / `p` | Next / previous changed file |
 | `e` | Open the file under the cursor in your editor |

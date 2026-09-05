@@ -62,6 +62,7 @@ const contentTypeText = "text/plain"
 // Write endpoint paths, all on the same pull request the read fixtures use.
 const (
 	testMergePath            = testPath + "/merge"
+	testApprovePath          = testPath + "/approve"
 	testTaskPath             = testMergePath + "/task-status/t-9"
 	testDefaultReviewersPath = testRepoPath + "/effective-default-reviewers"
 	testMembersPath          = "/workspaces/acme/members"

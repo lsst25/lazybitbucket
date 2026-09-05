@@ -449,7 +449,7 @@ func (a *App) handlePullRequestAction(action Action) (tea.Model, tea.Cmd, bool) 
 	case ActRefreshAll:
 		return a, a.refreshCmd(), true
 
-	// The five write actions. Each one opens its own dialog and returns
+	// The six write actions. Each one opens its own dialog and returns
 	// without touching Bitbucket; see actions.go.
 	case ActMerge:
 		return a, a.handleActionMerge(), true
@@ -465,6 +465,9 @@ func (a *App) handlePullRequestAction(action Action) (tea.Model, tea.Cmd, bool) 
 
 	case ActToggleDraft:
 		return a, a.handleActionToggleDraft(), true
+
+	case ActApprove:
+		return a, a.handleActionApprove(), true
 	}
 	return nil, nil, false
 }

@@ -37,6 +37,7 @@ const (
 	// Write route segments and the members their documents carry.
 	segmentMerge      = "/merge"
 	segmentTaskStatus = "/task-status"
+	segmentApprove    = "/approve"
 	pathMembers       = pathWorkspace + "/members"
 
 	fieldTaskStatus  = "task_status"

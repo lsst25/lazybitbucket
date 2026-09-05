@@ -159,6 +159,22 @@ type UpdatePullRequestCall struct {
 	Update    bitbucket.PullRequestUpdate
 }
 
+// ApprovePullRequestCall records one ApprovePullRequest call.
+type ApprovePullRequestCall struct {
+	Ctx       context.Context
+	Workspace string
+	RepoSlug  string
+	ID        int
+}
+
+// UnapprovePullRequestCall records one UnapprovePullRequest call.
+type UnapprovePullRequestCall struct {
+	Ctx       context.Context
+	Workspace string
+	RepoSlug  string
+	ID        int
+}
+
 // ListEffectiveDefaultReviewersCall records one ListEffectiveDefaultReviewers call.
 type ListEffectiveDefaultReviewersCall struct {
 	Ctx       context.Context
@@ -210,6 +226,8 @@ type FakeClient struct {
 	MergePullRequestFunc              func(ctx context.Context, workspace, repoSlug string, id int, opts bitbucket.MergeOptions) (bitbucket.MergeResult, error)
 	GetMergeTaskStatusFunc            func(ctx context.Context, taskURL string) (bitbucket.MergeTaskStatus, error)
 	UpdatePullRequestFunc             func(ctx context.Context, workspace, repoSlug string, id int, update bitbucket.PullRequestUpdate) (*bitbucket.PullRequest, error)
+	ApprovePullRequestFunc            func(ctx context.Context, workspace, repoSlug string, id int) (*bitbucket.Participant, error)
+	UnapprovePullRequestFunc          func(ctx context.Context, workspace, repoSlug string, id int) error
 	ListEffectiveDefaultReviewersFunc func(ctx context.Context, workspace, repoSlug string) ([]bitbucket.Account, error)
 	ListWorkspaceMembersFunc          func(ctx context.Context, workspace string, opts bitbucket.ListOptions) ([]bitbucket.Account, error)
 
@@ -236,6 +254,8 @@ type FakeClient struct {
 	MergePullRequestCalls              []MergePullRequestCall
 	GetMergeTaskStatusCalls            []GetMergeTaskStatusCall
 	UpdatePullRequestCalls             []UpdatePullRequestCall
+	ApprovePullRequestCalls            []ApprovePullRequestCall
+	UnapprovePullRequestCalls          []UnapprovePullRequestCall
 	ListEffectiveDefaultReviewersCalls []ListEffectiveDefaultReviewersCall
 	ListWorkspaceMembersCalls          []ListWorkspaceMembersCall
 
@@ -297,6 +317,10 @@ func (f *FakeClient) CallCount(method string) int {
 		return len(f.GetMergeTaskStatusCalls)
 	case "UpdatePullRequest":
 		return len(f.UpdatePullRequestCalls)
+	case "ApprovePullRequest":
+		return len(f.ApprovePullRequestCalls)
+	case "UnapprovePullRequest":
+		return len(f.UnapprovePullRequestCalls)
 	case "ListEffectiveDefaultReviewers":
 		return len(f.ListEffectiveDefaultReviewersCalls)
 	case "ListWorkspaceMembers":
@@ -575,6 +599,36 @@ func (f *FakeClient) UpdatePullRequest(ctx context.Context, workspace, repoSlug 
 		return nil, nil
 	}
 	return fn(ctx, workspace, repoSlug, id, update)
+}
+
+// ApprovePullRequest records the call and dispatches ApprovePullRequestFunc.
+func (f *FakeClient) ApprovePullRequest(ctx context.Context, workspace, repoSlug string, id int) (*bitbucket.Participant, error) {
+	f.mu.Lock()
+	f.ApprovePullRequestCalls = append(f.ApprovePullRequestCalls,
+		ApprovePullRequestCall{Ctx: ctx, Workspace: workspace, RepoSlug: repoSlug, ID: id})
+	fn := f.ApprovePullRequestFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("ApprovePullRequest")
+		return nil, nil
+	}
+	return fn(ctx, workspace, repoSlug, id)
+}
+
+// UnapprovePullRequest records the call and dispatches UnapprovePullRequestFunc.
+func (f *FakeClient) UnapprovePullRequest(ctx context.Context, workspace, repoSlug string, id int) error {
+	f.mu.Lock()
+	f.UnapprovePullRequestCalls = append(f.UnapprovePullRequestCalls,
+		UnapprovePullRequestCall{Ctx: ctx, Workspace: workspace, RepoSlug: repoSlug, ID: id})
+	fn := f.UnapprovePullRequestFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("UnapprovePullRequest")
+		return nil
+	}
+	return fn(ctx, workspace, repoSlug, id)
 }
 
 // ListEffectiveDefaultReviewers records the call and dispatches ListEffectiveDefaultReviewersFunc.

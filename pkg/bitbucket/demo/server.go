@@ -216,6 +216,8 @@ func (s *Server) handler() http.Handler {
 	// The write routes, plus the two listings the reviewer picker feeds on.
 	mux.HandleFunc("PUT /repositories/{ws}/{slug}/pullrequests/{id}", s.handleUpdatePullRequest)
 	mux.HandleFunc("POST /repositories/{ws}/{slug}/pullrequests/{id}/merge", s.handleMergePullRequest)
+	mux.HandleFunc("POST /repositories/{ws}/{slug}/pullrequests/{id}/approve", s.handleApprovePullRequest)
+	mux.HandleFunc("DELETE /repositories/{ws}/{slug}/pullrequests/{id}/approve", s.handleUnapprovePullRequest)
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}/merge/task-status/{task}",
 		s.handleMergeTaskStatus)
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/effective-default-reviewers",

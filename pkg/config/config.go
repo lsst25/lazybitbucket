@@ -268,7 +268,7 @@ type UniversalKeys struct {
 }
 
 // PullRequestKeys are the keys active with a pull request selected, in the
-// pull request list or the detail panel. The five write actions at the bottom
+// pull request list or the detail panel. The six write actions at the bottom
 // are refused in read-only mode (BitbucketConfig.ReadOnly).
 type PullRequestKeys struct {
 	Select     string `yaml:"select"`
@@ -291,6 +291,9 @@ type PullRequestKeys struct {
 	// ToggleDraft flips the pull request between draft and ready for review,
 	// after a confirmation. Default: D.
 	ToggleDraft string `yaml:"toggleDraft"`
+	// Approve approves the pull request, or withdraws the approval you have
+	// already given, after a confirmation. Default: A.
+	Approve string `yaml:"approve"`
 }
 
 // DetailKeys are the keys active while the detail panel is focused: panel

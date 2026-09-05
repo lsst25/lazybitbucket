@@ -872,6 +872,59 @@ func TestClientUpdatePullRequestEmptyTitle(t *testing.T) {
 		msgBadRequest+": "+fieldTitle+": "+msgTitleRequired)
 }
 
+// TestClientApproveAndUnapprovePullRequest walks the approval round trip the
+// TUI's A key makes: approve, read the pull request back, withdraw, read it
+// back again.
+func TestClientApproveAndUnapprovePullRequest(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	client := newDemoClient(t, server)
+
+	approved, err := client.ApprovePullRequest(t.Context(), Workspace, repoAPIGateway, 102)
+	if err != nil {
+		t.Fatalf("ApprovePullRequest(#102): %v", err)
+	}
+	testkit.AssertEqual(t, "user.uuid", approved.User.UUID, uuidDemo)
+	testkit.AssertEqual(t, "role", approved.Role, bitbucket.RoleReviewer)
+	testkit.AssertEqual(t, "approved", approved.Approved, true)
+
+	fetched, err := client.GetPullRequest(t.Context(), Workspace, repoAPIGateway, 102)
+	if err != nil {
+		t.Fatalf("GetPullRequest(#102): %v", err)
+	}
+	testkit.AssertEqual(t, "approvals after approving", fetched.ReviewSummary().Approved, 1)
+
+	if err := client.UnapprovePullRequest(t.Context(), Workspace, repoAPIGateway, 102); err != nil {
+		t.Fatalf("UnapprovePullRequest(#102): %v", err)
+	}
+
+	after, err := client.GetPullRequest(t.Context(), Workspace, repoAPIGateway, 102)
+	if err != nil {
+		t.Fatalf("GetPullRequest(#102) after withdrawing: %v", err)
+	}
+	testkit.AssertEqual(t, "approvals after withdrawing", after.ReviewSummary().Approved, 0)
+	testkit.AssertEqual(t, "the reviewer is still expected", after.IsReviewer(uuidDemo), true)
+}
+
+// TestClientApproveOwnPullRequest is the refusal the TUI answers before it ever
+// asks — but the client has to read it as an *APIError when it does.
+func TestClientApproveOwnPullRequest(t *testing.T) {
+	t.Parallel()
+
+	client := newDemoClient(t, newTestServer(t))
+
+	_, err := client.ApprovePullRequest(t.Context(), Workspace, repoWebApp, prRefsChanged)
+
+	var apiErr *bitbucket.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("ApprovePullRequest(own) error = %v, want an *APIError", err)
+	}
+	testkit.AssertEqual(t, "status", apiErr.Status, http.StatusBadRequest)
+	testkit.AssertEqual(t, "method", apiErr.Method, http.MethodPost)
+	testkit.AssertEqual(t, "UserMessage()", apiErr.UserMessage(), msgCannotApproveOwn)
+}
+
 // TestClientReadOnlyRefusesWritesWithoutAskingTheServer is the guarantee the
 // browse-only mode is worth having: the refusal happens in the client, so the
 // server never hears about the write at all.
@@ -896,6 +949,16 @@ func TestClientReadOnlyRefusesWritesWithoutAskingTheServer(t *testing.T) {
 		})
 	if !bitbucket.IsReadOnly(updateErr) {
 		t.Fatalf("UpdatePullRequest on a read-only client = %v, want ErrReadOnly", updateErr)
+	}
+
+	_, approveErr := client.ApprovePullRequest(t.Context(), Workspace, repoAPIGateway, 102)
+	if !bitbucket.IsReadOnly(approveErr) {
+		t.Fatalf("ApprovePullRequest on a read-only client = %v, want ErrReadOnly", approveErr)
+	}
+
+	unapproveErr := client.UnapprovePullRequest(t.Context(), Workspace, repoWebApp, 40)
+	if !bitbucket.IsReadOnly(unapproveErr) {
+		t.Fatalf("UnapprovePullRequest on a read-only client = %v, want ErrReadOnly", unapproveErr)
 	}
 
 	// Nothing reached the server: it has seen no request at all, and the pull

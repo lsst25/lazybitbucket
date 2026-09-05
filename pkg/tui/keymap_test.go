@@ -62,7 +62,7 @@ func TestDefaultKeymap_EveryActionHasAKey(t *testing.T) {
 	for _, action := range []Action{
 		ActDetailOverview, ActDetailFiles, ActDetailCommits, ActDetailComments,
 		ActNextFile, ActPrevFile, ActOpenEditor,
-		ActMerge, ActSync, ActEdit, ActReviewers, ActToggleDraft,
+		ActMerge, ActSync, ActEdit, ActReviewers, ActToggleDraft, ActApprove,
 	} {
 		if keymap.Keys(action) == "" {
 			t.Errorf("%q has no default key, so its help row would be blank", action)
@@ -103,18 +103,21 @@ func TestKeymapFromConfig_RemapsTheWriteKeys(t *testing.T) {
 	keybindingConfig.PullRequests.Edit = "X"
 	keybindingConfig.PullRequests.Reviewers = "I"
 	keybindingConfig.PullRequests.ToggleDraft = "N"
+	keybindingConfig.PullRequests.Approve = "Z"
 
 	keymap := KeymapFromConfig(keybindingConfig)
 
 	for key, want := range map[string]Action{
 		"F": ActMerge, "W": ActSync, "X": ActEdit, "I": ActReviewers, "N": ActToggleDraft,
+		"Z": ActApprove,
 	} {
 		testkit.AssertEqual(t, "remapped "+key, keymap.Match(key), want)
 	}
 	// The defaults they replaced are free again.
-	for _, key := range []string{"M", "S", "E", "V", "D"} {
+	for _, key := range []string{"M", "S", "E", "V", "D", "A"} {
 		if action := keymap.Match(key); action == ActMerge || action == ActSync ||
-			action == ActEdit || action == ActReviewers || action == ActToggleDraft {
+			action == ActEdit || action == ActReviewers || action == ActToggleDraft ||
+			action == ActApprove {
 			t.Errorf("key %q still resolves to %q after the remap", key, action)
 		}
 	}

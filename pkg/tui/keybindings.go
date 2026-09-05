@@ -90,7 +90,7 @@ func (a *App) reviewTabBindings() []Binding {
 	return nil
 }
 
-// writeBindings are the five keys that change the pull request on Bitbucket.
+// writeBindings are the six keys that change the pull request on Bitbucket.
 // They are omitted entirely in read-only mode: a key that answers "read-only
 // mode" is not a keybinding worth listing.
 func (a *App) writeBindings() []Binding {
@@ -103,6 +103,7 @@ func (a *App) writeBindings() []Binding {
 		a.bind(ActEdit, "edit the title or description"),
 		a.bind(ActReviewers, "set the reviewers"),
 		a.bind(ActToggleDraft, "toggle draft state"),
+		a.bind(ActApprove, "approve the pull request (again: remove your approval)"),
 	}
 }
 
@@ -118,6 +119,7 @@ func (a *App) writeHelpItems() []components.HelpItem {
 		{Key: km.Keys(ActEdit), Description: "edit"},
 		{Key: km.Keys(ActReviewers), Description: "reviewers"},
 		{Key: km.Keys(ActToggleDraft), Description: "draft"},
+		{Key: km.Keys(ActApprove), Description: "approve"},
 	}
 }
 

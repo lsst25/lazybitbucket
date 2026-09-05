@@ -68,9 +68,10 @@ const noFields = "-"
 // binding and is safe for concurrent use once constructed — SetLogger and
 // SetOnRequest must be called before the first request.
 //
-// Reads are GETs; the write methods (MergePullRequest, UpdatePullRequest) send
-// JSON bodies through writeJSON. A client built with ClientOpts.ReadOnly
-// refuses every non-GET request with ErrReadOnly before a socket is opened.
+// Reads are GETs; the write methods (MergePullRequest, UpdatePullRequest,
+// ApprovePullRequest and UnapprovePullRequest) go through writeJSON. A client
+// built with ClientOpts.ReadOnly refuses every non-GET request with ErrReadOnly
+// before a socket is opened.
 type Client struct {
 	baseURL    string
 	authHeader string
@@ -395,6 +396,11 @@ func (c *Client) getRaw(
 // the response headers alongside any error, so a caller can tell a 200 (the
 // answer is in out) from a 202 (the answer is a Location to poll).
 //
+// A nil payload is a request that carries no document at all — the approve
+// endpoints take none — and is sent without a body and without a Content-Type
+// rather than as the four bytes "null". A nil out asks for no decoding, which
+// is what a 204 deserves.
+//
 // It uses noRedirectClient deliberately: net/http turns a redirected POST into
 // a GET on 301/302/303 and replays the body on 307/308, and neither is a thing
 // a merge should do behind the caller's back. statusError already treats a 3xx
@@ -410,9 +416,16 @@ func (c *Client) writeJSON(
 		return 0, nil, ErrReadOnly
 	}
 
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return 0, nil, fmt.Errorf("encode request body for %s %s: %w", method, relPath, err)
+	var (
+		body        []byte
+		contentType string
+	)
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return 0, nil, fmt.Errorf("encode request body for %s %s: %w", method, relPath, err)
+		}
+		body, contentType = encoded, acceptJSON
 	}
 
 	spec := requestSpec{
@@ -420,7 +433,7 @@ func (c *Client) writeJSON(
 		fullURL:      c.baseURL + relPath,
 		relPath:      relPath,
 		accept:       acceptJSON,
-		contentType:  acceptJSON,
+		contentType:  contentType,
 		body:         body,
 		extraHeaders: nil,
 	}

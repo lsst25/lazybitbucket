@@ -157,6 +157,12 @@ type pullRequestWrittenMsg struct {
 	verb string
 	pr   *bitbucket.PullRequest
 	err  error
+	// readErr is set when the write itself landed but reading the pull request
+	// back failed. pr is then the cached copy patched locally, or nil when no
+	// faithful patch was possible, and id names the pull request for the
+	// help bar. The write is reported as done, with the read failure appended.
+	readErr error
+	id      int
 }
 
 // mergeQueuedMsg is a merge Bitbucket answered 202 to: it names the task to
@@ -185,6 +191,19 @@ type reviewerCandidatesMsg struct {
 	candidates []reviewerCandidate
 	note       string
 	err        error
+}
+
+// approvalStateMsg carries the pull request the approve key read to find out
+// which way it goes. It exists because the dialog states the direction, and a
+// list payload carries no participants to state it from — so the read happens
+// before the dialog rather than inside the write it confirms.
+//
+// pr is the freshest copy the app has and is kept whatever the user does next;
+// err means the direction is unknown and no dialog opens.
+type approvalStateMsg struct {
+	key string
+	pr  *bitbucket.PullRequest
+	err error
 }
 
 // descriptionEditedMsg is delivered when the editor holding a description temp

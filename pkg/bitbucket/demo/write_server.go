@@ -14,9 +14,10 @@ import (
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 )
 
-// The routes here are the write half of the fake: PUT .../pullrequests/{id} and
+// The routes here are the write half of the fake: PUT .../pullrequests/{id},
 // POST .../pullrequests/{id}/merge, the merge task-status poll a queued merge
-// needs, and the two listings the reviewer picker draws its candidates from.
+// needs, POST and DELETE on .../pullrequests/{id}/approve, and the two listings
+// the reviewer picker draws its candidates from.
 //
 // They authenticate nothing, exactly like the read routes: LastAuthorization
 // stays the only observable of what the client sent. A fake that rejected an
@@ -45,6 +46,10 @@ const (
 	msgOnlyOpenCanBeMutated = "Only open pull requests can be mutated."
 	msgAuthorCannotReview   = "The pull request author cannot be a reviewer."
 	msgTitleRequired        = "This field is required."
+	// msgCannotApproveOwn is the refusal both approval verbs answer the author
+	// with. Withdrawing is refused with the same sentence rather than a second
+	// one: an author never has an approval to withdraw in the first place.
+	msgCannotApproveOwn = "You cannot approve your own pull request"
 	// msgBadRequest is the envelope's own sentence when the fault is in a named
 	// member: the actionable half of the answer is in error.fields, and the
 	// message is the generic one the client appends the field detail to.
@@ -442,6 +447,109 @@ func reviewerParticipant(existing []bitbucket.Participant, reviewer bitbucket.Ac
 		}
 	}
 	return newParticipant(reviewer, bitbucket.RoleReviewer, "", time.Time{})
+}
+
+// -----------------------------------------------------------------------------
+// Approve
+// -----------------------------------------------------------------------------
+
+// handleApprovePullRequest records the demo user's approval and answers with
+// the participant row it left behind — which is what the endpoint returns, a
+// participant rather than a pull request.
+//
+// Who approves is not in the request: there is no body, and the demo runs as
+// Data.User the way a real session runs as whoever the token belongs to.
+func (s *Server) handleApprovePullRequest(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.Lock()
+	defer s.dataMu.Unlock()
+
+	pullRequest, ok := s.approvalTarget(w, r)
+	if !ok {
+		return
+	}
+
+	user := s.Data.User
+	approved := newParticipant(user, approvalRole(*pullRequest, user),
+		bitbucket.ParticipantApproved, time.Now().UTC())
+
+	replaced := false
+	for index, participant := range pullRequest.Participants {
+		if !sameUUID(participant.User.UUID, user.UUID) {
+			continue
+		}
+		// An existing row keeps the role it was on: someone whose reviewer
+		// request was withdrawn after they commented is still a PARTICIPANT.
+		approved.Role = participant.Role
+		pullRequest.Participants[index] = approved
+		replaced = true
+		break
+	}
+	if !replaced {
+		pullRequest.Participants = append(pullRequest.Participants, approved)
+	}
+
+	writeJSON(w, approved)
+}
+
+// handleUnapprovePullRequest withdraws the demo user's approval and answers 204
+// with no document, exactly as the real endpoint does.
+//
+// A row that was only there to carry the approval goes with it; a requested
+// reviewer stays on the pull request with nothing decided, because they are
+// still expected to review it.
+func (s *Server) handleUnapprovePullRequest(w http.ResponseWriter, r *http.Request) {
+	s.dataMu.Lock()
+	defer s.dataMu.Unlock()
+
+	pullRequest, ok := s.approvalTarget(w, r)
+	if !ok {
+		return
+	}
+
+	user := s.Data.User
+	remaining := make([]bitbucket.Participant, 0, len(pullRequest.Participants))
+	for _, participant := range pullRequest.Participants {
+		if sameUUID(participant.User.UUID, user.UUID) {
+			participant.Approved = false
+			participant.State = ""
+			participant.ParticipatedOn = time.Time{}
+			if participant.Role != bitbucket.RoleReviewer {
+				continue
+			}
+		}
+		remaining = append(remaining, participant)
+	}
+	pullRequest.Participants = remaining
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// approvalTarget is the pull request an approval verb acts on, or false with
+// the refusal already written: a 404 for one that is not there, and the 400
+// Bitbucket answers an author who tries to approve their own work.
+// The caller must hold dataMu for writing.
+func (s *Server) approvalTarget(w http.ResponseWriter, r *http.Request) (*bitbucket.PullRequest, bool) {
+	slug, index, ok := s.pullRequestIndex(r)
+	if !ok {
+		writePullRequestNotFound(w, r)
+		return nil, false
+	}
+
+	pullRequest := &s.Data.PullRequests[slug][index]
+	if sameUUID(pullRequest.Author.UUID, s.Data.User.UUID) {
+		writeBadRequest(w, msgCannotApproveOwn)
+		return nil, false
+	}
+	return pullRequest, true
+}
+
+// approvalRole is the role a fresh participant row is recorded under: REVIEWER
+// for someone who was asked to review, PARTICIPANT for anyone else who acts.
+func approvalRole(pullRequest bitbucket.PullRequest, user bitbucket.Account) bitbucket.ParticipantRole {
+	if isReviewer(pullRequest.Reviewers, user.UUID) {
+		return bitbucket.RoleReviewer
+	}
+	return bitbucket.RoleParticipant
 }
 
 // -----------------------------------------------------------------------------

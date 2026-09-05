@@ -668,6 +668,163 @@ func exchange(ctx context.Context, method, url string, body []byte) error {
 }
 
 // -----------------------------------------------------------------------------
+// POST and DELETE .../pullrequests/{id}/approve
+// -----------------------------------------------------------------------------
+
+// participantOf is the demo user's participant row on a pull request, and
+// whether they are on it at all.
+func participantOf(participants []bitbucket.Participant, uuid string) (bitbucket.Participant, bool) {
+	for _, participant := range participants {
+		if sameUUID(participant.User.UUID, uuid) {
+			return participant, true
+		}
+	}
+	return bitbucket.Participant{}, false
+}
+
+func TestServer_ApprovePullRequestAsAReviewer(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	before, ok := participantOf(demoPullRequest(t, server, repoAPIGateway, 102).Participants, uuidDemo)
+	testkit.AssertEqual(t, "the demo user is a reviewer on the fixture", ok && before.Role ==
+		bitbucket.RoleReviewer, true)
+	testkit.AssertEqual(t, "and has not acted yet", before.Approved, false)
+	start := time.Now().UTC()
+
+	got := postJSON(t, server.URL+approvePath(repoAPIGateway, 102), nil, nil)
+	testkit.AssertEqual(t, "status", got.Status, http.StatusOK)
+
+	// The endpoint answers with a participant, not with a pull request.
+	approved := decodeJSON[bitbucket.Participant](t, got.Body)
+	testkit.AssertEqual(t, "type", approved.Type, "participant")
+	testkit.AssertEqual(t, "user.uuid", approved.User.UUID, uuidDemo)
+	testkit.AssertEqual(t, "role", approved.Role, bitbucket.RoleReviewer)
+	testkit.AssertEqual(t, "approved", approved.Approved, true)
+	testkit.AssertEqual(t, "state", approved.State, bitbucket.ParticipantApproved)
+	if approved.ParticipatedOn.Before(start) {
+		t.Fatalf("participated_on = %s, want a stamp at or after %s", approved.ParticipatedOn, start)
+	}
+
+	// The dataset moved with it, so the TUI's re-fetch sees the approval.
+	fetched := decodeJSON[bitbucket.PullRequest](t, getOK(t, server, pullRequestPath(repoAPIGateway, 102)))
+	stored, found := participantOf(fetched.Participants, uuidDemo)
+	testkit.AssertEqual(t, "still one row for the approver", found, true)
+	testkit.AssertEqual(t, "approved after GET", stored.Approved, true)
+	testkit.AssertEqual(t, "role after GET", stored.Role, bitbucket.RoleReviewer)
+	testkit.AssertEqual(t, "the reviewer set is untouched", len(fetched.Reviewers), 2)
+	testkit.AssertEqual(t, "the approval is counted", fetched.ReviewSummary().Approved, 1)
+}
+
+// Someone who was never asked to review can still approve; the row they get is
+// a PARTICIPANT rather than a REVIEWER.
+func TestServer_ApprovePullRequestAsANonReviewer(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	_, ok := participantOf(demoPullRequest(t, server, repoInfra, 7).Participants, uuidDemo)
+	testkit.AssertEqual(t, "the demo user is not on the fixture", ok, false)
+
+	got := postJSON(t, server.URL+approvePath(repoInfra, 7), nil, nil)
+	testkit.AssertEqual(t, "status", got.Status, http.StatusOK)
+	testkit.AssertEqual(t, "role", decodeJSON[bitbucket.Participant](t, got.Body).Role,
+		bitbucket.RoleParticipant)
+
+	stored, found := participantOf(demoPullRequest(t, server, repoInfra, 7).Participants, uuidDemo)
+	testkit.AssertEqual(t, "the approver was added", found, true)
+	testkit.AssertEqual(t, "role in the dataset", stored.Role, bitbucket.RoleParticipant)
+}
+
+// Approving twice is not an error and does not add a second row.
+func TestServer_ApprovePullRequestIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+
+	for range 2 {
+		testkit.AssertEqual(t, "status",
+			postJSON(t, server.URL+approvePath(repoAPIGateway, 102), nil, nil).Status, http.StatusOK)
+	}
+
+	participants := demoPullRequest(t, server, repoAPIGateway, 102).Participants
+	testkit.AssertSliceEqual(t, "participants", participantUUIDs(participants),
+		[]string{uuidDemo + ":REVIEWER", uuidLinus + ":REVIEWER"})
+}
+
+// A reviewer who withdraws stays on the pull request with nothing decided: they
+// are still expected to review it.
+func TestServer_UnapprovePullRequestKeepsTheReviewerRow(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	before, _ := participantOf(demoPullRequest(t, server, repoWebApp, 40).Participants, uuidDemo)
+	testkit.AssertEqual(t, "the fixture starts approved", before.Approved, true)
+
+	got := sendJSON(t, http.MethodDelete, server.URL+approvePath(repoWebApp, 40), nil, nil)
+	testkit.AssertEqual(t, "status", got.Status, http.StatusNoContent)
+	testkit.AssertEqual(t, "a 204 carries no document", len(got.Body), 0)
+
+	fetched := decodeJSON[bitbucket.PullRequest](t, getOK(t, server, pullRequestPath(repoWebApp, 40)))
+	stored, found := participantOf(fetched.Participants, uuidDemo)
+	testkit.AssertEqual(t, "the reviewer row survives", found, true)
+	testkit.AssertEqual(t, "approved", stored.Approved, false)
+	testkit.AssertEqual(t, "state", string(stored.State), "")
+	testkit.AssertEqual(t, "participated_on is cleared", stored.ParticipatedOn.IsZero(), true)
+	testkit.AssertEqual(t, "the approval is gone from the rollup", fetched.ReviewSummary().Approved, 0)
+}
+
+// A row that existed only to carry the approval goes with it.
+func TestServer_UnapprovePullRequestDropsAPlainParticipant(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	testkit.AssertEqual(t, "approve first",
+		postJSON(t, server.URL+approvePath(repoInfra, 7), nil, nil).Status, http.StatusOK)
+
+	got := sendJSON(t, http.MethodDelete, server.URL+approvePath(repoInfra, 7), nil, nil)
+	testkit.AssertEqual(t, "status", got.Status, http.StatusNoContent)
+
+	participants := demoPullRequest(t, server, repoInfra, 7).Participants
+	_, found := participantOf(participants, uuidDemo)
+	testkit.AssertEqual(t, "the participant row is gone", found, false)
+	testkit.AssertSliceEqual(t, "the rest are untouched", participantUUIDs(participants),
+		[]string{uuidBarbara + ":REVIEWER"})
+}
+
+func TestServer_ApprovingYourOwnPullRequestIsBadRequest(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	testkit.AssertEqual(t, "the fixture is authored by the demo user",
+		demoPullRequest(t, server, repoWebApp, prRefsChanged).Author.UUID, uuidDemo)
+
+	for _, method := range []string{http.MethodPost, http.MethodDelete} {
+		got := sendJSON(t, method, server.URL+approvePath(repoWebApp, prRefsChanged), nil, nil)
+		testkit.AssertEqual(t, method+" status", got.Status, http.StatusBadRequest)
+		testkit.AssertEqual(t, method+" error.message",
+			decodeJSON[errorBody](t, got.Body).Error.Message, msgCannotApproveOwn)
+	}
+
+	testkit.AssertEqual(t, "nobody was added",
+		len(demoPullRequest(t, server, repoWebApp, prRefsChanged).Participants), 0)
+}
+
+func TestServer_ApproveUnknownPullRequestIsNotFound(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+
+	for _, method := range []string{http.MethodPost, http.MethodDelete} {
+		testkit.AssertEqual(t, method+" on an unknown pull request",
+			sendJSON(t, method, server.URL+approvePath(repoAPIGateway, 999), nil, nil).Status,
+			http.StatusNotFound)
+		testkit.AssertEqual(t, method+" on an unknown repository",
+			sendJSON(t, method, server.URL+approvePath("no-such-repository", 101), nil, nil).Status,
+			http.StatusNotFound)
+	}
+}
+
+// -----------------------------------------------------------------------------
 // Reviewer candidates
 // -----------------------------------------------------------------------------
 

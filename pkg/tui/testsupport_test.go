@@ -200,6 +200,21 @@ func withReviewer(pr bitbucket.PullRequest, uuid string) bitbucket.PullRequest {
 	return pr
 }
 
+// withApproval records an approval by an account. It is what the approve key
+// reads to decide whether `A` approves or withdraws, and what the list's
+// approval column counts.
+func withApproval(pr bitbucket.PullRequest, uuid string) bitbucket.PullRequest {
+	pr.Participants = append(pr.Participants, bitbucket.Participant{
+		Type:           "participant",
+		User:           bitbucket.Account{UUID: uuid, DisplayName: uuid},
+		Role:           bitbucket.RoleReviewer,
+		Approved:       true,
+		State:          bitbucket.ParticipantApproved,
+		ParticipatedOn: testNow,
+	})
+	return pr
+}
+
 // newStatus builds a build status pointing at a pipeline run.
 func newStatus(repo string, build int, state bitbucket.CommitStatusState) bitbucket.CommitStatus {
 	return bitbucket.CommitStatus{

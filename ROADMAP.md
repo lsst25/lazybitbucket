@@ -30,6 +30,7 @@ Details live in issues/PRs, not here.
 - [x] Edit title / description
 - [x] Set / remove reviewers
 - [x] Toggle draft state
+- [x] Approve, and remove your own approval (`A`)
 
 ## 4. Find and create
 
@@ -38,6 +39,6 @@ Details live in issues/PRs, not here.
 
 ## Later / maybe
 
-- [ ] Approve / request changes, post and resolve comments
+- [ ] Request changes, post and resolve comments (approving is done — see step 3)
 - [ ] Trigger or re-run pipelines
 - [ ] CLI mode for scripting

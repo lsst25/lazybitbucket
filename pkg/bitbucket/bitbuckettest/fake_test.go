@@ -222,6 +222,10 @@ func TestFakeClient_RecordsWriteCalls(t *testing.T) {
 	) (*bitbucket.PullRequest, error) {
 		return merged, nil
 	}
+	fake.ApprovePullRequestFunc = func(_ context.Context, _, _ string, _ int) (*bitbucket.Participant, error) {
+		return &bitbucket.Participant{Role: bitbucket.RoleReviewer, Approved: true}, nil
+	}
+	fake.UnapprovePullRequestFunc = func(_ context.Context, _, _ string, _ int) error { return nil }
 	fake.ListEffectiveDefaultReviewersFunc = func(_ context.Context, _, _ string) ([]bitbucket.Account, error) {
 		return []bitbucket.Account{{DisplayName: "Grace Hopper"}}, nil
 	}
@@ -251,6 +255,13 @@ func TestFakeClient_RecordsWriteCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdatePullRequest: %v", err)
 	}
+	approval, err := fake.ApprovePullRequest(ctx, testWorkspace, testRepo, prID)
+	if err != nil {
+		t.Fatalf("ApprovePullRequest: %v", err)
+	}
+	if err := fake.UnapprovePullRequest(ctx, testWorkspace, testRepo, prID); err != nil {
+		t.Fatalf("UnapprovePullRequest: %v", err)
+	}
 	defaults, err := fake.ListEffectiveDefaultReviewers(ctx, testWorkspace, testRepo)
 	if err != nil {
 		t.Fatalf("ListEffectiveDefaultReviewers: %v", err)
@@ -263,12 +274,15 @@ func TestFakeClient_RecordsWriteCalls(t *testing.T) {
 	testkit.AssertEqual(t, "task url", result.TaskURL, taskURL)
 	testkit.AssertEqual(t, "task status", task.Status, bitbucket.MergeTaskSuccess)
 	testkit.AssertEqual(t, "updated id", updated.ID, prID)
+	testkit.AssertEqual(t, "approved", approval.Approved, true)
 	testkit.AssertEqual(t, "default reviewers", len(defaults), 1)
 	testkit.AssertEqual(t, "members", len(members), 2)
 
 	testkit.AssertEqual(t, "MergePullRequest", fake.CallCount("MergePullRequest"), 1)
 	testkit.AssertEqual(t, "GetMergeTaskStatus", fake.CallCount("GetMergeTaskStatus"), 1)
 	testkit.AssertEqual(t, "UpdatePullRequest", fake.CallCount("UpdatePullRequest"), 1)
+	testkit.AssertEqual(t, "ApprovePullRequest", fake.CallCount("ApprovePullRequest"), 1)
+	testkit.AssertEqual(t, "UnapprovePullRequest", fake.CallCount("UnapprovePullRequest"), 1)
 	testkit.AssertEqual(t, "ListEffectiveDefaultReviewers", fake.CallCount("ListEffectiveDefaultReviewers"), 1)
 	testkit.AssertEqual(t, "ListWorkspaceMembers", fake.CallCount("ListWorkspaceMembers"), 1)
 
@@ -278,6 +292,8 @@ func TestFakeClient_RecordsWriteCalls(t *testing.T) {
 	testkit.AssertEqual(t, "task url recorded", fake.GetMergeTaskStatusCalls[0].TaskURL, taskURL)
 	testkit.AssertEqual(t, "update title", *fake.UpdatePullRequestCalls[0].Update.Title, title)
 	testkit.AssertEqual(t, "update reviewers", len(fake.UpdatePullRequestCalls[0].Update.Reviewers), 1)
+	testkit.AssertEqual(t, "approve pull request", fake.ApprovePullRequestCalls[0].ID, prID)
+	testkit.AssertEqual(t, "unapprove repository", fake.UnapprovePullRequestCalls[0].RepoSlug, testRepo)
 	testkit.AssertEqual(t, "default reviewers repo", fake.ListEffectiveDefaultReviewersCalls[0].RepoSlug, testRepo)
 	testkit.AssertEqual(t, "members max items", fake.ListWorkspaceMembersCalls[0].Opts.MaxItems, 500)
 }

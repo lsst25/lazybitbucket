@@ -1318,3 +1318,437 @@ func TestMerge_QueuedSuccessWithoutAResultReadsThePullRequestBack(t *testing.T) 
 		t.Error("the write must be finished once the merge is known to have landed")
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Approve
+// -----------------------------------------------------------------------------
+
+// approveApp is writeApp with an account behind the credentials, which is what
+// the approve key needs to tell "I have approved this" from "I have not".
+func approveApp(t *testing.T, fake *bitbuckettest.FakeClient, uuid string) *App {
+	t.Helper()
+	app := writeApp(t, fake)
+	app.currentUser = &bitbucket.Account{UUID: uuid, DisplayName: uuid}
+	return app
+}
+
+// pressApprove presses A and runs the read the key does before its dialog:
+// with an account behind the credentials the direction is always read fresh.
+func pressApprove(t *testing.T, app *App) {
+	t.Helper()
+	_, cmd := app.Update(runeKey('A'))
+	runAll(t, app, cmd)
+}
+
+// readsThen makes the fake answer GetPullRequest with before until the named
+// write has been called, and with after from then on — the shape of a pull
+// request read before and after an approval lands.
+func readsThen(fake *bitbuckettest.FakeClient, before, after *bitbucket.PullRequest, write string) {
+	fake.GetPullRequestFunc = func(_ context.Context, _, _ string, _ int) (*bitbucket.PullRequest, error) {
+		if fake.CallCount(write) > 0 {
+			return after, nil
+		}
+		return before, nil
+	}
+}
+
+// confirmForm answers the dialog on screen and runs the write it starts,
+// leaving the refetches that write asks for unrun.
+func confirmForm(app *App) {
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for _, msg := range collectMsgs(cmd) {
+		_, next := app.Update(msg)
+		for _, written := range collectMsgs(next) {
+			_, _ = app.Update(written)
+		}
+	}
+}
+
+func TestApprove_ConfirmApprovesAndReadsThePullRequestBack(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.ApprovePullRequestFunc = func(
+		_ context.Context, _, _ string, _ int,
+	) (*bitbucket.Participant, error) {
+		return &bitbucket.Participant{
+			User: bitbucket.Account{UUID: testOtherUUID}, Role: bitbucket.RoleReviewer, Approved: true,
+		}, nil
+	}
+	unapproved := withReviewer(withAuthor(newPR(testRepo, 101, testTitle), testUserUUID), testOtherUUID)
+	approved := withApproval(unapproved, testOtherUUID)
+	readsThen(fake, &unapproved, &approved, "ApprovePullRequest")
+	app := approveApp(t, fake, testOtherUUID)
+
+	pressApprove(t, app)
+	if !app.form.IsVisible() {
+		t.Fatal("A should ask before approving")
+	}
+	testkit.AssertEqual(t, "form id", app.form.ID(), formApprove)
+	rendered := plain(app.form.View())
+	if !strings.Contains(rendered, "Approve #101?") || !strings.Contains(rendered, testTitle) {
+		t.Errorf("dialog = %q, want the approve question over the title", rendered)
+	}
+
+	confirmForm(app)
+
+	testkit.AssertEqual(t, "approve calls", fake.CallCount("ApprovePullRequest"), 1)
+	testkit.AssertEqual(t, "unapprove calls", fake.CallCount("UnapprovePullRequest"), 0)
+	call := fake.ApprovePullRequestCalls[0]
+	testkit.AssertEqual(t, "workspace", call.Workspace, testWorkspace)
+	testkit.AssertEqual(t, "repository", call.RepoSlug, testRepo)
+	testkit.AssertEqual(t, "id", call.ID, 101)
+	// One read before the dialog, to state the direction; one after the write,
+	// because the endpoint answers with a participant and the list's approval
+	// column is drawn from the whole participant set.
+	testkit.AssertEqual(t, "pull request read back", fake.CallCount("GetPullRequest"), 2)
+	testkit.AssertEqual(t, "cached approvals", app.prCache[testPRKey].ReviewSummary().Approved, 1)
+	testkit.AssertEqual(t, "row approvals",
+		app.prList.SelectedPullRequest().ReviewSummary().Approved, 1)
+	if got := plain(app.helpBar.View()); !strings.Contains(got, "approved #101") {
+		t.Errorf("help bar = %q, want the success line", got)
+	}
+}
+
+func TestApprove_AnApprovalYouAlreadyGaveIsWithdrawn(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.UnapprovePullRequestFunc = func(_ context.Context, _, _ string, _ int) error { return nil }
+	withdrawn := withReviewer(withAuthor(newPR(testRepo, 101, testTitle), testUserUUID), testOtherUUID)
+	approved := withApproval(withdrawn, testOtherUUID)
+	readsThen(fake, &approved, &withdrawn, "UnapprovePullRequest")
+	app := approveApp(t, fake, testOtherUUID)
+
+	pressApprove(t, app)
+	if !app.form.IsVisible() {
+		t.Fatal("A should ask before withdrawing an approval")
+	}
+	if got := plain(app.form.View()); !strings.Contains(got, "Remove your approval from #101?") {
+		t.Errorf("dialog = %q, want the withdrawal question", got)
+	}
+
+	confirmForm(app)
+
+	testkit.AssertEqual(t, "unapprove calls", fake.CallCount("UnapprovePullRequest"), 1)
+	testkit.AssertEqual(t, "approve calls", fake.CallCount("ApprovePullRequest"), 0)
+	testkit.AssertEqual(t, "cached approvals", app.prCache[testPRKey].ReviewSummary().Approved, 0)
+	if got := plain(app.helpBar.View()); !strings.Contains(got, "approval removed #101") {
+		t.Errorf("help bar = %q, want the success line", got)
+	}
+}
+
+// Someone else's approval says nothing about the direction of this user's key.
+func TestApprove_AnotherAccountsApprovalStillApproves(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	app := approveApp(t, fake, testThirdUUID)
+	approved := withApproval(*selectedPR(app), testOtherUUID)
+	readsThen(fake, &approved, &approved, "ApprovePullRequest")
+
+	pressApprove(t, app)
+
+	if got := plain(app.form.View()); !strings.Contains(got, "Approve #101?") {
+		t.Errorf("dialog = %q, want the approve question", got)
+	}
+}
+
+// Without an account there is no approval of one's own to find, so the key
+// approves and never asks a question it cannot answer.
+func TestApprove_WithoutACurrentUserTheKeyOnlyApproves(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	app := writeApp(t, fake)
+	approved := withApproval(*selectedPR(app), testOtherUUID)
+	app.prCache[testPRKey] = &approved
+
+	_, _ = app.Update(runeKey('A'))
+
+	if got := plain(app.form.View()); !strings.Contains(got, "Approve #101?") {
+		t.Errorf("dialog = %q, want the approve question", got)
+	}
+	testkit.AssertEqual(t, "no detail read", fake.CallCount("GetPullRequest"), 0)
+}
+
+func TestApprove_RefusesYourOwnPullRequest(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	// writeApp's pull request is authored by testUserUUID.
+	app := approveApp(t, fake, testUserUUID)
+
+	_, cmd := app.Update(runeKey('A'))
+
+	if app.form.IsVisible() {
+		t.Error("your own pull request opens no dialog")
+	}
+	if cmd != nil {
+		t.Error("the refusal is local: nothing is fetched and nothing is sent")
+	}
+	if got := plain(app.helpBar.View()); !strings.Contains(got, cannotApproveOwn) {
+		t.Errorf("help bar = %q, want the own-pull-request refusal", got)
+	}
+	testkit.AssertEqual(t, "approve calls", fake.CallCount("ApprovePullRequest"), 0)
+}
+
+func TestApprove_RefusalsThatOpenNoDialog(t *testing.T) {
+	t.Parallel()
+
+	t.Run("read-only mode", func(t *testing.T) {
+		t.Parallel()
+		app := approveApp(t, &bitbuckettest.FakeClient{T: t}, testOtherUUID)
+		app.readOnly = true
+
+		_, _ = app.Update(runeKey('A'))
+
+		if app.form.IsVisible() {
+			t.Error("read-only mode must not open the approve dialog")
+		}
+		if got := plain(app.helpBar.View()); !strings.Contains(got, "read-only mode: cannot approve") {
+			t.Errorf("help bar = %q, want the read-only refusal", got)
+		}
+	})
+
+	t.Run("a pull request that is no longer open", func(t *testing.T) {
+		t.Parallel()
+		app := approveApp(t, &bitbuckettest.FakeClient{T: t}, testOtherUUID)
+		selectedPR(app).State = bitbucket.PullRequestMerged
+
+		_, _ = app.Update(runeKey('A'))
+
+		if app.form.IsVisible() {
+			t.Error("a merged pull request cannot be approved")
+		}
+		if got := plain(app.helpBar.View()); !strings.Contains(got, "cannot approve: pull request is MERGED") {
+			t.Errorf("help bar = %q, want the state refusal", got)
+		}
+	})
+}
+
+func TestApprove_TheWriteIsMarkedInFlightUntilItAnswers(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	app := approveApp(t, fake, testOtherUUID)
+	current := *selectedPR(app)
+	readsThen(fake, &current, &current, "ApprovePullRequest")
+
+	pressApprove(t, app)
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for _, msg := range collectMsgs(cmd) {
+		// The approval command is left unrun, so the write is still in flight
+		// when the next key arrives.
+		_, _ = app.Update(msg)
+	}
+
+	testkit.AssertEqual(t, "in flight", app.writesInFlight[testPRKey], verbApprove)
+
+	_, _ = app.Update(runeKey('A'))
+
+	if app.form.IsVisible() {
+		t.Error("an approval already running must block a second dialog")
+	}
+	if got := plain(app.helpBar.View()); !strings.Contains(got, verbApprove+" already in progress") {
+		t.Errorf("help bar = %q, want the in-flight refusal", got)
+	}
+	testkit.AssertEqual(t, "approve calls", fake.CallCount("ApprovePullRequest"), 0)
+}
+
+func TestApprove_ReportsTheServersRefusal(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.ApprovePullRequestFunc = func(
+		_ context.Context, _, _ string, _ int,
+	) (*bitbucket.Participant, error) {
+		return nil, apiError(http.StatusBadRequest, "You cannot approve your own pull request.", nil)
+	}
+	app := approveApp(t, fake, testOtherUUID)
+	current := *selectedPR(app)
+	readsThen(fake, &current, &current, "ApprovePullRequest")
+
+	pressApprove(t, app)
+	confirmForm(app)
+
+	// The read before the dialog is the only read: a refused write has nothing
+	// to read back.
+	testkit.AssertEqual(t, "no read back", fake.CallCount("GetPullRequest"), 1)
+	if got := plain(app.helpBar.View()); !strings.Contains(got,
+		verbApprove+" failed: You cannot approve your own pull request.") {
+		t.Errorf("help bar = %q, want the server's own sentence", got)
+	}
+	if _, busy := app.writesInFlight[testPRKey]; busy {
+		t.Error("a failed approval must clear the in-flight record")
+	}
+}
+
+func TestApprove_ReadsTheParticipantsWhenTheListRowLacksThem(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	detail := withApproval(
+		withReviewer(withAuthor(newPR(testRepo, 101, testTitle), testUserUUID), testOtherUUID), testOtherUUID)
+	fake.GetPullRequestFunc = func(_ context.Context, _, _ string, _ int) (*bitbucket.PullRequest, error) {
+		return &detail, nil
+	}
+	fake.UnapprovePullRequestFunc = func(_ context.Context, _, _ string, _ int) error { return nil }
+	app := bareApp(t, fake)
+	app.currentUser = &bitbucket.Account{UUID: testOtherUUID, DisplayName: testOtherUUID}
+
+	_, cmd := app.Update(runeKey('A'))
+	if app.form.IsVisible() {
+		t.Fatal("a dialog must not open before the direction is known")
+	}
+	runAll(t, app, cmd)
+
+	testkit.AssertEqual(t, "detail reads", fake.CallCount("GetPullRequest"), 1)
+	if !app.form.IsVisible() {
+		t.Fatal("the dialog should open once the participants are in")
+	}
+	// The fresh copy says the user has already approved, so the dialog says so
+	// rather than offering to approve again and silently withdrawing.
+	if got := plain(app.form.View()); !strings.Contains(got, "Remove your approval from #101?") {
+		t.Errorf("dialog = %q, want the withdrawal question", got)
+	}
+	// The read is kept: the write that follows must not pay for it again.
+	testkit.AssertEqual(t, "cached participants", len(app.prCache[testPRKey].Participants), 1)
+
+	confirmForm(app)
+
+	testkit.AssertEqual(t, "unapprove calls", fake.CallCount("UnapprovePullRequest"), 1)
+	testkit.AssertEqual(t, "detail reads", fake.CallCount("GetPullRequest"), 2)
+}
+
+func TestApprove_APreDialogReadThatFailsOpensNothing(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.GetPullRequestFunc = func(_ context.Context, _, _ string, _ int) (*bitbucket.PullRequest, error) {
+		return nil, apiError(http.StatusNotFound, "Not found", nil)
+	}
+	app := bareApp(t, fake)
+	app.currentUser = &bitbucket.Account{UUID: testOtherUUID, DisplayName: testOtherUUID}
+
+	_, cmd := app.Update(runeKey('A'))
+	runAll(t, app, cmd)
+
+	if app.form.IsVisible() {
+		t.Error("a dialog that cannot state its direction must not open")
+	}
+	if got := plain(app.helpBar.View()); !strings.Contains(got, verbApprove+" failed: Not found") {
+		t.Errorf("help bar = %q, want the failure", got)
+	}
+	testkit.AssertEqual(t, "approve calls", fake.CallCount("ApprovePullRequest"), 0)
+}
+
+// The read takes time, and what comes back can say the pull request is no
+// longer something to approve.
+func TestApprove_APreDialogReadThatFindsAClosedPullRequestOpensNothing(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	merged := withReviewer(withAuthor(newPR(testRepo, 101, testTitle), testUserUUID), testOtherUUID)
+	merged.State = bitbucket.PullRequestMerged
+	fake.GetPullRequestFunc = func(_ context.Context, _, _ string, _ int) (*bitbucket.PullRequest, error) {
+		return &merged, nil
+	}
+	app := bareApp(t, fake)
+	app.currentUser = &bitbucket.Account{UUID: testOtherUUID, DisplayName: testOtherUUID}
+
+	_, cmd := app.Update(runeKey('A'))
+	runAll(t, app, cmd)
+
+	if app.form.IsVisible() {
+		t.Error("a pull request that is no longer open opens no dialog")
+	}
+	if got := plain(app.helpBar.View()); !strings.Contains(got, "cannot approve: pull request is MERGED") {
+		t.Errorf("help bar = %q, want the state refusal", got)
+	}
+	// The read is still worth keeping: the row now says MERGED too.
+	testkit.AssertEqual(t, "cached state", app.prCache[testPRKey].State, bitbucket.PullRequestMerged)
+}
+
+// The approval is on the server the moment the POST answers; a read-back that
+// then fails must not be reported as the approval failing, or the user redoes
+// a write that already landed.
+func TestApprove_AReadBackFailureStillReportsTheApproval(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.ApprovePullRequestFunc = func(
+		_ context.Context, _, _ string, _ int,
+	) (*bitbucket.Participant, error) {
+		return &bitbucket.Participant{
+			User: bitbucket.Account{UUID: testOtherUUID}, Role: bitbucket.RoleReviewer, Approved: true,
+			State: bitbucket.ParticipantApproved,
+		}, nil
+	}
+	current := withReviewer(withAuthor(newPR(testRepo, 101, testTitle), testUserUUID), testOtherUUID)
+	fake.GetPullRequestFunc = func(_ context.Context, _, _ string, _ int) (*bitbucket.PullRequest, error) {
+		if fake.CallCount("ApprovePullRequest") > 0 {
+			return nil, apiError(http.StatusBadGateway, "Bad gateway", nil)
+		}
+		return &current, nil
+	}
+	app := approveApp(t, fake, testOtherUUID)
+
+	pressApprove(t, app)
+	confirmForm(app)
+
+	got := plain(app.helpBar.View())
+	if !strings.Contains(got, "approved #101") || !strings.Contains(got, "refresh failed: Bad gateway") {
+		t.Errorf("help bar = %q, want the approval reported done and the read-back failure named", got)
+	}
+	// The participant the server returned is applied locally, so the column
+	// moves and a second A offers the withdrawal rather than approving again.
+	testkit.AssertEqual(t, "cached approvals", app.prCache[testPRKey].ReviewSummary().Approved, 1)
+	testkit.AssertEqual(t, "row approvals", app.prList.SelectedPullRequest().ReviewSummary().Approved, 1)
+	if _, busy := app.writesInFlight[testPRKey]; busy {
+		t.Error("the in-flight record must clear once the write has answered")
+	}
+}
+
+func TestApprovalPatched(t *testing.T) {
+	t.Parallel()
+	base := withReviewer(withAuthor(newPR(testRepo, 101, testTitle), testUserUUID), testOtherUUID)
+	mine := &bitbucket.Participant{
+		User: bitbucket.Account{UUID: testOtherUUID}, Role: bitbucket.RoleReviewer, Approved: true,
+		State: bitbucket.ParticipantApproved,
+	}
+
+	t.Run("an approval is appended when the user had no entry", func(t *testing.T) {
+		t.Parallel()
+		got := approvalPatched(&base, mine, false, testOtherUUID)
+		if got == nil || got.ReviewSummary().Approved != 1 || len(got.Participants) != 1 {
+			t.Fatalf("patched = %+v, want one approving participant", got)
+		}
+		testkit.AssertEqual(t, "original untouched", len(base.Participants), 0)
+	})
+
+	t.Run("an approval replaces the user's entry", func(t *testing.T) {
+		t.Parallel()
+		pending := base
+		pending.Participants = []bitbucket.Participant{{User: bitbucket.Account{UUID: testOtherUUID}, Role: bitbucket.RoleReviewer}}
+		got := approvalPatched(&pending, mine, false, testOtherUUID)
+		if got == nil || len(got.Participants) != 1 || !got.Participants[0].Approved {
+			t.Fatalf("patched = %+v, want the single entry approved", got)
+		}
+	})
+
+	t.Run("a withdrawal clears the user's entry and nobody else's", func(t *testing.T) {
+		t.Parallel()
+		both := withApproval(withApproval(base, testOtherUUID), testThirdUUID)
+		got := approvalPatched(&both, nil, true, testOtherUUID)
+		if got == nil {
+			t.Fatal("a withdrawal over loaded participants must patch")
+		}
+		testkit.AssertEqual(t, "approvals left", got.ReviewSummary().Approved, 1)
+		testkit.AssertEqual(t, "original untouched", both.ReviewSummary().Approved, 2)
+	})
+
+	t.Run("no participants loaded means no faithful patch", func(t *testing.T) {
+		t.Parallel()
+		bare := newPR(testRepo, 101, testTitle)
+		if approvalPatched(&bare, mine, false, testOtherUUID) != nil {
+			t.Error("a one-entry set would pose as the whole set")
+		}
+	})
+
+	t.Run("an approval without a returned participant cannot be applied", func(t *testing.T) {
+		t.Parallel()
+		if approvalPatched(&base, nil, false, testOtherUUID) != nil {
+			t.Error("nothing to apply")
+		}
+	})
+}

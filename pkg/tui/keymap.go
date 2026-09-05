@@ -66,14 +66,15 @@ const (
 	ActPrevFile       Action = "prevFile"
 	ActOpenEditor     Action = "openEditor"
 
-	// The five write actions. Each opens a dialog first — nothing here reaches
-	// Bitbucket without a confirmation — and all five are refused, and hidden
+	// The six write actions. Each opens a dialog first — nothing here reaches
+	// Bitbucket without a confirmation — and all six are refused, and hidden
 	// from the help surfaces, in read-only mode.
 	ActMerge       Action = "merge"
 	ActSync        Action = "sync"
 	ActEdit        Action = "edit"
 	ActReviewers   Action = "reviewers"
 	ActToggleDraft Action = "toggleDraft"
+	ActApprove     Action = "approve"
 )
 
 // Keymap maps actions to key strings. Several keys may trigger one action.
@@ -138,6 +139,7 @@ func DefaultKeymap() Keymap {
 		ActEdit:        {"E"},
 		ActReviewers:   {"V"},
 		ActToggleDraft: {"D"},
+		ActApprove:     {"A"},
 	}
 }
 
@@ -182,6 +184,7 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	set(ActEdit, kcfg.PullRequests.Edit)
 	set(ActReviewers, kcfg.PullRequests.Reviewers)
 	set(ActToggleDraft, kcfg.PullRequests.ToggleDraft)
+	set(ActApprove, kcfg.PullRequests.Approve)
 
 	set(ActFocusLeft, kcfg.Detail.FocusLeft)
 	set(ActBack, kcfg.Detail.Back)

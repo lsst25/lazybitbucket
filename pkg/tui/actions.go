@@ -17,28 +17,37 @@ import (
 	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 )
 
-// The five write actions. Each one opens a dialog, and only what the user
+// The six write actions. Each one opens a dialog, and only what the user
 // confirms in that dialog ever reaches Bitbucket — there is no key in this file
 // that writes on its own.
 //
 // The verbs are constants because each appears in four places: the refusal
 // ("read-only mode: cannot merge"), the in-flight guard, the progress line and
-// the failure line.
+// the failure line. Approving has two of them because the one key does two
+// things, and a line reading "approve failed" for a withdrawal would name the
+// wrong one.
 const (
 	verbMerge       = "merge"
 	verbSync        = "sync"
 	verbEdit        = "edit"
 	verbReviewers   = "edit reviewers"
 	verbToggleDraft = "toggle draft"
+	verbApprove     = "approve"
+	verbUnapprove   = "remove approval"
 )
 
 // The form ids. FormConfirmedMsg carries one, so a stale confirmation can be
 // told apart from the dialog that is actually open.
 const (
-	formMerge = "merge"
-	formSync  = "sync"
-	formDraft = "draft"
+	formMerge   = "merge"
+	formSync    = "sync"
+	formDraft   = "draft"
+	formApprove = "approve"
 )
+
+// cannotApproveOwn is the local refusal that saves a request: Bitbucket answers
+// 400 to an author approving their own pull request.
+const cannotApproveOwn = "cannot approve your own pull request"
 
 // The form field ids, which is how a confirmed form's values are read back.
 const (
@@ -173,6 +182,10 @@ func writeProgressText(verb string, id int) string {
 		return "updating reviewers" + num
 	case verbEdit, verbToggleDraft:
 		return "updating" + num
+	case verbApprove:
+		return "approving" + num
+	case verbUnapprove:
+		return "removing approval" + num
 	default:
 		return verb + num
 	}
@@ -188,6 +201,10 @@ func writeDoneText(verb string, id int) string {
 		return "reviewers updated" + num
 	case verbEdit, verbToggleDraft:
 		return "updated" + num
+	case verbApprove:
+		return "approved" + num
+	case verbUnapprove:
+		return "approval removed" + num
 	default:
 		return verb + num
 	}
@@ -281,6 +298,9 @@ func (a *App) handlePullRequestWritten(msg pullRequestWrittenMsg) (tea.Model, te
 		return a, nil
 	}
 	if msg.pr == nil {
+		if msg.readErr != nil {
+			a.helpBar.SetStatusMsg(a.writeDoneAfterReadFailure(msg))
+		}
 		return a, nil
 	}
 
@@ -290,7 +310,11 @@ func (a *App) handlePullRequestWritten(msg pullRequestWrittenMsg) (tea.Model, te
 	a.patchMerged(pr)
 	a.prList.PatchPullRequest(pr)
 	a.refilterTabs("")
-	a.helpBar.SetStatusMsg(writeDoneText(msg.verb, pr.ID))
+	if msg.readErr != nil {
+		a.helpBar.SetStatusMsg(a.writeDoneAfterReadFailure(msg))
+	} else {
+		a.helpBar.SetStatusMsg(writeDoneText(msg.verb, pr.ID))
+	}
 
 	var cmds []tea.Cmd
 	if msg.key == a.previewKey {
@@ -311,6 +335,18 @@ func (a *App) handlePullRequestWritten(msg pullRequestWrittenMsg) (tea.Model, te
 		return a, nil
 	}
 	return a, tea.Batch(cmds...)
+}
+
+// writeDoneAfterReadFailure is the help-bar line for a write that landed but
+// whose read-back failed: the write is done — saying otherwise would send the
+// user to redo it — and the refresh key is the way to see the server's copy.
+func (a *App) writeDoneAfterReadFailure(msg pullRequestWrittenMsg) string {
+	id := msg.id
+	if msg.pr != nil {
+		id = msg.pr.ID
+	}
+	return writeDoneText(msg.verb, id) + " — refresh failed: " + a.writeErrorText(msg.verb, msg.readErr) +
+		" (" + a.keymap.Keys(ActRefresh) + " to reload)"
 }
 
 // -----------------------------------------------------------------------------
@@ -1079,4 +1115,217 @@ func (a *App) handleActionToggleDraft() tea.Cmd {
 	a.form.Show(formDraft, title, "confirm",
 		[]components.FormField{{Kind: components.FormNote, Note: pr.Title}})
 	return nil
+}
+
+// -----------------------------------------------------------------------------
+// Approve
+// -----------------------------------------------------------------------------
+
+// handleActionApprove approves the pull request, or withdraws the approval the
+// user has already given it — one key, and which of the two it is decided by
+// the participant list rather than by a second key.
+//
+// The direction has to be known before the dialog opens, because the dialog is
+// what states it: "Approve #101?" that quietly withdrew an approval would be a
+// write the user did not ask for. The pull request is therefore read first and
+// the dialog opened on the answer, whatever the cache holds: a list payload
+// carries no participants at all, and a cached detail keeps the participants
+// it was fetched with while list refreshes move on without it.
+func (a *App) handleActionApprove() tea.Cmd {
+	pr, ok := a.writeTarget(verbApprove)
+	if !ok {
+		return nil
+	}
+	// Bitbucket refuses this with a 400, so there is nothing to gain by asking.
+	if a.approvingOwn(pr) {
+		a.helpBar.SetStatusMsg(cannotApproveOwn)
+		return nil
+	}
+	// Without an account there is no approval of the user's own to find — an
+	// access token is not attached to one — so the key can only ever approve,
+	// and there is nothing a read could change about the dialog.
+	if a.currentUser != nil {
+		return a.fetchApprovalState(pr)
+	}
+
+	a.showApprovalDialog(pr)
+	return nil
+}
+
+// approvingOwn reports whether the pull request is the current user's own. It
+// answers false when the account is unknown: an access token has none, and a
+// refusal on a guess would take the key away from a session that can use it.
+func (a *App) approvingOwn(pr *bitbucket.PullRequest) bool {
+	return a.currentUser != nil && pr.IsAuthor(a.currentUser.UUID)
+}
+
+// approvedByCurrentUser reports whether the current user's own approval is on
+// the pull request. It is false whenever the account is unknown, which makes
+// the key an approve-only key for a token that cannot name one.
+func (a *App) approvedByCurrentUser(pr *bitbucket.PullRequest) bool {
+	if a.currentUser == nil {
+		return false
+	}
+	for _, participant := range pr.Participants {
+		if participant.User.UUID != a.currentUser.UUID {
+			continue
+		}
+		return participant.Approved || participant.State == bitbucket.ParticipantApproved
+	}
+	return false
+}
+
+// fetchApprovalState reads the pull request so the dialog can name the right
+// direction. It is the reviewer picker's pattern: the read happens before any
+// overlay opens, and its answer is worth keeping whatever the user does next.
+func (a *App) fetchApprovalState(pr *bitbucket.PullRequest) tea.Cmd {
+	key := pr.Key()
+	ctx, client := a.context(), a.client
+	workspace, slug, id := pr.Workspace(), pr.RepoSlug(), pr.ID
+
+	a.helpBar.SetStatusMsg("checking your approval…")
+	a.logFlag.Store(true)
+
+	return func() tea.Msg {
+		detail, err := client.GetPullRequest(ctx, workspace, slug, id)
+		return approvalStateMsg{key: key, pr: detail, err: err}
+	}
+}
+
+// handleApprovalState opens the approval dialog over the pull request that was
+// just read, unless the user has walked off it or opened something else while
+// the read was in flight.
+func (a *App) handleApprovalState(msg approvalStateMsg) (tea.Model, tea.Cmd) {
+	a.logFlag.Store(false)
+
+	// The detail is newer than the row it was read for, so it is kept whatever
+	// happens next — the same bargain the reviewer picker's read strikes.
+	if msg.pr != nil {
+		a.prCache[msg.key] = msg.pr
+		a.patchMerged(msg.pr)
+		a.prList.PatchPullRequest(msg.pr)
+		a.refilterTabs("")
+		if msg.key == a.previewKey {
+			a.detailView.UpdatePullRequestData(msg.pr)
+		}
+	}
+
+	// The guard runs again, because the read took time: the user may have walked
+	// off the pull request, opened an overlay, or watched another write land on
+	// it while it was in flight.
+	pr, ok := a.writeTarget(verbApprove)
+	if !ok || pr.Key() != msg.key {
+		return a, nil
+	}
+	if msg.err != nil {
+		a.helpBar.SetStatusMsg(verbApprove + " failed: " + a.writeErrorText(verbApprove, msg.err))
+		return a, nil
+	}
+	// The author is re-checked on the fresh copy: a list row can carry a stub
+	// account, and the local refusal is only worth anything if it is right.
+	if a.approvingOwn(pr) {
+		a.helpBar.SetStatusMsg(cannotApproveOwn)
+		return a, nil
+	}
+
+	a.showApprovalDialog(pr)
+	return a, nil
+}
+
+// showApprovalDialog asks before either direction. Like the draft dialog it is
+// a form of one note row, so the only keys are enter and esc.
+func (a *App) showApprovalDialog(pr *bitbucket.PullRequest) {
+	remove := a.approvedByCurrentUser(pr)
+	title := "Approve #" + strconv.Itoa(pr.ID) + "?"
+	if remove {
+		title = "Remove your approval from #" + strconv.Itoa(pr.ID) + "?"
+	}
+
+	key := pr.Key()
+	a.armForm(formApprove, func(components.FormConfirmedMsg) tea.Cmd { return a.setApproval(key, remove) })
+	a.form.Show(formApprove, title, "confirm",
+		[]components.FormField{{Kind: components.FormNote, Note: pr.Title}})
+}
+
+// setApproval sends the confirmed approval and reads the pull request back. The
+// approve endpoints answer with a participant rather than a pull request, and
+// the list's approval column and the detail pane are drawn from the whole
+// participant set, so the fresh pull request is what the write has to hand on.
+func (a *App) setApproval(key string, remove bool) tea.Cmd {
+	pr := a.pullRequestByKey(key)
+	if pr == nil {
+		return nil
+	}
+
+	verb := verbApprove
+	if remove {
+		verb = verbUnapprove
+	}
+	ctx, client := a.context(), a.client
+	workspace, slug, id := pr.Workspace(), pr.RepoSlug(), pr.ID
+	me := ""
+	if a.currentUser != nil {
+		me = a.currentUser.UUID
+	}
+
+	a.beginWrite(key, verb)
+	a.helpBar.SetStatusMsg(writeProgressText(verb, id))
+
+	return func() tea.Msg {
+		var (
+			participant *bitbucket.Participant
+			err         error
+		)
+		if remove {
+			err = client.UnapprovePullRequest(ctx, workspace, slug, id)
+		} else {
+			participant, err = client.ApprovePullRequest(ctx, workspace, slug, id)
+		}
+		if err != nil {
+			return pullRequestWrittenMsg{key: key, verb: verb, pr: nil, err: err, readErr: nil, id: id}
+		}
+		updated, err := client.GetPullRequest(ctx, workspace, slug, id)
+		if err != nil {
+			// The approval is on the server; only the read-back failed. Hand on
+			// the cached copy with the participant the server returned, so the
+			// list and the detail pane move, and say the refresh is what failed.
+			return pullRequestWrittenMsg{key: key, verb: verb,
+				pr: approvalPatched(pr, participant, remove, me), err: nil, readErr: err, id: id}
+		}
+		return pullRequestWrittenMsg{key: key, verb: verb, pr: updated, err: nil, readErr: nil, id: id}
+	}
+}
+
+// approvalPatched is the cached pull request with the approval applied locally:
+// the participant the approve endpoint returned replaces the user's entry (or
+// is appended), a withdrawal clears the user's entry. It is nil when the cached
+// copy carries no participants — a one-entry set would pose as the whole set —
+// or when there is nothing to apply.
+func approvalPatched(pr *bitbucket.PullRequest, participant *bitbucket.Participant, remove bool, me string) *bitbucket.PullRequest {
+	if pr.Participants == nil {
+		return nil
+	}
+	patched := *pr
+	patched.Participants = slices.Clone(pr.Participants)
+	if remove {
+		for i := range patched.Participants {
+			if patched.Participants[i].User.UUID == me {
+				patched.Participants[i].Approved = false
+				patched.Participants[i].State = ""
+				patched.Participants[i].ParticipatedOn = time.Time{}
+			}
+		}
+		return &patched
+	}
+	if participant == nil {
+		return nil
+	}
+	for i := range patched.Participants {
+		if patched.Participants[i].User.UUID == participant.User.UUID {
+			patched.Participants[i] = *participant
+			return &patched
+		}
+	}
+	patched.Participants = append(patched.Participants, *participant)
+	return &patched
 }

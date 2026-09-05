@@ -588,6 +588,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleMergeQueued(msg)
 	case reviewerCandidatesMsg:
 		return a.handleReviewerCandidates(msg)
+	case approvalStateMsg:
+		return a.handleApprovalState(msg)
 	case descriptionEditedMsg:
 		return a.handleDescriptionEdited(msg)
 	case syncDoneMsg:

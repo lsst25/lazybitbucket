@@ -92,17 +92,24 @@ one are upstream lazyjira history, and their compare links still point at upstre
   participants, the repository's effective default reviewers and the workspace members, deduplicated
   and without the author, filterable with `/`
 - Toggle draft state (`D`), behind a confirmation
+- Approve a pull request, or withdraw the approval you already gave, on one key (`A`) behind a
+  confirmation that always names the direction it is about to take. Which direction that is comes
+  from the participant list, which is read from the server first when the selected row does not
+  carry it, so a stale view cannot silently unapprove. Your own pull request is refused locally —
+  Bitbucket answers that one `400` — and credentials with no account behind them (an access token)
+  get an approve-only key
 - Read-only mode — `bitbucket.readOnly: true`, the `--read-only` flag or `LAZYBITBUCKET_READ_ONLY=1`,
   none of which can turn it off again. The client refuses every non-GET request with `ErrReadOnly`
-  before a socket is opened, the status panel shows `read-only`, and the five action keys disappear
+  before a socket is opened, the status panel shows `read-only`, and the six action keys disappear
   from the help surfaces and answer with a hint-bar message. Sync is refused too: it ends in a push
 - `pkg/bitbucket`: `MergePullRequest`, `GetMergeTaskStatus`, `UpdatePullRequest`,
-  `ListEffectiveDefaultReviewers` and `ListWorkspaceMembers`, plus `MergeStrategy` with the six
-  documented values, `MergeOptions`, `PullRequestUpdate`, `PullRequest.ReviewerUUIDs` and the
-  `IsReadOnly` predicate
+  `ApprovePullRequest`, `UnapprovePullRequest`, `ListEffectiveDefaultReviewers` and
+  `ListWorkspaceMembers`, plus `MergeStrategy` with the six documented values, `MergeOptions`,
+  `PullRequestUpdate`, `PullRequest.ReviewerUUIDs` and the `IsReadOnly` predicate
 - `pkg/git`: `IsClean`, `RemoteFor`, `Fetch`, `MergeBranch`, `RebaseOnto`, `Push` and `ErrConflict`
 - `pkg/bitbucket/demo`: write routes on the fake server (`PUT`/merge/merge task status,
-  effective default reviewers, workspace members) with production-shaped validation, and two
+  `POST` and `DELETE` on approve, effective default reviewers, workspace members) with
+  production-shaped validation, and two
   designated fixtures — `api-gateway` #103 answers the queued `202` and its task, `web-app` #41
   answers the `409` of a lost race
 - `--demo` (needs a `-tags demo` build), `--workspace`, the repeatable `--repo` flag and `--read-only`

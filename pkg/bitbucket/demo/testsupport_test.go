@@ -186,6 +186,12 @@ func mergePath(slug string, id int) string {
 	return pullRequestPath(slug, id) + segmentMerge
 }
 
+// approvePath is the approval endpoint of one pull request, which POST and
+// DELETE share.
+func approvePath(slug string, id int) string {
+	return pullRequestPath(slug, id) + segmentApprove
+}
+
 // mergeTaskPath is where a queued merge is polled.
 func mergeTaskPath(slug string, id int, task string) string {
 	return mergePath(slug, id) + segmentTaskStatus + "/" + task

@@ -373,9 +373,9 @@ func hasHelpKey(items []components.HelpItem, key string) bool {
 func TestWriteBindings_ListedWhenWritableAndOmittedWhenNot(t *testing.T) {
 	t.Parallel()
 
-	writeKeys := []string{"M", "S", "E", "V", "D"}
+	writeKeys := []string{"M", "S", "E", "V", "D", "A"}
 
-	t.Run("the pull request list lists all five", func(t *testing.T) {
+	t.Run("the pull request list lists all six", func(t *testing.T) {
 		t.Parallel()
 		app := appForKeybindings(t)
 		app.side, app.leftFocus = sideLeft, focusPullRequests
