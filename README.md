@@ -28,6 +28,7 @@ make build-demo
 - **Detail pane** — four tabs per PR: Overview (branches, author, reviewers with approval state, Markdown description), Files, Commits and Comments. A tab is fetched the first time you open it, so a PR you only skim costs one request
 - **Diff pane** — the changed files with status and `+/−` counts, and a syntax-highlighted per-file unified diff with a line cursor; `n` / `p` walk the files, `enter` opens one
 - **Open in your editor** — `e` opens the file under the cursor at that line in `$EDITOR` (`nvim` by default), in your local checkout; inside tmux it gets a new tmux window and the session stays put
+- **Bring your own diff colours** — `diffRenderer: delta --color-only --paging=never` pipes each file's diff through delta (or anything that colours a diff line by line) instead of the built-in highlighting; the gutters, review markers and cursor stay lazybitbucket's
 - **Commits** — hash, author, age and subject per commit; `enter` expands the full message
 - **Review threads** — inline comments read as threads anchored to a file and line, with replies and resolved state; commented lines are marked `●` in the diff and `enter` jumps to the thread
 - **Builds** — the commit statuses of the selected PR, with drill-down into the pipeline run, its steps and each step's log
@@ -42,7 +43,7 @@ make build-demo
 - **Git integration** — check out the source branch of the selected PR; the PR matching your current branch is selected at startup
 - **Custom commands** — bind shell commands to keys with template access to the focused PR, repo, build, or the changed file and line under the cursor
 - **Themes** — default ANSI palette, all four Catppuccin flavors (Latte, Frappé, Macchiato, Mocha) and the three Kanagawa variants (Wave, Dragon, Lotus), with light/dark selection that follows your terminal
-- **Adaptive** — side-by-side or stacked layout, mouse support
+- **Adaptive** — side-by-side or stacked layout, mouse support, and lazygit's screen modes: `+` / `_` cycle normal → half → full, where the focused panel takes the whole window
 
 ## Installation
 
@@ -197,6 +198,8 @@ gui:
 
 See the [Themes docs](docs/Config.md#themes) for supported values, palette overrides, and examples.
 
+Diff code is syntax-highlighted with chroma, in the variant that matches the theme. To hand that column to an external program instead — `delta --color-only`, say — set `diffRenderer`; see the [Diff renderer docs](docs/Config.md#diff-renderer-diffrenderer) for the one-line-per-line contract it has to keep.
+
 ## Usage
 
 ```
@@ -247,7 +250,7 @@ Full list, including everything remappable: [Keybindings](docs/Keybindings.md).
 
 ## Documentation
 
-- [Configuration](docs/Config.md) — config file, tabs, list columns, keybindings, editor, themes, git, custom commands
+- [Configuration](docs/Config.md) — config file, tabs, list columns, keybindings, editor, diff renderer, themes, git, custom commands
 - [Keybindings](docs/Keybindings.md) — full list of default keys
 - [Roadmap](ROADMAP.md) — what is built and what is next
 

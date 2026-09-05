@@ -44,7 +44,7 @@ func fileDiffDetail(t *testing.T, markers map[int]int) *DetailView {
 	view.SetDiffStat(testPRKey, testDiffStat())
 	view.SetActiveTab(TabFiles)
 	view.SetFileDiffLoading(testPRKey, testDiffPath)
-	view.SetFileDiff(testPRKey, testDiffPath, testDiffFile(), markers)
+	view.SetFileDiff(testPRKey, testDiffPath, testDiffFile(), nil, markers)
 	view.View()
 	return view
 }
@@ -117,7 +117,7 @@ func TestDetailView_FileDiff_EnterOnAMarkedLineJumpsToTheThread(t *testing.T) {
 	view.SetPullRequest(detailPR())
 	view.SetThreads(testPRKey, bitbucket.BuildThreads([]bitbucket.Comment{root}))
 	view.SetFileDiffLoading(testPRKey, testDiffPath)
-	view.SetFileDiff(testPRKey, testDiffPath, testDiffFile(),
+	view.SetFileDiff(testPRKey, testDiffPath, testDiffFile(), nil,
 		bitbucket.CommentedLines(view.Threads())[testDiffPath])
 	view.View()
 
@@ -180,7 +180,7 @@ func TestDetailView_FileDiff_TruncatesLongLines(t *testing.T) {
 			OldStart: 1, OldLines: 1, NewStart: 1, NewLines: 1,
 			Lines: []diff.Line{{Kind: diff.LineAdded, Content: strings.Repeat("x", 400), NewNo: 1}},
 		}},
-	}, nil)
+	}, nil, nil)
 
 	for _, line := range strings.Split(stripANSI(view.View()), "\n") {
 		if got := len([]rune(line)); got > 80 {
@@ -205,14 +205,14 @@ func TestDetailView_FileDiff_PlaceholderStates(t *testing.T) {
 		{
 			"binary",
 			func(v *DetailView) {
-				v.SetFileDiff(testPRKey, testDiffPath, &diff.File{NewPath: testDiffPath, IsBinary: true}, nil)
+				v.SetFileDiff(testPRKey, testDiffPath, &diff.File{NewPath: testDiffPath, IsBinary: true}, nil, nil)
 			},
 			"Binary file",
 		},
 		{
 			"no textual changes",
 			func(v *DetailView) {
-				v.SetFileDiff(testPRKey, testDiffPath, &diff.File{NewPath: testDiffPath}, nil)
+				v.SetFileDiff(testPRKey, testDiffPath, &diff.File{NewPath: testDiffPath}, nil, nil)
 			},
 			"(no textual changes)",
 		},
@@ -242,8 +242,8 @@ func TestDetailView_FileDiff_StaleResponsesAreDropped(t *testing.T) {
 	view.SetPullRequest(detailPR())
 	view.SetFileDiffLoading(testPRKey, testDiffPath)
 
-	view.SetFileDiff(testPRKey2, testDiffPath, testDiffFile(), nil)
-	view.SetFileDiff(testPRKey, "other/file.go", testDiffFile(), nil)
+	view.SetFileDiff(testPRKey2, testDiffPath, testDiffFile(), nil, nil)
+	view.SetFileDiff(testPRKey, "other/file.go", testDiffFile(), nil, nil)
 	view.SetFileDiffError(testPRKey, "other/file.go", "boom")
 	if _, ok := view.SelectedDiffLine(); ok {
 		t.Error("a response for another pull request or file must be dropped")
@@ -254,7 +254,7 @@ func TestDetailView_FileDiff_StaleResponsesAreDropped(t *testing.T) {
 
 	// And a response that lands after the user walked out cannot pull them back.
 	view.Back()
-	view.SetFileDiff(testPRKey, testDiffPath, testDiffFile(), nil)
+	view.SetFileDiff(testPRKey, testDiffPath, testDiffFile(), nil, nil)
 	testkit.AssertEqual(t, "mode", view.Mode(), ModePullRequest)
 }
 
@@ -264,7 +264,7 @@ func TestDetailView_FileDiff_SetFileDiffAgainKeepsTheCursor(t *testing.T) {
 	view.ScrollBy(4)
 
 	// This is what the app does once the review threads arrive.
-	view.SetFileDiff(testPRKey, testDiffPath, testDiffFile(), map[int]int{100: 1})
+	view.SetFileDiff(testPRKey, testDiffPath, testDiffFile(), nil, map[int]int{100: 1})
 
 	line, ok := view.SelectedDiffLine()
 	testkit.AssertEqual(t, "ok", ok, true)
@@ -281,7 +281,7 @@ func TestDetailView_FileDiff_BackReturnsToTheFilesTabOnThatFile(t *testing.T) {
 	view.SetDiffStat(testPRKey, testDiffStat())
 	view.SetActiveTab(TabFiles)
 	view.SetFileDiffLoading(testPRKey, "b.go")
-	view.SetFileDiff(testPRKey, "b.go", testDiffFile(), nil)
+	view.SetFileDiff(testPRKey, "b.go", testDiffFile(), nil, nil)
 
 	testkit.AssertEqual(t, "key is still the pull request's", view.PullRequestKey(), testPRKey)
 	testkit.AssertEqual(t, "back", view.Back(), true)
@@ -380,7 +380,7 @@ func TestDetailView_FileDiff_RendersOnlyTheRowsOnScreen(t *testing.T) {
 	view := makeFocusedDetail()
 	view.SetPullRequest(detailPR())
 	view.SetFileDiffLoading(testPRKey, testDiffPath)
-	view.SetFileDiff(testPRKey, testDiffPath, wideDiffFile(rows), nil)
+	view.SetFileDiff(testPRKey, testDiffPath, wideDiffFile(rows), nil, nil)
 	out := stripANSI(view.View())
 
 	// The hunk header plus every line is still a block, so the cursor, the
@@ -417,7 +417,7 @@ func TestDetailView_FileDiff_FillsTheWindowTheCursorScrollsTo(t *testing.T) {
 	view := makeFocusedDetail()
 	view.SetPullRequest(detailPR())
 	view.SetFileDiffLoading(testPRKey, testDiffPath)
-	view.SetFileDiff(testPRKey, testDiffPath, wideDiffFile(rows), nil)
+	view.SetFileDiff(testPRKey, testDiffPath, wideDiffFile(rows), nil, nil)
 	view.View()
 
 	for _, target := range []int{200, rows, 1} {

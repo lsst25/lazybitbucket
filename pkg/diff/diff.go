@@ -16,11 +16,18 @@ const (
 // ' ', '+' or '-' marker and the trailing newline removed. OldNo and NewNo are
 // the 1-based line numbers on the old and the new side, and are 0 when the
 // line does not exist on that side (both are 0 for LineNoNewline).
+//
+// Source is where the line sat in the document Parse read: the 0-based index
+// into the lines the text was split on, counting every header, hunk header and
+// file section of the whole document, not just this file's. It is what lets a
+// caller line a per-line rendering of the same text — an external diff
+// renderer's output — up with the parsed lines.
 type Line struct {
 	Kind    LineKind
 	Content string
 	OldNo   int
 	NewNo   int
+	Source  int
 }
 
 // Hunk is one @@ section of a file diff. Header is the text that follows the

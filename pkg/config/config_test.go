@@ -268,6 +268,7 @@ git:
   closeOnCheckout: true
 editor: vim
 rendererStyle: light
+diffRenderer: delta --color-only --paging=never
 `)
 
 	cfg := loadOrFatal(t)
@@ -296,6 +297,7 @@ rendererStyle: light
 	testkit.AssertEqual(t, "Git.CloseOnCheckout", cfg.Git.CloseOnCheckout, true)
 	testkit.AssertEqual(t, "Editor", cfg.Editor, "vim")
 	testkit.AssertEqual(t, "RendererStyle", cfg.RendererStyle, RendererStyleLight)
+	testkit.AssertEqual(t, "DiffRenderer", cfg.DiffRenderer, "delta --color-only --paging=never")
 
 	interval, err := cfg.ResolveRefreshInterval()
 	if err != nil {
@@ -339,6 +341,11 @@ func TestLoad_RejectsInvalidValues(t *testing.T) {
 			"unknown editorInTmux mode",
 			"editorInTmux: split\n",
 			`invalid editorInTmux "split"`,
+		},
+		{
+			"unknown screen mode",
+			"gui:\n  screenMode: wide\n",
+			`invalid gui.screenMode "wide"`,
 		},
 		{
 			"invalid custom command template",
@@ -614,6 +621,38 @@ func TestResolveEditor(t *testing.T) {
 
 			cfg := &Config{Editor: tc.editor}
 			testkit.AssertEqual(t, "ResolveEditor", cfg.ResolveEditor(), tc.want)
+		})
+	}
+}
+
+func TestResolveDiffRenderer(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		value    string
+		wantName string
+		wantArgs []string
+		wantOK   bool
+	}{
+		{"unset is off", "", "", nil, false},
+		{"whitespace only is off", "   \t ", "", nil, false},
+		{"program alone", "delta", "delta", []string{}, true},
+		{
+			"program with flags", "delta --color-only --paging=never",
+			"delta", []string{"--color-only", "--paging=never"}, true,
+		},
+		{"extra spaces collapse", "  diff-so-fancy   --patch  ", "diff-so-fancy", []string{"--patch"}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{DiffRenderer: tc.value}
+
+			name, args, ok := cfg.ResolveDiffRenderer()
+
+			testkit.AssertEqual(t, "ok", ok, tc.wantOK)
+			testkit.AssertEqual(t, "name", name, tc.wantName)
+			testkit.AssertSliceEqual(t, "args", args, tc.wantArgs)
 		})
 	}
 }
@@ -1065,5 +1104,18 @@ func TestEditorOpensTmuxWindow(t *testing.T) {
 	for value, want := range cases {
 		cfg := &Config{EditorInTmux: value}
 		testkit.AssertEqual(t, "EditorOpensTmuxWindow("+value+")", cfg.EditorOpensTmuxWindow(), want)
+	}
+}
+
+func TestValidateScreenMode(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"", ScreenModeNormal, ScreenModeHalf, ScreenModeFull} {
+		if err := validateScreenMode(value); err != nil {
+			t.Errorf("validateScreenMode(%q) = %v, want nil", value, err)
+		}
+	}
+	err := validateScreenMode("wide")
+	if err == nil || !strings.Contains(err.Error(), "wide") {
+		t.Errorf("validateScreenMode(wide) = %v, want an error naming the value", err)
 	}
 }

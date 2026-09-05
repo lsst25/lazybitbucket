@@ -1,14 +1,97 @@
 package tui
 
+import "github.com/lsst25/lazybitbucket/pkg/config"
+
+// screenMode is how much of the window the panels share, lazygit's screen
+// modes: normal is the configured split, half gives the side panels half the
+// width, full hands the whole window to the focused panel. The narrow, stacked
+// layout knows only normal and full — half has nothing to halve there.
+type screenMode int
+
+const (
+	screenNormal screenMode = iota
+	screenHalf
+	screenFull
+	screenModeCount
+)
+
+// screenModeFromConfig maps gui.screenMode to a screenMode; anything the
+// config validator would have rejected, and the empty default, is normal.
+func screenModeFromConfig(value string) screenMode {
+	switch value {
+	case config.ScreenModeHalf:
+		return screenHalf
+	case config.ScreenModeFull:
+		return screenFull
+	default:
+		return screenNormal
+	}
+}
+
+// cycleScreenMode moves step modes forward (or back, for a negative step),
+// wrapping at both ends: normal → half → full → normal.
+func (a *App) cycleScreenMode(step int) {
+	n := int(screenModeCount)
+	a.screen = screenMode(((int(a.screen)+step)%n + n) % n)
+}
+
+// fullScreenPanel is the one panel on screen in full mode: the detail panel
+// when the right side is focused, else the focused left panel. ok is false
+// outside full mode.
+func (a *App) fullScreenPanel() (panelID, bool) {
+	if a.screen != screenFull {
+		return 0, false
+	}
+	if a.side == sideRight {
+		return panelDetail, true
+	}
+	switch a.leftFocus {
+	case focusStatus:
+		return panelStatus, true
+	case focusBuilds:
+		return panelBuilds, true
+	case focusRepos:
+		return panelRepos, true
+	case focusPullRequests:
+		return panelPullRequests, true
+	default:
+		return panelPullRequests, true
+	}
+}
+
+// panelView renders one panel by id. The log panel is never shown alone: in
+// full mode the detail panel takes its rows too.
+func (a *App) panelView(panel panelID) string {
+	switch panel {
+	case panelStatus:
+		return a.statusPanel.View()
+	case panelPullRequests:
+		return a.prList.View()
+	case panelBuilds:
+		return a.buildsPanel.View()
+	case panelRepos:
+		return a.repoList.View()
+	case panelDetail, panelLog:
+		return a.detailView.View()
+	default:
+		return a.detailView.View()
+	}
+}
+
 // isVerticalLayout returns true when terminal is too narrow for side-by-side.
 func (a *App) isVerticalLayout() bool {
 	return a.width < 80
 }
 
 // sideWidth calculates the left panel width, shrinking for narrow terminals.
+// In half mode the side panels take exactly half the window, whatever
+// sidePanelWidth says.
 func (a *App) sideWidth() int {
 	if a.isVerticalLayout() {
 		return a.width
+	}
+	if a.screen == screenHalf {
+		return a.width / 2
 	}
 	sideW := a.cfg.GUI.SidePanelWidth
 	if sideW <= 0 {
@@ -28,6 +111,11 @@ func (a *App) sideWidth() int {
 
 func (a *App) layoutPanels() {
 	totalH := a.height - 1
+
+	if panel, ok := a.fullScreenPanel(); ok {
+		a.layoutFullScreen(panel, totalH)
+		return
+	}
 
 	if a.isVerticalLayout() {
 		w := a.width
@@ -176,4 +264,35 @@ func (a *App) layoutPanels() {
 	a.panelReposH = reposH
 	a.panelDetailH = detailH
 	a.panelLogH = logH
+}
+
+// layoutFullScreen sizes the one visible panel to the whole window and zeroes
+// the cached extents of the rest, so hitTest lands every click on the panel
+// that is actually on screen. Hidden panels keep their last size; they are not
+// rendered, so it does not matter.
+func (a *App) layoutFullScreen(panel panelID, totalH int) {
+	w := a.width
+	a.panelSideW, a.panelStatusH, a.panelPRH, a.panelBuildsH, a.panelReposH = 0, 0, 0, 0, 0
+	a.panelDetailH, a.panelLogH = 0, 0
+
+	switch panel {
+	case panelStatus:
+		a.statusPanel.SetSize(w, totalH)
+		a.panelSideW, a.panelStatusH = w, totalH
+	case panelPullRequests:
+		a.prList.SetSize(w, totalH)
+		a.panelSideW, a.panelPRH = w, totalH
+	case panelBuilds:
+		a.buildsPanel.SetSize(w, totalH)
+		a.panelSideW, a.panelBuildsH = w, totalH
+	case panelRepos:
+		a.repoList.SetSize(w, totalH)
+		a.panelSideW, a.panelReposH = w, totalH
+	case panelDetail, panelLog:
+		a.detailView.SetSize(w, totalH)
+		a.panelDetailH = totalH
+	default:
+		a.detailView.SetSize(w, totalH)
+		a.panelDetailH = totalH
+	}
 }

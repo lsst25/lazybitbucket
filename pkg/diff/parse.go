@@ -320,7 +320,8 @@ func (p *parser) hunkLine(line string) bool {
 }
 
 func (p *parser) addLine(kind LineKind, content string) {
-	line := Line{Kind: kind, Content: content}
+	// p.index is the line Parse's walk is on, which is the line being consumed.
+	line := Line{Kind: kind, Content: content, Source: p.index}
 
 	switch kind {
 	case LineContext:

@@ -46,6 +46,12 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ActSearch:
 		a.searchBar.Activate()
 		return a, nil
+	case ActNextScreenMode:
+		a.cycleScreenMode(1)
+		return a, nil
+	case ActPrevScreenMode:
+		a.cycleScreenMode(-1)
+		return a, nil
 	case ActSelect, ActOpen:
 		return a.handleActivate()
 	case ActURLPicker:

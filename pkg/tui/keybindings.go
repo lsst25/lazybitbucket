@@ -49,6 +49,8 @@ func (a *App) globalBindings() []Binding {
 		a.bind(ActSearch, "search / filter current list"),
 		a.bind(ActRefresh, "refresh the selected pull request"),
 		a.bind(ActRefreshAll, "refresh the pull request list"),
+		a.bind(ActNextScreenMode, "next screen mode: normal → half → full"),
+		a.bind(ActPrevScreenMode, "previous screen mode"),
 		a.bind(ActHelp, "show all keybindings"),
 	}
 }

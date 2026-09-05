@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"errors"
+	"io/fs"
+	"os/exec"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -34,6 +37,15 @@ type reviewEntry[T any] struct {
 	value      T
 	sourceHash string
 	err        error
+}
+
+// fileDiffData is one file's diff as the view needs it. rendered is the
+// external diff renderer's output for the whole document the file was parsed
+// out of, one finished code cell per line, indexed by diff.Line.Source; it is
+// nil whenever the built-in colouring is in charge.
+type fileDiffData struct {
+	file     *diff.File
+	rendered []string
 }
 
 // fileDiffKey addresses one file's diff within one pull request.
@@ -84,7 +96,7 @@ func (a *App) ensureReviewCaches() {
 		a.threadsCache = make(map[string]reviewEntry[[]bitbucket.Thread])
 	}
 	if a.fileDiffCache == nil {
-		a.fileDiffCache = make(map[string]reviewEntry[*diff.File])
+		a.fileDiffCache = make(map[string]reviewEntry[fileDiffData])
 	}
 }
 
@@ -276,8 +288,10 @@ func (a *App) handleThreadsLoaded(msg threadsLoadedMsg) (tea.Model, tea.Cmd) {
 func (a *App) handleFileDiffLoaded(msg fileDiffLoadedMsg) (tea.Model, tea.Cmd) {
 	a.logFlag.Store(false)
 	a.ensureReviewCaches()
-	a.fileDiffCache[fileDiffKey(msg.key, msg.path)] = reviewEntry[*diff.File]{
-		value: msg.file, sourceHash: msg.hash, err: msg.err,
+	a.noteRendererFailure(msg.rendererErr)
+	data := fileDiffData{file: msg.file, rendered: msg.rendered}
+	a.fileDiffCache[fileDiffKey(msg.key, msg.path)] = reviewEntry[fileDiffData]{
+		value: data, sourceHash: msg.hash, err: msg.err,
 	}
 	if msg.err != nil {
 		text := a.reviewErrorText(msg.err, "diff")
@@ -286,8 +300,48 @@ func (a *App) handleFileDiffLoaded(msg fileDiffLoadedMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 	a.statusPanel.SetOnline(true)
-	a.detailView.SetFileDiff(msg.key, msg.path, msg.file, a.commentMarkers(msg.key, msg.path))
+	a.detailView.SetFileDiff(msg.key, msg.path, data.file, data.rendered, a.commentMarkers(msg.key, msg.path))
 	return a, nil
+}
+
+// noteRendererFailure reports a `diffRenderer` that did not work out. The diff
+// itself is fine — it is on screen with the built-in colouring — so the
+// complaint goes to the status panel and only once per distinct message: a
+// broken renderer would otherwise repaint it on every file opened.
+//
+// A program that cannot be run at all, and one whose output does not line up
+// with the diff, are conditions no later file improves, so they turn the
+// renderer off for the rest of the session. A timeout or a non-zero exit does
+// not: a program can perfectly well choke on one file and handle the next.
+//
+// "Cannot be run at all" has two shapes, because exec only searches $PATH for
+// a bare name: `delta` that is not installed fails with exec.ErrNotFound,
+// while `~/bin/delta` — a path, and nothing expands the tilde — fails at
+// fork/exec with an fs.PathError. Both are the same misconfiguration.
+func (a *App) noteRendererFailure(err error) {
+	if err == nil {
+		return
+	}
+	if rendererIsHopeless(err) {
+		a.diffRendererDisabled = true
+	}
+	text := "diffRenderer: " + err.Error()
+	if text == a.lastRendererError {
+		return
+	}
+	a.lastRendererError = text
+	a.statusPanel.SetError(text)
+	// The status panel is a narrow column that truncates; the hint bar spans
+	// the window, so the whole sentence is readable there until the next key.
+	a.helpBar.SetStatusMsg(text)
+}
+
+// rendererIsHopeless reports whether a renderer failure condemns the program
+// for the rest of the session rather than costing only the file it happened on.
+func rendererIsHopeless(err error) bool {
+	return errors.Is(err, exec.ErrNotFound) ||
+		errors.Is(err, fs.ErrNotExist) ||
+		errors.Is(err, errDiffRendererMisaligned)
 }
 
 // noteReviewFailure records a review fetch failure outside the tab it belongs
@@ -350,7 +404,8 @@ func (a *App) openFileDiff(path string) tea.Cmd {
 		if entry.err != nil {
 			a.detailView.SetFileDiffError(key, path, a.reviewErrorText(entry.err, "diff"))
 		} else {
-			a.detailView.SetFileDiff(key, path, entry.value, a.commentMarkers(key, path))
+			a.detailView.SetFileDiff(key, path, entry.value.file, entry.value.rendered,
+				a.commentMarkers(key, path))
 		}
 	} else {
 		cmds = append(cmds, a.fetchFileDiff(pr, path, a.escapedPathFor(path)))
@@ -370,7 +425,8 @@ func (a *App) applyFileDiffMarkers(key string) {
 	if !ok || entry.err != nil {
 		return
 	}
-	a.detailView.SetFileDiff(key, path, entry.value, a.commentMarkers(key, path))
+	a.detailView.SetFileDiff(key, path, entry.value.file, entry.value.rendered,
+		a.commentMarkers(key, path))
 }
 
 // commentMarkers is the line → thread-count map the diff view marks lines from,
@@ -401,7 +457,7 @@ func (a *App) cachedFileDiff(path string) *diff.File {
 	if !ok || entry.err != nil {
 		return nil
 	}
-	return entry.value
+	return entry.value.file
 }
 
 // refreshReviewData refetches whatever review data is on screen: the file diff

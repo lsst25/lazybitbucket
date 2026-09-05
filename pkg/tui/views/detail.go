@@ -196,8 +196,13 @@ type fileDiffState struct {
 	// lines is one entry per rendered row, hunk headers included, so the
 	// cursor can be resolved to a diff line before the first View call.
 	lines []diff.Line
-	// highlighter is built once per file, in SetFileDiff.
+	// highlighter is built once per file, in SetFileDiff. It is nil whenever
+	// rendered is not: an external diff renderer owns the whole code column.
 	highlighter *highlighter
+	// rendered is the external diff renderer's finished code cells, one per
+	// line of the diff document this file was parsed out of and indexed by
+	// diff.Line.Source, or nil when the built-in colouring is in charge.
+	rendered []string
 }
 
 // tabZone is one tab label's column span in the rendered title.
@@ -375,7 +380,7 @@ func (d *DetailView) clearPipeline() {
 func (d *DetailView) clearFileDiff() {
 	d.fileDiff = fileDiffState{
 		path: "", file: nil, markers: nil, loading: false, errMsg: "",
-		lines: nil, highlighter: nil,
+		lines: nil, highlighter: nil, rendered: nil,
 	}
 	d.invalidateBlocks()
 }

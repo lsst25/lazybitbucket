@@ -5,8 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
+	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
 )
 
 func appForView(t *testing.T) *App {
@@ -157,5 +159,30 @@ func TestView_NoPanicInAnyFocusState(t *testing.T) {
 				t.Error("View() returned an empty string")
 			}
 		})
+	}
+}
+
+func TestView_FullScreenModeShowsOnlyTheFocusedPanel(t *testing.T) {
+	t.Parallel()
+	app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
+	app.helpBar.SetWidth(app.width) // as the window-size handler does; JoinVertical pads to the widest line
+	app.screen = screenFull
+
+	// The pull request panel's title is its tab bar, "[2] Open - Mine - …".
+	app.side = sideRight
+	out := plain(app.View())
+	if strings.Contains(out, "[2] Open") {
+		t.Error("with the detail panel full screen the pull request panel must not be drawn")
+	}
+
+	app.side, app.leftFocus = sideLeft, focusPullRequests
+	out = plain(app.View())
+	if !strings.Contains(out, "[2] Open") {
+		t.Error("the focused pull request panel must be drawn")
+	}
+	first, _, _ := strings.Cut(out, "\n")
+	testkit.AssertEqual(t, "the one panel spans the window", lipgloss.Width(first), app.width)
+	if strings.Contains(out, "[0]") {
+		t.Error("the detail panel must not be drawn next to a full-screen left panel")
 	}
 }

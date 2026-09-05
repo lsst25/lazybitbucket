@@ -20,6 +20,9 @@ const (
 	ActRefreshAll  Action = "refreshAll"
 	ActPrevTab     Action = "prevTab"
 	ActNextTab     Action = "nextTab"
+	// The screen modes: normal → half → full and back, as in lazygit.
+	ActNextScreenMode Action = "nextScreenMode"
+	ActPrevScreenMode Action = "prevScreenMode"
 
 	ActFocusDetail       Action = "focusDetail"
 	ActFocusStatus       Action = "focusStatus"
@@ -88,6 +91,9 @@ func DefaultKeymap() Keymap {
 		ActPrevTab:     {"["},
 		ActNextTab:     {"]"},
 
+		ActNextScreenMode: {"+"},
+		ActPrevScreenMode: {"_"},
+
 		ActFocusDetail:       {"0"},
 		ActFocusStatus:       {"1"},
 		ActFocusPullRequests: {"2"},
@@ -155,6 +161,8 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	set(ActRefreshAll, kcfg.Universal.RefreshAll)
 	set(ActPrevTab, kcfg.Universal.PrevTab)
 	set(ActNextTab, kcfg.Universal.NextTab)
+	set(ActNextScreenMode, kcfg.Universal.NextScreenMode)
+	set(ActPrevScreenMode, kcfg.Universal.PrevScreenMode)
 	set(ActFocusDetail, kcfg.Universal.FocusDetail)
 	set(ActFocusStatus, kcfg.Universal.FocusStatus)
 	set(ActFocusPullRequests, kcfg.Universal.FocusPullRequests)

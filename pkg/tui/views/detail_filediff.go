@@ -20,10 +20,12 @@ import (
 const diffHunkHeader diff.LineKind = -1
 
 const (
-	// diffTabWidth is the tab stop the code column expands tabs to. Diff rows
+	// DiffTabWidth is the tab stop the code column expands tabs to. Diff rows
 	// are hard-truncated rather than wrapped, so a literal tab would make the
-	// column widths depend on the terminal.
-	diffTabWidth = 4
+	// column widths depend on the terminal. It is exported because an external
+	// diff renderer's output has to be expanded to the same stop, and that
+	// happens off the event loop, before the lines reach this package.
+	DiffTabWidth = 4
 	// diffGutterMin is the narrowest a line-number column gets, so short files
 	// and long files line their code up at the same place.
 	diffGutterMin = 3
@@ -60,13 +62,22 @@ func (d *DetailView) SetFileDiffLoading(prKey, path string) {
 // this pull request, and it does not move the cursor — the app calls it a
 // second time once the threads arrive, to light up the markers under a reader
 // who has already scrolled.
-func (d *DetailView) SetFileDiff(prKey, path string, file *diff.File, comments map[int]int) {
+//
+// rendered is an external diff renderer's output for the document this file
+// came out of — one finished code cell per line, indexed by diff.Line.Source —
+// and nil when there is none. It replaces the whole code column, so the chroma
+// highlighter is not even built for a file that has one.
+func (d *DetailView) SetFileDiff(prKey, path string, file *diff.File, rendered []string, comments map[int]int) {
 	if !d.fileDiffMatches(prKey, path) {
 		return
 	}
-	if d.fileDiff.file != file {
+	switch {
+	case rendered != nil:
+		d.fileDiff.highlighter = nil
+	case d.fileDiff.file != file || d.fileDiff.rendered != nil:
 		d.fileDiff.highlighter = newHighlighter(path, analyseSample(file), d.codeStyle)
 	}
+	d.fileDiff.rendered = rendered
 	d.fileDiff.file = file
 	d.fileDiff.markers = comments
 	d.fileDiff.loading = false
@@ -326,34 +337,70 @@ func diffLineNo(number int) string {
 // diffRowBody is the marker column and the code column of one row. A review
 // thread anchored to the line takes the marker column over the +/- sign,
 // because a reader scanning for conversations needs to find them and already
-// knows the colour of an added line.
+// knows the colour of an added line. The marker column stays this view's own
+// whichever way the code column is coloured.
 func (d *DetailView) diffRowBody(row diff.Line, codeWidth int) (marker, code string) {
 	green := lipgloss.NewStyle().Foreground(theme.ColorGreen)
 	red := lipgloss.NewStyle().Foreground(theme.ColorRed)
 	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
 
-	text := ansi.Truncate(expandTabs(row.Content, diffTabWidth), codeWidth, "")
+	text := ansi.Truncate(expandTabs(row.Content, DiffTabWidth), codeWidth, "")
 	switch row.Kind {
 	case diff.LineNoNewline:
 		return gray.Render("\\"), gray.Render(text)
 	case diff.LineAdded:
-		return d.diffMarker(row, green.Render("+")), d.diffCode(text, green)
+		return d.diffMarker(row, green.Render("+")), d.diffCode(row, text, codeWidth, green)
 	case diff.LineRemoved:
-		return d.diffMarker(row, red.Render("-")), d.diffCode(text, red)
+		return d.diffMarker(row, red.Render("-")), d.diffCode(row, text, codeWidth, red)
 	case diff.LineContext:
-		return d.diffMarker(row, " "), d.diffCode(text, lipgloss.NewStyle())
+		return d.diffMarker(row, " "), d.diffCode(row, text, codeWidth, lipgloss.NewStyle())
 	default:
 		return " ", text
 	}
 }
 
-// diffCode highlights a code cell, falling back to colouring the whole cell in
-// the line's own colour when highlighting is off.
-func (d *DetailView) diffCode(text string, plain lipgloss.Style) string {
+// diffCode is the code cell of one row: the external diff renderer's own line
+// when there is one, chroma's highlighting next, and the whole cell in the
+// line's own colour when neither is on.
+func (d *DetailView) diffCode(row diff.Line, text string, codeWidth int, plain lipgloss.Style) string {
+	if cell, ok := d.renderedCell(row, codeWidth); ok {
+		return cell
+	}
 	if d.fileDiff.highlighter == nil {
 		return plain.Render(text)
 	}
 	return d.fileDiff.highlighter.Line(text)
+}
+
+// renderedCell is the external renderer's cell for one row, truncated to the
+// code column. A row whose Source falls outside the output — a document the
+// renderer never saw, or a renderer that was not run — has no cell and falls
+// back to the built-in colouring.
+func (d *DetailView) renderedCell(row diff.Line, codeWidth int) (string, bool) {
+	if row.Source < 0 || row.Source >= len(d.fileDiff.rendered) {
+		return "", false
+	}
+	cell := ansi.Truncate(d.fileDiff.rendered[row.Source], codeWidth, "")
+	return padUnderBackground(cell, codeWidth), true
+}
+
+// padUnderBackground fills a rendered cell out to the width of the code column
+// with spaces drawn under the background the cell opens with, and closes that
+// background again. delta paints a row's tint to the edge of the terminal with
+// an erase-in-line sequence, which cannot survive inside a column and is
+// stripped before the cell gets here; without this the tint would stop where
+// the text does. A cell that sets no background is left as it is, exactly like
+// a chroma-highlighted one.
+func padUnderBackground(cell string, width int) string {
+	gap := width - ansi.StringWidth(cell)
+	if gap <= 0 {
+		return cell
+	}
+	opening, ok := leadingSGR(cell)
+	if !ok || !sgrSetsBackground(opening) {
+		return cell
+	}
+	return cell + opening + strings.Repeat(" ", gap) + sgrReset
 }
 
 // diffMarker is the marker cell: the thread glyph when the line carries review

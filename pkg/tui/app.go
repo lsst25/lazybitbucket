@@ -14,7 +14,6 @@ import (
 
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/config"
-	"github.com/lsst25/lazybitbucket/pkg/diff"
 	"github.com/lsst25/lazybitbucket/pkg/git"
 	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 	"github.com/lsst25/lazybitbucket/pkg/tui/theme"
@@ -125,6 +124,9 @@ type App struct {
 
 	side      focusSide
 	leftFocus focusPanel
+	// screen is the current screen mode; see screenMode. It starts from
+	// gui.screenMode and the nextScreenMode / prevScreenMode keys cycle it.
+	screen screenMode
 
 	showHelp      bool
 	helpCursor    int
@@ -169,7 +171,17 @@ type App struct {
 	diffStatCache map[string]reviewEntry[[]bitbucket.DiffStatEntry]
 	commitsCache  map[string]reviewEntry[[]bitbucket.Commit]
 	threadsCache  map[string]reviewEntry[[]bitbucket.Thread]
-	fileDiffCache map[string]reviewEntry[*diff.File]
+	fileDiffCache map[string]reviewEntry[fileDiffData]
+
+	// diffRendererDisabled turns the configured external diff renderer off for
+	// the rest of the session, which is what a program that cannot be run at
+	// all or whose output does not line up with the diff earns: neither gets
+	// better by being retried on the next file. A timeout or a non-zero exit
+	// costs only the file it happened on. lastRendererError is the last failure
+	// already reported, so one broken renderer does not repaint the status
+	// panel once per file.
+	diffRendererDisabled bool
+	lastRendererError    string
 
 	// prefetchQueue is the remaining pull request keys to warm, head first.
 	// prefetchEpoch is bumped whenever the queue is refilled so that in-flight
@@ -290,6 +302,7 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 		readOnly:       cfg.Bitbucket.ReadOnly,
 		side:           sideLeft,
 		leftFocus:      focusPullRequests,
+		screen:         screenModeFromConfig(cfg.GUI.ScreenMode),
 		logFlag:        logFlag,
 		demoMode:       authMethod == AuthDemo,
 		exec:           execExternal,
@@ -303,7 +316,7 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 		diffStatCache:  make(map[string]reviewEntry[[]bitbucket.DiffStatEntry]),
 		commitsCache:   make(map[string]reviewEntry[[]bitbucket.Commit]),
 		threadsCache:   make(map[string]reviewEntry[[]bitbucket.Thread]),
-		fileDiffCache:  make(map[string]reviewEntry[*diff.File]),
+		fileDiffCache:  make(map[string]reviewEntry[fileDiffData]),
 		writesInFlight: make(map[string]string),
 		renderer:       renderer,
 	}
@@ -615,7 +628,9 @@ func (a *App) View() string {
 	a.layoutPanels()
 
 	var content string
-	if a.isVerticalLayout() {
+	if panel, ok := a.fullScreenPanel(); ok {
+		content = a.panelView(panel)
+	} else if a.isVerticalLayout() {
 		content = lipgloss.JoinVertical(lipgloss.Left,
 			a.statusPanel.View(),
 			a.prList.View(),

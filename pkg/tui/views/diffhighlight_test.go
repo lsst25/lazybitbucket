@@ -115,7 +115,7 @@ func TestDetailView_FileDiff_HighlightingFollowsTheCodeStyle(t *testing.T) {
 						{Kind: diff.LineAdded, Content: "\tdefer stop()", NewNo: 2},
 					},
 				}},
-			}, nil)
+			}, nil, nil)
 
 			out := view.View()
 			// The context row is the one that is only ever coloured by the

@@ -126,13 +126,21 @@ type threadsLoadedMsg struct {
 
 // fileDiffLoadedMsg carries one file's parsed diff. Parsing happens in the
 // command rather than the handler, so a large diff is walked off the event
-// loop.
+// loop, and so does the external diff renderer when one is configured.
+//
+// rendered is one finished code cell per line of the diff document the file
+// was parsed out of, indexed by diff.Line.Source; it is nil when no renderer
+// is configured and when the run failed, which rendererErr then explains. A
+// renderer failure is never the file's own failure: err stays nil and the diff
+// is shown with the built-in colouring.
 type fileDiffLoadedMsg struct {
-	key  string
-	path string
-	file *diff.File
-	hash string
-	err  error
+	key         string
+	path        string
+	file        *diff.File
+	hash        string
+	err         error
+	rendered    []string
+	rendererErr error
 }
 
 // The write messages. Every one of them is keyed by pull request rather than
@@ -559,9 +567,15 @@ func (a *App) fetchFileDiff(pr *bitbucket.PullRequest, path, escaped string) tea
 	workspace, slug, id := pr.Workspace(), pr.RepoSlug(), pr.ID
 	key, hash := pr.Key(), sourceHash(pr)
 	opts := bitbucket.DiffOptions{Path: escaped, Context: 0, DiffURL: pr.Links.Diff.Href}
+	// The renderer is resolved here, on the event loop, so the closure reads no
+	// app state: whether it runs at all depends on a flag a previous failure
+	// may have set.
+	renderer, rendererArgs, useRenderer := a.diffRendererCommand()
 	a.logFlag.Store(true)
 	return func() tea.Msg {
-		msg := fileDiffLoadedMsg{key: key, path: path, file: nil, hash: hash, err: nil}
+		msg := fileDiffLoadedMsg{
+			key: key, path: path, file: nil, hash: hash, err: nil, rendered: nil, rendererErr: nil,
+		}
 		text, err := client.GetPullRequestDiff(ctx, workspace, slug, id, opts)
 		if err != nil {
 			msg.err = err
@@ -573,8 +587,24 @@ func (a *App) fetchFileDiff(pr *bitbucket.PullRequest, path, escaped string) tea
 			return msg
 		}
 		msg.file = pickDiffFile(files, path)
+		if useRenderer {
+			msg.rendered, msg.rendererErr = renderDiffLines(ctx, renderer, rendererArgs, text)
+		}
 		return msg
 	}
+}
+
+// diffRendererCommand is the external diff renderer the next file diff should
+// go through, and whether there is one: it has to be configured, the terminal
+// has to be able to show colour at all (rendererStyle notty says it cannot, and
+// a terminal that cannot render chroma's colours cannot render delta's either),
+// and a failure that condemns the program must not already have turned it off
+// for this session.
+func (a *App) diffRendererCommand() (name string, args []string, ok bool) {
+	if a.diffRendererDisabled || a.cfg == nil || a.cfg.RendererStyle == config.RendererStyleNoTTY {
+		return "", nil, false
+	}
+	return a.cfg.ResolveDiffRenderer()
 }
 
 // pickDiffFile is the parsed file the view should show. The endpoint is asked

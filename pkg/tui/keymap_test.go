@@ -119,3 +119,18 @@ func TestKeymapFromConfig_RemapsTheWriteKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestKeymap_ScreenModeKeys(t *testing.T) {
+	t.Parallel()
+	km := DefaultKeymap()
+	testkit.AssertEqual(t, "default next", km.Match("+"), ActNextScreenMode)
+	testkit.AssertEqual(t, "default prev", km.Match("_"), ActPrevScreenMode)
+
+	var kcfg config.KeybindingConfig
+	kcfg.Universal.NextScreenMode = "="
+	kcfg.Universal.PrevScreenMode = "-"
+	km = KeymapFromConfig(kcfg)
+	testkit.AssertEqual(t, "remapped next", km.Match("="), ActNextScreenMode)
+	testkit.AssertEqual(t, "remapped prev", km.Match("-"), ActPrevScreenMode)
+	testkit.AssertEqual(t, "old key released", km.Match("+"), Action(""))
+}

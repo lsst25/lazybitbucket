@@ -16,6 +16,8 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 - Started inside a checkout whose remote points at one of the listed repositories, the pull request
   list opens scoped to that repository
+- Screen modes as in lazygit: `+` / `_` cycle normal → half (side panels take half the width) → full
+  (the focused panel fills the window); `gui.screenMode` picks the mode to start in
 - Kanagawa themes: `kanagawa-wave`, `kanagawa-dragon` and `kanagawa-lotus` presets, and theme
   families — `kanagawa`, `catppuccin` and the existing `auto` — that pick the dark or the light
   variant from the terminal background. Under `tmux` and `screen`, where the terminal cannot be
@@ -25,6 +27,13 @@ one are upstream lazyjira history, and their compare links still point at upstre
 - Inside tmux, `e` opens the file at the cursor's line in a new tmux window, started in the
   checkout's root and named after the file, instead of suspending the session; `editorInTmux:
   inline` restores the suspend-and-return behaviour. The description editor still runs inline
+- `diffRenderer` hands the diff pane's code column to an external program — `diffRenderer: delta
+  --color-only --paging=never` — modelled on lazygit's `git.paging.pager`. The program reads a
+  file's unified diff on stdin and must print one line per line it reads; the gutters, `+`/`-` and
+  review markers, cursor and `e` stay lazybitbucket's. It runs once per file opened, off the event
+  loop, and is cached with the diff. A failure falls back to the built-in chroma highlighting and
+  is reported on the status panel; a program that is missing or whose output does not line up is
+  turned off for the session. `rendererStyle: notty` turns it off, and chroma remains the default
 
 - `pkg/bitbucket`: a Bitbucket Cloud REST client — API tokens and access tokens (Bearer) or Atlassian
   email + API token (Basic), pagination that follows `next`, typed `APIError` with not-found /

@@ -43,6 +43,30 @@ func validateEditorInTmux(value string) error {
 	}
 }
 
+// Valid values for GUIConfig.ScreenMode, the layout the app starts in. Empty
+// string is treated as ScreenModeNormal. The same three modes are what the
+// nextScreenMode / prevScreenMode keys cycle through at runtime.
+const (
+	// ScreenModeNormal is the usual split: side panels at sidePanelWidth, the
+	// detail panel taking the rest.
+	ScreenModeNormal = "normal"
+	// ScreenModeHalf gives the side panels and the detail panel half the width
+	// each.
+	ScreenModeHalf = "half"
+	// ScreenModeFull hands the whole window to whichever panel is focused.
+	ScreenModeFull = "full"
+)
+
+func validateScreenMode(value string) error {
+	switch value {
+	case "", ScreenModeNormal, ScreenModeHalf, ScreenModeFull:
+		return nil
+	default:
+		return fmt.Errorf("invalid gui.screenMode %q: must be one of %s, %s, %s",
+			value, ScreenModeNormal, ScreenModeHalf, ScreenModeFull)
+	}
+}
+
 func validateRendererStyle(value string) error {
 	switch value {
 	case "", RendererStyleAuto, RendererStyleDark, RendererStyleLight, RendererStyleNoTTY:
@@ -89,6 +113,13 @@ type Config struct {
 	// window, "inline" suspends the session as it does outside tmux.
 	EditorInTmux  string `yaml:"editorInTmux"`
 	RendererStyle string `yaml:"rendererStyle"`
+	// DiffRenderer is an external program the file diff pane pipes a file's
+	// unified diff through instead of highlighting it with chroma, modelled on
+	// lazygit's git.paging.pager. It is a command line, split like Editor: the
+	// first field names the program and the rest are flags. Empty — the
+	// default — leaves the built-in colouring in place. See
+	// ResolveDiffRenderer for the contract the program has to keep.
+	DiffRenderer string `yaml:"diffRenderer"`
 }
 
 // BitbucketConfig holds the connection settings. Token is never persisted to
@@ -232,6 +263,8 @@ type UniversalKeys struct {
 	FocusPullRequests string `yaml:"focusPullRequests"`
 	FocusBuilds       string `yaml:"focusBuilds"`
 	FocusRepos        string `yaml:"focusRepos"`
+	NextScreenMode    string `yaml:"nextScreenMode"`
+	PrevScreenMode    string `yaml:"prevScreenMode"`
 }
 
 // PullRequestKeys are the keys active with a pull request selected, in the
@@ -290,6 +323,9 @@ type GUIConfig struct {
 	SidePanelWidth        int               `yaml:"sidePanelWidth"`
 	CollapsedPanelHeight  int               `yaml:"collapsedPanelHeight"`
 	PullRequestListFields []string          `yaml:"pullRequestListFields"`
+	// ScreenMode is the layout the app starts in: "normal" (default), "half"
+	// or "full". See ScreenModeNormal and friends.
+	ScreenMode string `yaml:"screenMode"`
 }
 
 // DefaultConfig returns a Config populated with sensible defaults
@@ -369,6 +405,23 @@ func (c *Config) ResolveEditor() string {
 		return editor
 	}
 	return DefaultEditor
+}
+
+// ResolveDiffRenderer splits the configured `diffRenderer` command into the
+// program to run and its flags; ok is false when nothing is configured, which
+// is the default and leaves the diff pane's own colouring alone.
+//
+// The program is handed the file's whole unified diff on stdin and must print
+// exactly one line for every line it read: it may colour a line, but it may
+// not add, drop, wrap or reorder one, because the pane draws its own gutters
+// and marker column around each line and indexes the output by input line.
+// delta's `--color-only` mode is the model.
+func (c *Config) ResolveDiffRenderer() (name string, args []string, ok bool) {
+	fields := strings.Fields(c.DiffRenderer)
+	if len(fields) == 0 {
+		return "", nil, false
+	}
+	return fields[0], fields[1:], true
 }
 
 // EditorOpensTmuxWindow reports whether the open-in-editor key should open a
@@ -491,6 +544,9 @@ func validate(cfg *Config) error {
 		return err
 	}
 	if err := validateRendererStyle(cfg.RendererStyle); err != nil {
+		return err
+	}
+	if err := validateScreenMode(cfg.GUI.ScreenMode); err != nil {
 		return err
 	}
 	if err := validateEditorInTmux(cfg.EditorInTmux); err != nil {
