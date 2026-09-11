@@ -33,6 +33,11 @@ const (
 	ScopeRepo
 	ScopeBuild
 	ScopeFile
+	// ScopeChangedFiles is the pull request's whole changed-file list. It is
+	// the one scope a command asks for itself (`changedFiles: true`) rather
+	// than inheriting from its context, because filling it costs a diffstat
+	// request that the other scopes do not.
+	ScopeChangedFiles
 )
 
 var contextScopes = map[Context]ScopeMask{
@@ -53,6 +58,11 @@ type ResolvedCustomCommand struct {
 	Contexts []Context
 	Scopes   ScopeMask
 	Template *template.Template
+}
+
+// NeedsChangedFiles reports whether the command asked for {{.Files}}.
+func (r ResolvedCustomCommand) NeedsChangedFiles() bool {
+	return r.Scopes&ScopeChangedFiles != 0
 }
 
 // ShouldSuspend mirrors CustomCommandConfig.ShouldSuspend.
@@ -128,7 +138,15 @@ func (c *Config) ResolveCustomCommands() ([]ResolvedCustomCommand, error) {
 		}
 
 		var scopes ScopeMask
+		if entry.ChangedFiles {
+			scopes |= ScopeChangedFiles
+		}
 		for _, ctx := range ctxs {
+			if entry.ChangedFiles && contextScopes[ctx]&ScopePullRequest == 0 {
+				return nil, fmt.Errorf(
+					"customCommands[%d] (%q): changedFiles needs a pull request, which context %q never has",
+					i, entry.Key, ctx)
+			}
 			scopes |= contextScopes[ctx]
 			k := keyCtx{entry.Key, ctx}
 			if seen[k] {

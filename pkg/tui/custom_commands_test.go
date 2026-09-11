@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
 	"github.com/lsst25/lazybitbucket/pkg/config"
 	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
+	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
 // commandApp is a laid-out app holding one selected pull request, one build and
@@ -244,6 +246,7 @@ func TestScopeNoun(t *testing.T) {
 	testkit.AssertEqual(t, "pull request", scopeNoun(config.ScopePullRequest), "pull request")
 	testkit.AssertEqual(t, "repository", scopeNoun(config.ScopeRepo), "repository")
 	testkit.AssertEqual(t, "build", scopeNoun(config.ScopeBuild), "build")
+	testkit.AssertEqual(t, "changed files", scopeNoun(config.ScopeChangedFiles), "changed file list")
 	testkit.AssertEqual(t, "unknown", scopeNoun(0), "selection")
 }
 
@@ -522,4 +525,149 @@ func TestHandleCustomCommand_DiffContextWinsOverDetail(t *testing.T) {
 	if _, _, ok := app.handleCustomCommand("x"); !ok {
 		t.Error("the key must be consumed by the diff-context command")
 	}
+}
+
+// changedFilesCmd is the command shape the changed-file list exists for:
+// open every file the pull request touches, skipping the deleted ones.
+func changedFilesCmd(contexts ...string) config.CustomCommandConfig {
+	return config.CustomCommandConfig{
+		Key: "E", Name: "Open changed files", ChangedFiles: true, Contexts: contexts,
+		Command: `nvim -p {{range .Files}}{{if ne .Status "removed"}}{{shellescape .Path}} {{end}}{{end}}`,
+	}
+}
+
+func TestBuildCommandData_ChangedFilesComeFromTheDiffStatCache(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	stubDiffStat(fake)
+	app := reviewApp(t, fake)
+	app.cfg.CustomCommands = []config.CustomCommandConfig{changedFilesCmd("detail")}
+	app.initCustomCommands()
+	runAll(t, app, app.jumpToTab(views.TabFiles))
+
+	data, _, ok := app.buildCommandData(app.customCmds[0], config.CtxDetail)
+
+	if !ok {
+		t.Fatal("the diffstat is cached; buildCommandData should have succeeded")
+	}
+	if len(data.Files) != 2 {
+		t.Fatalf("files = %v, want the two diffstat entries", data.Files)
+	}
+	testkit.AssertEqual(t, "first path", data.Files[0].Path, testFileGo)
+	testkit.AssertEqual(t, "first status", data.Files[0].Status, bitbucket.DiffStatModified)
+	testkit.AssertEqual(t, "first line", data.Files[0].Line, 1)
+	testkit.AssertEqual(t, "second path", data.Files[1].Path, testFileMD)
+	testkit.AssertEqual(t, "second old path", data.Files[1].OldPath, "")
+}
+
+func TestBuildCommandData_ChangedFilesAreOnlyFilledWhenAskedFor(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	stubDiffStat(fake)
+	app := reviewApp(t, fake)
+	app.cfg.CustomCommands = []config.CustomCommandConfig{
+		{Key: "x", Name: "plain", Command: "echo {{.PR.ID}}", Contexts: []string{"detail"}},
+	}
+	app.initCustomCommands()
+	runAll(t, app, app.jumpToTab(views.TabFiles))
+
+	data, _, ok := app.buildCommandData(app.customCmds[0], config.CtxDetail)
+
+	if !ok {
+		t.Fatal("buildCommandData should have succeeded")
+	}
+	if data.Files != nil {
+		t.Errorf("files = %v, want nil for a command that did not ask for them", data.Files)
+	}
+}
+
+func TestHandleCustomCommand_FetchesTheChangedFilesThenRuns(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.ListPullRequestDiffStatFunc = func(context.Context, string, string, int) ([]bitbucket.DiffStatEntry, error) {
+		calls++
+		return testDiffStat(), nil
+	}
+	app := reviewApp(t, fake)
+	app.cfg.CustomCommands = []config.CustomCommandConfig{changedFilesCmd("detail")}
+	app.initCustomCommands()
+
+	// Nothing is cached yet: the first press fetches instead of running.
+	_, cmd, ok := app.handleCustomCommand("E")
+	if !ok || cmd == nil {
+		t.Fatal("the key should be consumed and start the diffstat fetch")
+	}
+	if app.pendingCmd == nil || app.pendingCmd.key != testPRKey {
+		t.Fatalf("pending command = %v, want one waiting on %s", app.pendingCmd, testPRKey)
+	}
+
+	// The answer resumes it. runAll drains the whole chain, and the command
+	// the resume produced is the shell exec, which runAll would run — assert on
+	// the data instead by resuming by hand.
+	msg, msgOK := cmd().(diffStatLoadedMsg)
+	if !msgOK {
+		t.Fatal("expected a diffStatLoadedMsg")
+	}
+	_, next := app.handleDiffStatLoaded(msg)
+	if next == nil {
+		t.Fatal("the cached diffstat should have resumed the custom command")
+	}
+	testkit.AssertEqual(t, "pending cleared", app.pendingCmd == nil, true)
+
+	// A second press runs straight off the cache.
+	_, cmd, ok = app.handleCustomCommand("E")
+	if !ok || cmd == nil {
+		t.Fatal("the second press should have run the command")
+	}
+	testkit.AssertEqual(t, "diffstat requests", calls, 1)
+	testkit.AssertEqual(t, "nothing left pending", app.pendingCmd == nil, true)
+}
+
+func TestHandleCustomCommand_ChangedFilesFetchFailureIsReported(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.ListPullRequestDiffStatFunc = func(context.Context, string, string, int) ([]bitbucket.DiffStatEntry, error) {
+		return nil, errors.New("boom")
+	}
+	app := reviewApp(t, fake)
+	app.cfg.CustomCommands = []config.CustomCommandConfig{changedFilesCmd("detail")}
+	app.initCustomCommands()
+
+	_, cmd, _ := app.handleCustomCommand("E")
+	msg, ok := cmd().(diffStatLoadedMsg)
+	if !ok {
+		t.Fatal("expected a diffStatLoadedMsg")
+	}
+	_, next := app.handleDiffStatLoaded(msg)
+
+	if next != nil {
+		t.Error("a failed diffstat must not run the command")
+	}
+	testkit.AssertEqual(t, "pending cleared", app.pendingCmd == nil, true)
+	if !strings.Contains(app.statusPanel.ErrorMessage(), "boom") {
+		t.Errorf("status error = %q, want the fetch failure", app.statusPanel.ErrorMessage())
+	}
+
+	// The failure is cached, so a second press reports it without re-fetching.
+	_, cmd, consumed := app.handleCustomCommand("E")
+	testkit.AssertEqual(t, "key consumed", consumed, true)
+	if cmd != nil {
+		t.Error("a cached failure must not run the command either")
+	}
+}
+
+func TestResumeCustomCommand_DropsAResumeForAnotherPullRequest(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	stubDiffStat(fake)
+	app := reviewApp(t, fake)
+	app.cfg.CustomCommands = []config.CustomCommandConfig{changedFilesCmd("detail")}
+	app.initCustomCommands()
+	app.pendingCmd = &pendingCustomCommand{cmd: app.customCmds[0], ctx: config.CtxDetail, key: "other/repo#7"}
+
+	if cmd := app.resumeCustomCommand(testPRKey); cmd != nil {
+		t.Error("a diffstat for a different pull request must not resume the command")
+	}
+	testkit.AssertEqual(t, "pending kept", app.pendingCmd != nil, true)
 }

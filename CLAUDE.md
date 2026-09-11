@@ -50,7 +50,9 @@ What exists:
   returning). Git runs with `GIT_TERMINAL_PROMPT=0` so a credential prompt cannot hang the UI.
 - `pkg/config` — `bitbucket` (workspace, repositories, email, baseUrl, `readOnly`), `pullRequestTabs`,
   `gui.pullRequestListFields`, `refreshInterval`, `editor`, custom command contexts
-  `pullrequests`/`builds`/`repos`/`detail`/`diff`, `keybinding.pullRequests` with
+  `pullrequests`/`builds`/`repos`/`detail`/`diff` (plus the per-command `changedFiles: true`, the one
+  scope a command opts into rather than inheriting from its context, because it costs a diffstat
+  request — it fills `{{.Files}}` with the whole changed-file list), `keybinding.pullRequests` with
   `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`/`approve`, and `keybinding.builds` with
   `rerun`/`stop` — the only group besides `pullRequests` that carries write actions.
 - `pkg/tui` — panels Status `[1]`, Pull Requests `[2]`, Builds `[3]`, Repos `[4]`, Detail `[0]`. PR list

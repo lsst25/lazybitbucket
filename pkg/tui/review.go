@@ -241,11 +241,15 @@ func (a *App) handleDiffStatLoaded(msg diffStatLoadedMsg) (tea.Model, tea.Cmd) {
 		text := a.reviewErrorText(msg.err, "diff stat")
 		a.detailView.SetDiffStatError(msg.key, text)
 		a.noteReviewFailure(msg.err, text)
+		if a.pendingCmd != nil && a.pendingCmd.key == msg.key {
+			a.statusPanel.SetError(a.pendingCmd.cmd.Name + ": " + text)
+			a.pendingCmd = nil
+		}
 		return a, nil
 	}
 	a.statusPanel.SetOnline(true)
 	a.detailView.SetDiffStat(msg.key, msg.entries)
-	return a, nil
+	return a, a.resumeCustomCommand(msg.key)
 }
 
 // handleCommitsLoaded applies the commit list to the Commits tab.

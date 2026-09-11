@@ -71,6 +71,40 @@ func TestScopeMask_BitsAreDistinct(t *testing.T) {
 	testkit.AssertEqual(t, "ScopeRepo", ScopeRepo, ScopeMask(2))
 	testkit.AssertEqual(t, "ScopeBuild", ScopeBuild, ScopeMask(4))
 	testkit.AssertEqual(t, "ScopeFile", ScopeFile, ScopeMask(8))
+	testkit.AssertEqual(t, "ScopeChangedFiles", ScopeChangedFiles, ScopeMask(16))
+}
+
+func TestResolveCustomCommands_ChangedFilesIsOptIn(t *testing.T) {
+	t.Parallel()
+
+	plain := resolveOne(t, CustomCommandConfig{Key: "a", Name: "cmd", Command: echoCommand})
+	testkit.AssertEqual(t, "NeedsChangedFiles", plain.NeedsChangedFiles(), false)
+	testkit.AssertEqual(t, "Scopes&ScopeChangedFiles", plain.Scopes&ScopeChangedFiles, ScopeMask(0))
+
+	got := resolveOne(t, CustomCommandConfig{
+		Key: "E", Name: "edit all", Command: echoCommand,
+		Contexts: []string{"diff"}, ChangedFiles: true,
+	})
+	testkit.AssertEqual(t, "NeedsChangedFiles", got.NeedsChangedFiles(), true)
+	testkit.AssertEqual(t, "Scopes", got.Scopes,
+		ScopePullRequest|ScopeRepo|ScopeFile|ScopeChangedFiles)
+}
+
+func TestResolveCustomCommands_ChangedFilesNeedsAPullRequestContext(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{CustomCommands: []CustomCommandConfig{{
+		Key: "E", Name: "edit all", Command: echoCommand,
+		Contexts: []string{"pullrequests", "repos"}, ChangedFiles: true,
+	}}}
+
+	_, err := cfg.ResolveCustomCommands()
+
+	if err == nil {
+		t.Fatal("the repos context never has a pull request; changedFiles must be rejected")
+	}
+	if !strings.Contains(err.Error(), "changedFiles") || !strings.Contains(err.Error(), `"repos"`) {
+		t.Errorf("error = %v, want it to name changedFiles and the repos context", err)
+	}
 }
 
 func TestCtxDiff_IsNotADefaultContext(t *testing.T) {

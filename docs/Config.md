@@ -653,6 +653,7 @@ Each command has:
 | `contexts` | Optional list of UI contexts the command fires in. Defaults to `[pullrequests, detail]`. |
 | `suspend` | Optional. `true` (default) hands the terminal to the child process; set `false` for background commands like clipboard copies or notifications. |
 | `refresh` | Optional, default `false`. After the command exits successfully, refresh the selected pull request — the same work as `r` (detail plus build statuses). Only a command that asks for it costs the extra requests. |
+| `changedFiles` | Optional, default `false`. Fills `{{.Files}}` with the pull request's whole changed-file list. Needs a context that has a pull request (anything but `repos`), and costs a diffstat request. |
 
 The command string is a Go template with `missingkey=error`, parsed at startup: a bad template, an unknown context, an empty `key`/`name`/`command`, or the same key twice in the same context is a startup error naming the offending entry.
 
@@ -661,6 +662,8 @@ The command string is a Go template with `missingkey=error`, parsed at startup: 
 ### Contexts
 
 A command fires when one of its declared contexts matches the current UI state. The contexts — not the template text — decide which scopes have to be filled: a command declared in `builds` always needs a selected pull request, repository **and** build. When one of them is missing the command does not run and the help bar says `<name>: no build selected` (or `no pull request` / `no repository`).
+
+`changedFiles` is the one exception: it is asked for per command rather than implied by a context, because filling it costs a request the other scopes do not.
 
 Custom commands are matched before built-in keys, so a binding can shadow any action. If every key bound to `quit` is shadowed in every context, lazybitbucket prints a warning on stderr and on the status panel at startup rather than leaving you with no way out.
 
@@ -743,6 +746,35 @@ customCommands:
       -- {{.File.Path | shellescape}} | less
     contexts: [diff]
 ```
+
+### Changed files
+
+`changedFiles: true` fills `{{.Files}}` with **every** file the pull request touches, in diffstat order — the same list the Files tab shows, not just the one under the cursor. Each entry carries the file-scope fields:
+
+| Variable | Description |
+|----------|-------------|
+| `{{.Files}}` | The changed files, in diffstat order; empty for a pull request that changes nothing |
+| `.Path` | Repository-relative path, the new side for a rename |
+| `.OldPath` | The path before a rename; empty otherwise |
+| `.Status` | `added`, `removed`, `modified` or `renamed` |
+| `.Line` | Always `1` — the list names files, not positions |
+
+The list is not fetched with the pull request. The first press of such a key fetches the diffstat (the help bar says `<name>: loading changed files…`) and runs the command when it arrives; after that it comes from the same cache the Files tab uses, and a push to the source branch invalidates it. A failed diffstat — Bitbucket's "diff too large" included — reports on the status panel and runs nothing.
+
+An example — open every file the pull request changes in nvim, one tab per file, skipping the ones it deleted:
+
+```yaml
+customCommands:
+  - key: "ctrl+e"
+    name: "Open changed files in nvim"
+    changedFiles: true
+    contexts: [pullrequests, detail, diff]
+    command: >-
+      cd {{.GitRepoPath | shellescape}} &&
+      nvim -p {{range .Files}}{{if ne .Status "removed"}}{{shellescape .Path}} {{end}}{{end}}
+```
+
+The paths are repository-relative, so the command has to `cd` into a checkout of that repository first — `{{.GitRepoPath}}` is the one lazybitbucket was started in, which is the right one only when it is the pull request's repository.
 
 ### Shared fields
 

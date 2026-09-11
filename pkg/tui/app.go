@@ -238,6 +238,10 @@ type App struct {
 
 	customCmds []config.ResolvedCustomCommand
 
+	// pendingCmd is the one custom command waiting for the diffstat its
+	// {{.Files}} needs; nil the rest of the time. See awaitChangedFiles.
+	pendingCmd *pendingCustomCommand
+
 	panelSideW    int
 	panelStatusH  int
 	panelPRH      int

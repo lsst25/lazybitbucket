@@ -83,13 +83,26 @@ type FileScopeData struct {
 // CommandData is what a custom command template is executed against. Only the
 // scopes the command declared are populated; the rest stay nil.
 type CommandData struct {
-	PR          *PullRequestScopeData
-	Repo        *RepoScopeData
-	Build       *BuildScopeData
-	File        *FileScopeData
+	PR    *PullRequestScopeData
+	Repo  *RepoScopeData
+	Build *BuildScopeData
+	File  *FileScopeData
+	// Files is every file the pull request changes, in diffstat order. It is
+	// only filled for a command that declared `changedFiles: true`, and is nil
+	// otherwise — the list costs a request the other scopes do not.
+	Files       []FileScopeData
 	Workspace   string
 	GitRepoPath string
 	GitBranch   string
+}
+
+// pendingCustomCommand is a command that is waiting for the diffstat its
+// {{.Files}} needs. It is resumed by handleDiffStatLoaded, and dropped
+// whenever the fetch answers for a different pull request or fails.
+type pendingCustomCommand struct {
+	cmd config.ResolvedCustomCommand
+	ctx config.Context
+	key string
 }
 
 // initCustomCommands resolves the configured commands at startup. A resolution
@@ -150,6 +163,9 @@ func (a *App) handleCustomCommand(keyStr string) (tea.Model, tea.Cmd, bool) {
 			if rc.Key != keyStr || !rc.HasContext(ctx) {
 				continue
 			}
+			if cmd, held := a.awaitChangedFiles(rc, ctx); held {
+				return a, cmd, true
+			}
 			data, missing, ok := a.buildCommandData(rc, ctx)
 			if !ok {
 				a.helpBar.SetStatusMsg(fmt.Sprintf("%s: no %s selected", rc.Name, scopeNoun(missing)))
@@ -173,6 +189,8 @@ func scopeNoun(scope config.ScopeMask) string {
 		return "build"
 	case config.ScopeFile:
 		return "file"
+	case config.ScopeChangedFiles:
+		return "changed file list"
 	default:
 		return "selection"
 	}
@@ -188,6 +206,7 @@ func (a *App) buildCommandData(rc config.ResolvedCustomCommand, ctx config.Conte
 		Repo:        nil,
 		Build:       nil,
 		File:        nil,
+		Files:       nil,
 		Workspace:   a.workspace,
 		GitRepoPath: a.gitRepoPath,
 		GitBranch:   a.gitBranch,
@@ -218,6 +237,14 @@ func (a *App) buildCommandData(rc config.ResolvedCustomCommand, ctx config.Conte
 		data.Build = buildScopeData(status)
 	}
 
+	if rc.NeedsChangedFiles() {
+		entry, ok := reviewFresh(a.diffStatCache, pr.Key(), pr)
+		if !ok || entry.err != nil {
+			return data, config.ScopeChangedFiles, false
+		}
+		data.Files = changedFileScopeData(entry.value)
+	}
+
 	if rc.Scopes&config.ScopeFile != 0 {
 		file := a.buildFileScopeData()
 		if file == nil {
@@ -246,6 +273,69 @@ func (a *App) buildFileScopeData() *FileScopeData {
 		data.Status = entry.Status
 	}
 	return data
+}
+
+// changedFileScopeData turns a diffstat into the {{.Files}} list. Line is 1 on
+// every entry: the list names files, not positions, and 1 is what an editor
+// opens a file at.
+func changedFileScopeData(entries []bitbucket.DiffStatEntry) []FileScopeData {
+	files := make([]FileScopeData, 0, len(entries))
+	for _, entry := range entries {
+		files = append(files, FileScopeData{
+			Path:    entry.Path(),
+			OldPath: entry.OldPath(),
+			Status:  entry.Status,
+			Line:    1,
+		})
+	}
+	return files
+}
+
+// awaitChangedFiles holds a {{.Files}} command back until the pull request's
+// diffstat is cached, and reports whether it did. The list is not fetched with
+// the pull request — no other scope costs a request — so the first press of
+// such a key fetches, and the answer runs the command (resumeCustomCommand).
+func (a *App) awaitChangedFiles(rc config.ResolvedCustomCommand, ctx config.Context) (tea.Cmd, bool) {
+	if !rc.NeedsChangedFiles() {
+		return nil, false
+	}
+	pr := a.currentPullRequest()
+	if pr == nil {
+		return nil, false // buildCommandData reports the missing pull request
+	}
+	entry, ok := reviewFresh(a.diffStatCache, pr.Key(), pr)
+	switch {
+	case ok && entry.err != nil:
+		a.statusPanel.SetError(rc.Name + ": " + a.reviewErrorText(entry.err, "diff stat"))
+		return nil, true
+	case ok:
+		return nil, false
+	}
+	a.helpBar.SetStatusMsg(rc.Name + ": loading changed files…")
+	a.pendingCmd = &pendingCustomCommand{cmd: rc, ctx: ctx, key: pr.Key()}
+	return a.fetchDiffStat(pr), true
+}
+
+// resumeCustomCommand runs the command that was waiting for key's diffstat.
+// The caller has already cached the answer, so the command either runs now or
+// is dropped — it is never queued twice.
+func (a *App) resumeCustomCommand(key string) tea.Cmd {
+	pending := a.pendingCmd
+	if pending == nil || pending.key != key {
+		return nil
+	}
+	a.pendingCmd = nil
+
+	pr := a.currentPullRequest()
+	if pr == nil || pr.Key() != key {
+		return nil // the selection moved on while the request was in flight
+	}
+	data, missing, ok := a.buildCommandData(pending.cmd, pending.ctx)
+	if !ok {
+		a.helpBar.SetStatusMsg(fmt.Sprintf("%s: no %s selected", pending.cmd.Name, scopeNoun(missing)))
+		return nil
+	}
+	return a.executeCustomCommand(pending.cmd, data)
 }
 
 func (a *App) buildPullRequestScopeData(pr *bitbucket.PullRequest) *PullRequestScopeData {

@@ -146,6 +146,11 @@ type CustomCommandConfig struct {
 	Suspend  *bool    `yaml:"suspend,omitempty"` // default: true
 	Refresh  bool     `yaml:"refresh,omitempty"` // default: false
 	Contexts []string `yaml:"contexts,omitempty"`
+	// ChangedFiles asks for the pull request's whole changed-file list in
+	// {{.Files}}. Unlike the other scopes it is not implied by a context,
+	// because it costs a diffstat request: only a command that says it needs
+	// the list pays for it. It requires a pull-request context.
+	ChangedFiles bool `yaml:"changedFiles,omitempty"`
 }
 
 // ShouldSuspend returns true when the TUI should be suspended for this command (default: true)
