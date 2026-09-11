@@ -11,6 +11,7 @@ import (
 
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket/bitbuckettest"
+	"github.com/lsst25/lazybitbucket/pkg/config"
 	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
@@ -110,6 +111,139 @@ func TestHandlePullRequestsLoaded_GitBranchAutoSelectRunsOnce(t *testing.T) {
 	if !app.gitAutoSelect {
 		t.Error("the auto-select must be marked done so it never fights the user again")
 	}
+}
+
+// branchApp is a sized app standing in a checkout of testRepo on testBranch,
+// with the tab order the Mine tab leads — the configuration that exposed the
+// race below. The preview a selection sets off is stubbed, because every one of
+// these tests ends in one.
+func branchApp(t *testing.T, fake *bitbuckettest.FakeClient, tabs ...config.PullRequestTabConfig) *App {
+	t.Helper()
+	app := sizedApp(t, fake)
+	if len(tabs) == 0 {
+		tabs = []config.PullRequestTabConfig{{Name: "Mine", Filter: "mine"}, {Name: "Open", Filter: ""}}
+	}
+	app.cfg.PullRequestTabs = tabs
+	app.prList.SetTabs(tabs)
+	app.gitBranch = testBranch
+	app.gitRemoteRepos = []string{testWorkspace + "/" + testRepo}
+	stubPreview(fake)
+	return app
+}
+
+// stubPreview answers the two requests previewing a pull request makes.
+func stubPreview(fake *bitbuckettest.FakeClient) {
+	fake.ListPullRequestStatusesFunc = func(
+		context.Context, string, string, int,
+	) ([]bitbucket.CommitStatus, error) {
+		return nil, nil
+	}
+	fake.GetPullRequestFunc = func(
+		_ context.Context, _, repoSlug string, id int,
+	) (*bitbucket.PullRequest, error) {
+		pr := newPR(repoSlug, id, testTitle)
+		return &pr, nil
+	}
+}
+
+// The Mine and Reviewing tabs are empty until GET /user answers, and that
+// answer can arrive after the first pull request list. The selection has to
+// still happen then, which is what a single attempt on the first load got
+// wrong.
+func TestAutoSelectGitBranch_LandsWhenTheCurrentUserArrivesAfterTheList(t *testing.T) {
+	t.Parallel()
+	// One tab only, so there is nowhere else the pull request could be found
+	// while the Mine filter has nobody to match against.
+	app := branchApp(t, &bitbuckettest.FakeClient{T: t}, config.PullRequestTabConfig{Name: "Mine", Filter: "mine"})
+	mine := withAuthor(newPR(testRepo, 101, testTitle), testUserUUID)
+
+	// The list first, while the Mine tab still has nobody to filter by.
+	_, _ = app.Update(loadedMsg(bitbucket.RepoPullRequests{
+		Repo: testRepo, PullRequests: []bitbucket.PullRequest{mine},
+	}))
+	testkit.AssertEqual(t, "nothing to select yet", app.previewKey, "")
+	if app.gitAutoSelect {
+		t.Fatal("an empty tab must not settle the selection: the pull request was not there yet")
+	}
+
+	_, cmd := app.Update(currentUserLoadedMsg{user: &bitbucket.Account{UUID: testUserUUID}})
+	runAll(t, app, cmd)
+
+	testkit.AssertEqual(t, "the branch's pull request is selected", app.previewKey, testPRKey)
+	if got := plain(app.helpBar.View()); !strings.Contains(got, "the pull request for "+testBranch) {
+		t.Errorf("help bar = %q, want the note naming the branch", got)
+	}
+}
+
+// The pull request for the branch may be one someone else opened, which is a
+// tab the user is not on. It is worth switching to.
+func TestAutoSelectGitBranch_SwitchesToTheTabHoldingIt(t *testing.T) {
+	t.Parallel()
+	app := branchApp(t, &bitbuckettest.FakeClient{T: t})
+	app.currentUser = &bitbucket.Account{UUID: testUserUUID}
+	theirs := withAuthor(newPR(testRepo, 101, testTitle), testOtherUUID)
+
+	_, cmd := app.Update(loadedMsg(bitbucket.RepoPullRequests{
+		Repo: testRepo, PullRequests: []bitbucket.PullRequest{theirs},
+	}))
+	runAll(t, app, cmd)
+
+	testkit.AssertEqual(t, "the tab holding it", app.prList.GetTabIndex(), 1)
+	testkit.AssertEqual(t, "selected", app.previewKey, testPRKey)
+	if got := plain(app.helpBar.View()); !strings.Contains(got, "in Open") {
+		t.Errorf("help bar = %q, want the tab it moved to", got)
+	}
+}
+
+// One branch name can exist in several repositories; the checkout says which
+// one is meant.
+func TestAutoSelectGitBranch_PrefersTheCheckoutsOwnRepository(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	stubPreview(fake)
+	app := sizedApp(t, fake)
+	app.gitBranch = testBranch
+	app.gitRemoteRepos = []string{testWorkspace + "/" + testRepo2}
+
+	elsewhere := newPR(testRepo, 101, testTitle)
+	here := newPR(testRepo2, 40, "dark mode")
+	here.Source.Branch = bitbucket.Branch{Name: testBranch}
+
+	_, cmd := app.Update(loadedMsg(bitbucket.RepoPullRequests{
+		Repo: testRepo, PullRequests: []bitbucket.PullRequest{elsewhere, here},
+	}))
+	runAll(t, app, cmd)
+
+	testkit.AssertEqual(t, "the checkout's own repository wins",
+		app.previewKey, testWorkspace+"/"+testRepo2+"#40")
+}
+
+func TestAutoSelectGitBranch_StopsOnceTheUserTakesTheCursor(t *testing.T) {
+	t.Parallel()
+	app := branchApp(t, &bitbuckettest.FakeClient{T: t})
+	app.currentUser = &bitbucket.Account{UUID: testUserUUID}
+	other := withAuthor(newPR(testRepo, 102, "another"), testUserUUID)
+	other.Source.Branch = bitbucket.Branch{Name: "feature/other"}
+	mine := withAuthor(newPR(testRepo, 101, testTitle), testUserUUID)
+
+	// A first list the branch's pull request is not in, then the user moves the
+	// cursor, then a list that does hold it.
+	_, cmd := app.Update(loadedMsg(bitbucket.RepoPullRequests{
+		Repo: testRepo, PullRequests: []bitbucket.PullRequest{other},
+	}))
+	runAll(t, app, cmd)
+	_, cmd = app.Update(views.PullRequestSelectedMsg{PullRequest: &other})
+	runAll(t, app, cmd)
+	if !app.gitAutoSelect {
+		t.Fatal("moving the list cursor is taking it")
+	}
+
+	_, cmd = app.Update(loadedMsg(bitbucket.RepoPullRequests{
+		Repo: testRepo, PullRequests: []bitbucket.PullRequest{other, mine},
+	}))
+	runAll(t, app, cmd)
+
+	testkit.AssertEqual(t, "the cursor stayed where the user put it", app.previewKey, other.Key())
 }
 
 func TestHandleReposLoaded(t *testing.T) {

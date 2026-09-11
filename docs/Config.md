@@ -590,7 +590,11 @@ git:
 
 `c` on the selected pull request checks out its source branch in the repository lazybitbucket was started in. It first fetches that branch from the remote whose URL points at the pull request's repository (see the sync section for how the remote is found), so a branch pushed after your last fetch is still found; a local branch that exists is checked out and fast-forwarded when the remote copy is ahead, left alone with a note when it has diverged, and created as a tracking branch when it only exists on the remote. A branch known neither locally nor on that remote is an error — `c` never creates one. With `closeOnCheckout: true` lazybitbucket exits after a successful checkout, which is convenient when you launch it from a shell alias.
 
-The current branch is also used at startup: if it matches the source branch of a pull request in the first tab, that pull request is selected automatically.
+The current branch is also used at startup: the pull request whose source branch is the one you have checked out is selected automatically, and the hint bar says so — `selected #103 — the pull request for bugfix/upstream-timeout`.
+
+It looks in every tab that has loaded, not only the one in view: the tab you are on wins, and otherwise it switches to the tab holding the pull request and names it (`selected #103 in Reviewing — …`). That matters because the Mine and Reviewing tabs stay empty until Bitbucket answers who you are, which can be after the first list arrives — so the selection is attempted on each list that lands until it succeeds, rather than once against whatever was there first. When the checkout's remotes name a repository, only that repository's pull requests are considered; the same branch name in two repositories is common enough that selecting the wrong one would be worse than selecting none.
+
+It stops for good the moment you move the list cursor or switch tabs yourself. Nothing moves under you after that, and a background refresh never re-runs it.
 
 ## Pull request actions
 

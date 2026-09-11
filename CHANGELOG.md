@@ -15,7 +15,11 @@ one are upstream lazyjira history, and their compare links still point at upstre
 ### Added
 
 - Started inside a checkout whose remote points at one of the listed repositories, the pull request
-  list opens scoped to that repository
+  list opens scoped to that repository, with the cursor on the pull request for the branch you have
+  checked out — in whichever tab holds it, which it says (`selected #103 in Reviewing — the pull
+  request for bugfix/upstream-timeout`). It is attempted on every list that lands until it succeeds,
+  because the Mine and Reviewing tabs are empty until Bitbucket answers who you are, and it stops for
+  good once you move the cursor or switch tabs yourself
 - Screen modes as in lazygit: `+` / `_` cycle normal → half (side panels take half the width) → full
   (the focused panel fills the window); `gui.screenMode` picks the mode to start in
 - Kanagawa themes: `kanagawa-wave`, `kanagawa-dragon` and `kanagawa-lotus` presets, and theme

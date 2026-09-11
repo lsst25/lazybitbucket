@@ -600,6 +600,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleFileDiffLoaded(msg)
 
 	case views.PullRequestSelectedMsg:
+		// The list emits this only when the user moves its cursor: the app's
+		// own previews call the handler directly.
+		a.userTookTheCursor()
 		return a.handlePullRequestSelected(msg)
 	case views.PipelineSelectedMsg:
 		return a.handlePipelineSelected(msg)

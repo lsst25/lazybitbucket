@@ -43,7 +43,7 @@ make build-demo
 - **Approve** — `A` approves the PR, and `A` again withdraws the approval you gave; the dialog always names the direction, and your own PRs are refused the way Bitbucket refuses them
 - **Rerun and stop pipelines** — `P` starts a finished pipeline run again with the same commit and selector, `X` signals a running one to stop; both work on the Builds panel and inside the pipeline and step-log views, behind a confirmation that names the run
 - **Read-only mode** — `--read-only` (or `bitbucket.readOnly: true`) makes the whole thing browse-only: the client refuses every non-GET request before it is sent, and the action keys disappear. Nothing else is ever written either — lazybitbucket cannot request changes, decline or comment
-- **Git integration** — check out the source branch of the selected PR; the PR matching your current branch is selected at startup
+- **Git integration** — check out the source branch of the selected PR; started inside a checkout, lazybitbucket scopes the list to that repository and puts the cursor on the PR for the branch you are on, whichever tab it is in
 - **Custom commands** — bind shell commands to keys with template access to the focused PR, repo, build, or the changed file and line under the cursor
 - **Themes** — default ANSI palette, all four Catppuccin flavors (Latte, Frappé, Macchiato, Mocha) and the three Kanagawa variants (Wave, Dragon, Lotus), with light/dark selection that follows your terminal
 - **Adaptive** — side-by-side or stacked layout, mouse support, and lazygit's screen modes: `+` / `_` cycle normal → half → full, where the focused panel takes the whole window

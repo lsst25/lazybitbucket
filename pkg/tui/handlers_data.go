@@ -51,6 +51,11 @@ func (a *App) handleCurrentUserLoaded(msg currentUserLoadedMsg) (tea.Model, tea.
 		}
 	}
 	a.refilterTabs("")
+	// The Mine and Reviewing tabs were empty until this answer, so this may be
+	// the first moment the branch's pull request exists to be found.
+	if cmd := a.autoSelectGitBranch(); cmd != nil {
+		return a, cmd
+	}
 	return a, a.previewSelected()
 }
 
@@ -156,21 +161,103 @@ func (a *App) handlePullRequestsLoaded(msg pullRequestsLoadedMsg) (tea.Model, te
 }
 
 // autoSelectGitBranch moves the cursor to the pull request whose source branch
-// is the branch checked out here, once, on the first list load.
+// is the branch checked out here.
+//
+// It is attempted on every load until it lands, rather than once against
+// whatever had arrived first. The tabs fill in at different moments — Mine and
+// Reviewing are empty until GET /user answers, which can be after the first
+// list — so a single attempt would give up on a pull request that was simply
+// not there yet, and never look again. Once it has landed, or once the user has
+// taken the cursor themselves, it is settled and never moves anything again.
 func (a *App) autoSelectGitBranch() tea.Cmd {
 	if a.gitAutoSelect || a.gitBranch == "" {
 		return nil
 	}
-	a.gitAutoSelect = true
-	for _, pr := range a.prList.CurrentPullRequests() {
-		if pr.SourceBranch() != a.gitBranch {
-			continue
+	tab, pr, found := a.pullRequestForBranch()
+	if !found {
+		return nil
+	}
+
+	previous := a.prList.GetTabIndex()
+	if tab != previous {
+		a.prList.SetTabIndex(tab)
+	}
+	if !a.prList.SelectByKey(pr.Key()) {
+		// The row is in the tab but a filter is hiding it. Leave everything as
+		// it was and try again on the next load, when the filter may be gone.
+		if tab != previous {
+			a.prList.SetTabIndex(previous)
 		}
-		if a.prList.SelectByKey(pr.Key()) {
-			return a.previewSelected()
+		return nil
+	}
+
+	a.gitAutoSelect = true
+	where := ""
+	if tab != previous {
+		where = " in " + a.tabName(tab)
+	}
+	a.helpBar.SetStatusMsg("selected #" + strconv.Itoa(pr.ID) + where +
+		" — the pull request for " + a.gitBranch)
+	return a.previewSelected()
+}
+
+// pullRequestForBranch is the loaded pull request whose source branch is the
+// checked-out one, and the tab holding it. The active tab is searched first, so
+// a pull request the user can already see is never passed over for the same
+// branch somewhere else; the rest follow in their configured order, and a tab
+// that has not been loaded holds nothing to find.
+func (a *App) pullRequestForBranch() (int, *bitbucket.PullRequest, bool) {
+	active := a.prList.GetTabIndex()
+	order := make([]int, 0, len(a.tabConfigs()))
+	order = append(order, active)
+	for tab := range a.tabConfigs() {
+		if tab != active {
+			order = append(order, tab)
 		}
 	}
-	return nil
+
+	for _, tab := range order {
+		rows := a.prList.TabPullRequests(tab)
+		for index := range rows {
+			if a.branchPullRequest(&rows[index]) {
+				return tab, &rows[index], true
+			}
+		}
+	}
+	return 0, nil, false
+}
+
+// branchPullRequest reports whether a pull request is the one the checked-out
+// branch belongs to. When the checkout's own repositories are known the match
+// is confined to them: one branch name can exist in several repositories, and
+// selecting another repository's pull request would be worse than selecting
+// none.
+func (a *App) branchPullRequest(pr *bitbucket.PullRequest) bool {
+	if pr.SourceBranch() != a.gitBranch {
+		return false
+	}
+	if len(a.gitRemoteRepos) == 0 {
+		return true
+	}
+	return slices.Contains(a.gitRemoteRepos, strings.ToLower(pr.Workspace()+"/"+pr.RepoSlug()))
+}
+
+// userTookTheCursor settles the branch auto-selection without it having landed:
+// the user has moved the list cursor or changed the tab, and from that moment
+// the cursor is theirs. It is deliberately not every keystroke — a `j` pressed
+// against a list that has not arrived yet moves nothing, and giving up there is
+// how the selection would miss the moment it was waiting for.
+func (a *App) userTookTheCursor() {
+	a.gitAutoSelect = true
+}
+
+// tabName is a tab's configured label, used to say where the cursor went.
+func (a *App) tabName(tab int) string {
+	tabs := a.tabConfigs()
+	if tab < 0 || tab >= len(tabs) {
+		return ""
+	}
+	return tabs[tab].Name
 }
 
 // handlePullRequestDetailLoaded applies a pull request fetched for its review

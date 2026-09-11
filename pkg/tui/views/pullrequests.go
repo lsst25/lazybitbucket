@@ -190,6 +190,17 @@ func (m *PullRequestList) SetPullRequestsForTab(tab int, prs []bitbucket.PullReq
 // CurrentPullRequests returns the active tab's pull requests before filtering.
 func (m *PullRequestList) CurrentPullRequests() []bitbucket.PullRequest { return m.all }
 
+// TabPullRequests returns a tab's pull requests before the repository and
+// search filters, nil for a tab that has not been loaded. It is how a caller
+// looks for a pull request in a tab the user is not on — the active tab is in
+// there too, because SetPullRequests caches what it displays.
+func (m *PullRequestList) TabPullRequests(tab int) []bitbucket.PullRequest {
+	if m.tabCache == nil {
+		return nil
+	}
+	return m.tabCache[tab]
+}
+
 // PatchPullRequest replaces a pull request by key wherever it is held, keeping
 // the cursor where the user left it. Background detail fetches use it.
 func (m *PullRequestList) PatchPullRequest(pr *bitbucket.PullRequest) {

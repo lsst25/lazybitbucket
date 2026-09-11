@@ -83,6 +83,7 @@ func (a *App) mouseScroll(panel panelID, delta int) (tea.Model, tea.Cmd) {
 	switch panel { //nolint:exhaustive // the log panel and the status panel do not scroll
 	case panelPullRequests:
 		a.focusLeftPanel(focusPullRequests)
+		a.userTookTheCursor()
 		a.prList.ScrollBy(step)
 		return a, a.previewSelected()
 	case panelBuilds:
@@ -126,6 +127,7 @@ func (a *App) mouseClick(panel panelID, relY, x int) (tea.Model, tea.Cmd) {
 
 	case panelPullRequests:
 		a.focusLeftPanel(focusPullRequests)
+		a.userTookTheCursor()
 		if relY == 0 {
 			// Title bar — tab click.
 			if a.prList.ClickTabAt(x) && !a.prList.HasCachedTab() {

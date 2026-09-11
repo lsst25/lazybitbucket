@@ -334,6 +334,9 @@ func (a *App) handleTabAction(action Action) (tea.Model, tea.Cmd, bool) {
 // refreshCmd so a tab switch also re-runs repository discovery when that is
 // what left the list empty.
 func (a *App) afterTabSwitch() tea.Cmd {
+	// Picking a tab is taking the cursor: the branch auto-selection must not
+	// move it, nor pull the user back to another tab, after this.
+	a.userTookTheCursor()
 	if !a.prList.HasCachedTab() {
 		return a.refreshCmd()
 	}
