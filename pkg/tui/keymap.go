@@ -23,6 +23,9 @@ const (
 	// The screen modes: normal → half → full and back, as in lazygit.
 	ActNextScreenMode Action = "nextScreenMode"
 	ActPrevScreenMode Action = "prevScreenMode"
+	// ActNextView switches between the pull request view and the pipelines
+	// view, which share the detail panel and nothing else.
+	ActNextView Action = "nextView"
 
 	ActFocusDetail       Action = "focusDetail"
 	ActFocusStatus       Action = "focusStatus"
@@ -82,7 +85,16 @@ const (
 	// open a dialog and are hidden in read-only mode like the six above.
 	ActRerunPipeline Action = "rerunPipeline"
 	ActStopPipeline  Action = "stopPipeline"
+
+	// ActOpenPullRequest is the pipelines list's own key: it leaves for the
+	// pull request the selected run ran for. No other panel has it, because no
+	// other panel shows a run that belongs to a pull request elsewhere.
+	ActOpenPullRequest Action = "openPullRequest"
 )
+
+// defaultNextViewKey is the view switch's default binding, which the help strip
+// draws as a glyph; see viewSwitchLabel.
+const defaultNextViewKey = "shift+tab"
 
 // Keymap maps actions to key strings. Several keys may trigger one action.
 type Keymap map[Action][]string
@@ -101,6 +113,7 @@ func DefaultKeymap() Keymap {
 
 		ActNextScreenMode: {"+"},
 		ActPrevScreenMode: {"_"},
+		ActNextView:       {defaultNextViewKey},
 
 		ActFocusDetail:       {"0"},
 		ActFocusStatus:       {"1"},
@@ -150,6 +163,8 @@ func DefaultKeymap() Keymap {
 
 		ActRerunPipeline: {"P"},
 		ActStopPipeline:  {"X"},
+
+		ActOpenPullRequest: {"L"},
 	}
 }
 
@@ -175,6 +190,7 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	set(ActNextTab, kcfg.Universal.NextTab)
 	set(ActNextScreenMode, kcfg.Universal.NextScreenMode)
 	set(ActPrevScreenMode, kcfg.Universal.PrevScreenMode)
+	set(ActNextView, kcfg.Universal.NextView)
 	set(ActFocusDetail, kcfg.Universal.FocusDetail)
 	set(ActFocusStatus, kcfg.Universal.FocusStatus)
 	set(ActFocusPullRequests, kcfg.Universal.FocusPullRequests)
@@ -200,6 +216,10 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	// other key that works on a build row is the pull request group's.
 	set(ActRerunPipeline, kcfg.Builds.Rerun)
 	set(ActStopPipeline, kcfg.Builds.Stop)
+
+	// The Pipelines group carries the one key the pipelines list has and no
+	// other panel does; rerun and stop stay above, in the Builds group.
+	set(ActOpenPullRequest, kcfg.Pipelines.OpenPullRequest)
 
 	set(ActFocusLeft, kcfg.Detail.FocusLeft)
 	set(ActBack, kcfg.Detail.Back)

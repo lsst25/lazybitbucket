@@ -13,6 +13,8 @@ const (
 	panelRepos
 	panelDetail
 	panelLog
+	// panelPipelines is the pipelines view's [2] panel; see focusPipelines.
+	panelPipelines
 )
 
 func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
@@ -31,48 +33,38 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 // hitTest determines which panel the coordinates fall in and the relative Y.
+// It walks the view's own left column, whose panels the last layout sized —
+// the panels a view does not draw were zeroed there, so a click cannot land on
+// one.
 func (a *App) hitTest(x, y int) (panelID, int) {
+	column := a.leftColumn()
+
 	if a.isVerticalLayout() {
 		// Vertical: all stacked.
 		top := 0
-		if y < top+a.panelStatusH {
-			return panelStatus, y - top
+		for _, panel := range column {
+			if y < top+panel.height {
+				return panel.id, y - top
+			}
+			top += panel.height
 		}
-		top += a.panelStatusH
-		if y < top+a.panelPRH {
-			return panelPullRequests, y - top
-		}
-		top += a.panelPRH
-		if y < top+a.panelBuildsH {
-			return panelBuilds, y - top
-		}
-		top += a.panelBuildsH
-		if y < top+a.panelReposH {
-			return panelRepos, y - top
-		}
-		top += a.panelReposH
 		if y < top+a.panelDetailH {
 			return panelDetail, y - top
 		}
 		return panelLog, y - top - a.panelDetailH
 	}
 
-	// Horizontal layout.
+	// Horizontal layout. The bottom panel of the column catches everything
+	// below it, so a click in the gap under a short list still selects a row.
 	if x < a.panelSideW {
 		top := 0
-		if y < top+a.panelStatusH {
-			return panelStatus, y - top
+		for _, panel := range column[:len(column)-1] {
+			if y < top+panel.height {
+				return panel.id, y - top
+			}
+			top += panel.height
 		}
-		top += a.panelStatusH
-		if y < top+a.panelPRH {
-			return panelPullRequests, y - top
-		}
-		top += a.panelPRH
-		if y < top+a.panelBuildsH {
-			return panelBuilds, y - top
-		}
-		top += a.panelBuildsH
-		return panelRepos, y - top
+		return column[len(column)-1].id, y - top
 	}
 
 	// Right side.
@@ -96,6 +88,10 @@ func (a *App) mouseScroll(panel panelID, delta int) (tea.Model, tea.Cmd) {
 	case panelBuilds:
 		a.focusLeftPanel(focusBuilds)
 		a.buildsPanel.ScrollBy(step)
+	case panelPipelines:
+		a.focusLeftPanel(focusPipelines)
+		a.pipelineList.ScrollBy(step)
+		return a, a.showSelectedRun()
 	case panelRepos:
 		a.focusLeftPanel(focusRepos)
 		a.repoList.ScrollBy(step)
@@ -144,6 +140,15 @@ func (a *App) mouseClick(panel panelID, relY, x int) (tea.Model, tea.Cmd) {
 		a.focusLeftPanel(focusBuilds)
 		if relY > 0 && a.buildsPanel.ClickAt(relY) {
 			return a.openBuild(a.buildsPanel.SelectedStatus())
+		}
+
+	case panelPipelines:
+		// One click is enough: selecting a run is what shows it, so there is
+		// nothing a double click would add.
+		a.focusLeftPanel(focusPipelines)
+		if relY > 0 {
+			a.pipelineList.ClickAt(relY)
+			return a, a.showSelectedRun()
 		}
 
 	case panelRepos:

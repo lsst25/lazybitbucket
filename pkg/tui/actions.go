@@ -49,6 +49,11 @@ const (
 // 400 to an author approving their own pull request.
 const cannotApproveOwn = "cannot approve your own pull request"
 
+// noPullRequestHere is what every pull request key answers in the pipelines
+// view. The keys are not listed on that view's help surfaces at all, so this is
+// for the reader who pressed one out of habit.
+const noPullRequestHere = "no pull request in the pipelines view"
+
 // The form field ids, which is how a confirmed form's values are read back.
 const (
 	fieldStrategy    = "strategy"
@@ -128,6 +133,13 @@ func (a *App) overlayArmed() bool {
 // refusals — nothing selected, read-only mode, a pull request that is no longer
 // open, another dialog, another write still running — are written once.
 func (a *App) writeTarget(verb string) (*bitbucket.PullRequest, bool) {
+	if a.view == viewPipelines {
+		// The pull request the other view has under its cursor survives a view
+		// switch, and acting on it from here would be a write against something
+		// nothing on screen names.
+		a.helpBar.SetStatusMsg(noPullRequestHere)
+		return nil, false
+	}
 	pr := a.currentPullRequest()
 	if pr == nil {
 		return nil, false

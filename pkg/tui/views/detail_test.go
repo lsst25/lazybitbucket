@@ -797,3 +797,121 @@ func TestDetailView_StepLog_LateResponseAfterBackIsDropped(t *testing.T) {
 		}
 	}
 }
+
+// standaloneRunDetail returns a detail view showing a run that has no pull
+// request behind it, as the pipelines view shows one.
+func standaloneRunDetail(t *testing.T) *DetailView {
+	t.Helper()
+	view := makeFocusedDetail()
+	run := testPipeline()
+	run.Repository = &bitbucket.RepositoryRef{FullName: testWorkspace + "/" + testRepo}
+	view.SetRun(testRunOwner, run, nil)
+	view.View()
+	return view
+}
+
+func TestDetailView_SetRun_ShowsTheRunWhileItsStepsLoad(t *testing.T) {
+	t.Parallel()
+	view := standaloneRunDetail(t)
+
+	testkit.AssertEqual(t, "mode", view.Mode(), ModePipeline)
+	testkit.AssertEqual(t, "owner", view.PipelineOwner(), testRunOwner)
+	testkit.AssertEqual(t, "no pull request behind it", view.PullRequestKey(), "")
+
+	out := stripANSI(view.View())
+	for _, want := range []string{"[0] Pipeline #42", testRepo + " · Pipeline #42", "Loading steps…"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("View() = %q, want it to contain %q", out, want)
+		}
+	}
+}
+
+func TestDetailView_SetRunSteps_FillsThemInPlace(t *testing.T) {
+	t.Parallel()
+	view := standaloneRunDetail(t)
+	view.SetRunSteps(testRunOwner, testSteps())
+	view.View()
+	view.ScrollBy(1)
+
+	view.SetRunSteps(testRunOwner, testSteps())
+	out := stripANSI(view.View())
+	if strings.Contains(out, "Loading steps…") {
+		t.Error("the steps are in; the placeholder should be gone")
+	}
+	if !strings.Contains(out, "Preparation") {
+		t.Errorf("View() = %q, want the step blocks", out)
+	}
+	step := view.SelectedStep()
+	if step == nil {
+		t.Fatal("SelectedStep() = nil")
+	}
+	testkit.AssertEqual(t, "cursor stayed put", step.Name, "Ensure V3 Lockfile")
+}
+
+func TestDetailView_SetRunStepsError_KeepsTheHeader(t *testing.T) {
+	t.Parallel()
+	view := standaloneRunDetail(t)
+	view.SetRunStepsError(testRunOwner, "list steps acme/api-gateway 42: status 500")
+
+	out := stripANSI(view.View())
+	if !strings.Contains(out, "Pipeline #42") {
+		t.Errorf("View() = %q, want the run header to stay", out)
+	}
+	if !strings.Contains(out, "status 500") {
+		t.Errorf("View() = %q, want the steps error", out)
+	}
+}
+
+func TestDetailView_RunStepsForAnotherOwnerAreDropped(t *testing.T) {
+	t.Parallel()
+	view := standaloneRunDetail(t)
+
+	view.SetRunSteps(testPRKey, testSteps())
+	if strings.Contains(stripANSI(view.View()), "Preparation") {
+		t.Error("steps for another owner must be dropped")
+	}
+
+	view.SetRunStepsError(testPRKey, "boom")
+	if strings.Contains(stripANSI(view.View()), "boom") {
+		t.Error("an error for another owner must be dropped")
+	}
+
+	// The pull request entry points guard on the same token.
+	view.SetPipeline(testPRKey, testPipeline(), testSteps())
+	testkit.AssertEqual(t, "owner unchanged", view.PipelineOwner(), testRunOwner)
+}
+
+func TestDetailView_Back_StopsAtAStandaloneRun(t *testing.T) {
+	t.Parallel()
+	view := standaloneRunDetail(t)
+	view.SetRunSteps(testRunOwner, testSteps())
+	view.View()
+
+	view.SetStepLogLoading(testPipelineUUID, testStepUUID)
+	testkit.AssertEqual(t, "mode", view.Mode(), ModeStepLog)
+	testkit.AssertEqual(t, "back from the log", view.Back(), true)
+	testkit.AssertEqual(t, "mode", view.Mode(), ModePipeline)
+	testkit.AssertEqual(t, "a standalone run has nowhere to go back to", view.Back(), false)
+	testkit.AssertEqual(t, "mode unchanged", view.Mode(), ModePipeline)
+}
+
+func TestDetailView_SetPullRequest_LeavesAStandaloneRun(t *testing.T) {
+	t.Parallel()
+	view := makeFocusedDetail()
+	view.SetPullRequest(detailPR())
+
+	run := testPipeline()
+	run.Repository = &bitbucket.RepositoryRef{FullName: testWorkspace + "/" + testRepo}
+	view.SetRun(testRunOwner, run, nil)
+	testkit.AssertEqual(t, "mode", view.Mode(), ModePipeline)
+
+	// The same pull request as before: the guard that keeps a reader inside a
+	// drill-down must not keep them inside another view's run.
+	view.SetPullRequest(detailPR())
+	testkit.AssertEqual(t, "mode", view.Mode(), ModePullRequest)
+	testkit.AssertEqual(t, "owner follows the pull request", view.PipelineOwner(), testPRKey)
+	testkit.AssertEqual(t, "a pull request run can go back", view.Back(), false)
+	view.SetPipeline(testPRKey, testPipeline(), testSteps())
+	testkit.AssertEqual(t, "mode", view.Mode(), ModePipeline)
+	testkit.AssertEqual(t, "back out of a pull request run", view.Back(), true)
+}

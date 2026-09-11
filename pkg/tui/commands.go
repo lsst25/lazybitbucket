@@ -213,23 +213,25 @@ type approvalStateMsg struct {
 // refusal built on either could name a state the run left minutes ago.
 //
 // verb says which key asked, because the refusal, the dialog and the failure
-// line all differ between the two, and build is the run's number, which is what
-// every one of those lines names.
+// line all differ between the two, and ref is the run, which is what every one
+// of those lines names. prKey is the pull request the run was reached through,
+// and is empty in the pipelines view, where a run stands on its own.
 type pipelineActionStateMsg struct {
-	key      string
-	build    int
+	ref      pipelineRef
+	prKey    string
 	verb     string
 	pipeline *bitbucket.Pipeline
 	err      error
 }
 
-// pipelineWrittenMsg is the result of a rerun or a stop. build is the run that
+// pipelineWrittenMsg is the result of a rerun or a stop. ref is the run that
 // was acted on — the one that was rerun, not the one the rerun created — and
 // pipeline is the run the server created, which only a rerun has: the stop
-// endpoint answers 204 and nothing else.
+// endpoint answers 204 and nothing else. prKey is the pull request the write
+// was started from, empty in the pipelines view.
 type pipelineWrittenMsg struct {
-	key      string
-	build    int
+	ref      pipelineRef
+	prKey    string
 	verb     string
 	pipeline *bitbucket.Pipeline
 	err      error
@@ -511,13 +513,11 @@ func (a *App) prefetchNext() tea.Cmd {
 	return nil
 }
 
-func (a *App) fetchPipeline(pr *bitbucket.PullRequest, build int) tea.Cmd {
-	if pr == nil {
-		return nil
-	}
+// fetchPipeline reads a run and its steps in one command. It takes the
+// repository and the cache key rather than a pull request, because the
+// pipelines view drills into runs that have none.
+func (a *App) fetchPipeline(workspace, slug, key string, build int) tea.Cmd {
 	ctx, client := a.context(), a.client
-	workspace, slug := pr.Workspace(), pr.RepoSlug()
-	key := pr.Key()
 	ref := strconv.Itoa(build)
 	a.logFlag.Store(true)
 	return func() tea.Msg {
@@ -538,12 +538,10 @@ func (a *App) fetchPipeline(pr *bitbucket.PullRequest, build int) tea.Cmd {
 	}
 }
 
-func (a *App) fetchStepLog(pr *bitbucket.PullRequest, pipelineUUID, stepUUID string) tea.Cmd {
-	if pr == nil {
-		return nil
-	}
+// fetchStepLog reads one step's log tail. Like fetchPipeline it takes the
+// repository, so both views can ask for a log.
+func (a *App) fetchStepLog(workspace, slug, pipelineUUID, stepUUID string) tea.Cmd {
 	ctx, client := a.context(), a.client
-	workspace, slug := pr.Workspace(), pr.RepoSlug()
 	a.logFlag.Store(true)
 	return func() tea.Msg {
 		text, err := client.GetPipelineStepLog(ctx, workspace, slug, pipelineUUID, stepUUID,

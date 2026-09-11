@@ -27,6 +27,8 @@ func (a *App) handleSearchChanged(msg components.SearchChangedMsg) (tea.Model, t
 		a.prList.SetFilter(msg.Query)
 	case focusBuilds:
 		a.buildsPanel.SetFilter(msg.Query)
+	case focusPipelines:
+		a.pipelineList.SetFilter(msg.Query)
 	case focusRepos:
 		a.repoList.SetFilter(msg.Query)
 	case focusStatus:
@@ -55,6 +57,15 @@ func (a *App) handleSearchConfirmed() (tea.Model, tea.Cmd) {
 		if selected != nil {
 			a.buildsPanel.SelectByKey(selected.Key)
 		}
+	case focusPipelines:
+		// Keep the highlighted run across the filter reset, so Enter afterwards
+		// opens the run the user searched for.
+		selected := a.pipelineList.SelectedEntry()
+		a.pipelineList.ClearFilter()
+		if selected != nil {
+			a.pipelineList.SelectByRun(selected.Repo, selected.Pipeline.BuildNumber)
+			return a, a.showSelectedRun()
+		}
 	case focusRepos:
 		repo := a.repoList.SelectedRepo()
 		a.repoList.SetFilter("")
@@ -70,6 +81,7 @@ func (a *App) handleSearchConfirmed() (tea.Model, tea.Cmd) {
 func (a *App) handleSearchCancelled() (tea.Model, tea.Cmd) {
 	a.prList.ClearFilter()
 	a.buildsPanel.ClearFilter()
+	a.pipelineList.ClearFilter()
 	a.repoList.SetFilter("")
 	return a, nil
 }
@@ -101,6 +113,12 @@ func (a *App) routeToPanel(msg tea.Msg) tea.Cmd {
 		case focusBuilds:
 			updated, cmd := a.buildsPanel.Update(msg)
 			a.buildsPanel = updated
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		case focusPipelines:
+			updated, cmd := a.pipelineList.Update(msg)
+			a.pipelineList = updated
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}

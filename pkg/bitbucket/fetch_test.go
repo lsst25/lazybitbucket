@@ -10,17 +10,23 @@ import (
 	"github.com/lsst25/lazybitbucket/pkg/internal/testkit"
 )
 
-var errRepoUnavailable = errors.New("repository unavailable")
+var (
+	errRepoUnavailable   = errors.New("repository unavailable")
+	errPipelinesDisabled = errors.New("pipelines are not enabled for this repository")
+)
 
-// stubClient is a goroutine-safe ClientInterface for the fetch helper, which
-// calls the client from several goroutines at once. Only ListPullRequests is
-// exercised; the rest satisfy the interface.
+// stubClient is a goroutine-safe ClientInterface for the fetch helpers, which
+// call the client from several goroutines at once. Only ListPullRequests and
+// ListPipelines are exercised; the rest satisfy the interface.
 type stubClient struct {
 	mu          sync.Mutex
 	calls       []string
 	inFlight    int
 	maxInFlight int
 	list        func(ctx context.Context, workspace, repoSlug string) ([]PullRequest, error)
+	// listPipelines is nil in the pull request tests; the pipeline tests set it
+	// and share the same call log and in-flight counters.
+	listPipelines func(ctx context.Context, workspace, repoSlug string) ([]Pipeline, error)
 }
 
 var _ ClientInterface = (*stubClient)(nil)
@@ -104,8 +110,27 @@ func (s *stubClient) GetPullRequestDiff(
 	return "", nil
 }
 
-func (s *stubClient) ListPipelines(context.Context, string, string, ListPipelinesOptions) ([]Pipeline, error) {
-	return nil, nil
+func (s *stubClient) ListPipelines(
+	ctx context.Context, workspace, repoSlug string, _ ListPipelinesOptions,
+) ([]Pipeline, error) {
+	s.mu.Lock()
+	s.calls = append(s.calls, repoSlug)
+	s.inFlight++
+	s.maxInFlight = max(s.maxInFlight, s.inFlight)
+	list := s.listPipelines
+	s.mu.Unlock()
+
+	if list == nil {
+		return nil, nil
+	}
+
+	pipelines, err := list(ctx, workspace, repoSlug)
+
+	s.mu.Lock()
+	s.inFlight--
+	s.mu.Unlock()
+
+	return pipelines, err
 }
 
 func (s *stubClient) GetPipeline(context.Context, string, string, string) (*Pipeline, error) {
@@ -383,4 +408,174 @@ func TestMergePullRequests_EmptyInput(t *testing.T) {
 	t.Parallel()
 
 	testkit.AssertEqual(t, "merged", len(MergePullRequests(nil)), 0)
+}
+
+func noPipelineOptions() ListPipelinesOptions {
+	return ListPipelinesOptions{TargetBranch: "", Sort: "", MaxItems: 0}
+}
+
+// pipelineAt is the smallest run the fetch and merge tests need: the fields
+// they order and identify by, nothing else.
+func pipelineAt(build int, created time.Time) Pipeline {
+	return Pipeline{BuildNumber: build, CreatedOn: created}
+}
+
+func TestFetchPipelines_PreservesInputOrder(t *testing.T) {
+	t.Parallel()
+
+	repos := []string{"web-app", testRepoSlug, "infra"}
+	client := &stubClient{
+		mu: sync.Mutex{}, calls: nil, inFlight: 0, maxInFlight: 0,
+		listPipelines: func(_ context.Context, _, repoSlug string) ([]Pipeline, error) {
+			return []Pipeline{pipelineAt(len(repoSlug), time.Time{})}, nil
+		},
+	}
+
+	results := FetchPipelines(t.Context(), client, testWorkspace, repos, noPipelineOptions(), 0)
+
+	if len(results) != len(repos) {
+		t.Fatalf("result count = %d, want %d", len(results), len(repos))
+	}
+	for index, repo := range repos {
+		testkit.AssertEqual(t, "Repo", results[index].Repo, repo)
+		if results[index].Err != nil {
+			t.Errorf("%s: Err = %v, want nil", repo, results[index].Err)
+		}
+		if len(results[index].Pipelines) != 1 {
+			t.Fatalf("%s: pipeline count = %d, want 1", repo, len(results[index].Pipelines))
+		}
+		testkit.AssertEqual(t, "BuildNumber", results[index].Pipelines[0].BuildNumber, len(repo))
+	}
+	testkit.AssertEqual(t, "calls", client.callCount(), len(repos))
+}
+
+func TestFetchPipelines_IsolatesPerRepoErrors(t *testing.T) {
+	t.Parallel()
+
+	client := &stubClient{
+		mu: sync.Mutex{}, calls: nil, inFlight: 0, maxInFlight: 0,
+		listPipelines: func(_ context.Context, _, repoSlug string) ([]Pipeline, error) {
+			if repoSlug == "infra" {
+				return nil, errPipelinesDisabled
+			}
+			return []Pipeline{pipelineAt(1, time.Time{})}, nil
+		},
+	}
+
+	results := FetchPipelines(t.Context(), client, testWorkspace,
+		[]string{testRepoSlug, "infra", "web-app"}, noPipelineOptions(), 2)
+
+	if results[0].Err != nil || results[2].Err != nil {
+		t.Errorf("healthy repositories carry errors: %v, %v", results[0].Err, results[2].Err)
+	}
+	if !errors.Is(results[1].Err, errPipelinesDisabled) {
+		t.Errorf("infra Err = %v, want %v", results[1].Err, errPipelinesDisabled)
+	}
+	if results[1].Pipelines != nil {
+		t.Errorf("infra Pipelines = %v, want nil", results[1].Pipelines)
+	}
+	testkit.AssertEqual(t, "healthy repo still fetched", len(results[2].Pipelines), 1)
+}
+
+func TestFetchPipelines_StopsOnCancelledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	client := &stubClient{
+		mu: sync.Mutex{}, calls: nil, inFlight: 0, maxInFlight: 0,
+		listPipelines: func(ctx context.Context, _, _ string) ([]Pipeline, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return []Pipeline{pipelineAt(1, time.Time{})}, nil
+		},
+	}
+
+	results := FetchPipelines(ctx, client, testWorkspace,
+		[]string{testRepoSlug, "web-app", "infra"}, noPipelineOptions(), 2)
+
+	if len(results) != 3 {
+		t.Fatalf("result count = %d, want 3", len(results))
+	}
+	for _, result := range results {
+		if !errors.Is(result.Err, context.Canceled) {
+			t.Errorf("%s: Err = %v, want context.Canceled", result.Repo, result.Err)
+		}
+		if result.Pipelines != nil {
+			t.Errorf("%s: Pipelines = %v, want nil", result.Repo, result.Pipelines)
+		}
+	}
+}
+
+func TestFetchPipelines_EmptyRepoList(t *testing.T) {
+	t.Parallel()
+
+	client := &stubClient{
+		mu: sync.Mutex{}, calls: nil, inFlight: 0, maxInFlight: 0,
+		listPipelines: func(context.Context, string, string) ([]Pipeline, error) {
+			t.Error("client called for an empty repository list")
+			return nil, nil
+		},
+	}
+
+	results := FetchPipelines(t.Context(), client, testWorkspace, nil, noPipelineOptions(), 0)
+	testkit.AssertEqual(t, "results", len(results), 0)
+}
+
+func TestMergePipelines_Ordering(t *testing.T) {
+	t.Parallel()
+
+	newest := time.Date(2026, time.September, 3, 16, 0, 0, 0, time.UTC)
+	older := time.Date(2026, time.September, 1, 9, 0, 0, 0, time.UTC)
+
+	results := []RepoPipelines{
+		{Repo: "web-app", Err: nil, Pipelines: []Pipeline{
+			pipelineAt(20, newest),
+			pipelineAt(21, older),
+		}},
+		{Repo: testRepoSlug, Err: nil, Pipelines: []Pipeline{
+			pipelineAt(10, newest),
+			pipelineAt(11, older),
+			pipelineAt(12, older),
+		}},
+		{Repo: "infra", Err: errPipelinesDisabled, Pipelines: nil},
+	}
+
+	merged := MergePipelines(results)
+
+	builds := make([]int, 0, len(merged))
+	repos := make([]string, 0, len(merged))
+	for _, entry := range merged {
+		builds = append(builds, entry.Pipeline.BuildNumber)
+		repos = append(repos, entry.Repo)
+	}
+	// Newest first; ties break on repository slug, then on descending build number.
+	testkit.AssertSliceEqual(t, "builds", builds, []int{10, 20, 12, 11, 21})
+	testkit.AssertSliceEqual(t, "repos", repos,
+		[]string{testRepoSlug, "web-app", testRepoSlug, testRepoSlug, "web-app"})
+}
+
+func TestMergePipelines_SkipsFailedRepositories(t *testing.T) {
+	t.Parallel()
+
+	results := []RepoPipelines{
+		{Repo: "infra", Err: errPipelinesDisabled, Pipelines: []Pipeline{pipelineAt(7, time.Time{})}},
+		{Repo: testRepoSlug, Err: nil, Pipelines: []Pipeline{pipelineAt(101, time.Time{})}},
+	}
+
+	merged := MergePipelines(results)
+
+	if len(merged) != 1 {
+		t.Fatalf("merged count = %d, want 1", len(merged))
+	}
+	testkit.AssertEqual(t, "Repo", merged[0].Repo, testRepoSlug)
+	testkit.AssertEqual(t, "BuildNumber", merged[0].Pipeline.BuildNumber, 101)
+}
+
+func TestMergePipelines_EmptyInput(t *testing.T) {
+	t.Parallel()
+
+	testkit.AssertEqual(t, "merged", len(MergePipelines(nil)), 0)
 }

@@ -92,7 +92,15 @@ func (a *App) handleReposLoaded(msg reposLoadedMsg) (tea.Model, tea.Cmd) {
 		a.showSplash()
 	}
 
-	return a, a.fetchActiveTab()
+	cmds := []tea.Cmd{a.fetchActiveTab()}
+	// Starting in the pipelines view still loads the pull requests behind it —
+	// the other view is one key away — but the list the user is looking at has
+	// to be fetched too, and this is the first moment the repositories are
+	// known.
+	if a.view == viewPipelines && !a.pipelinesLoaded {
+		cmds = append(cmds, a.fetchPipelines())
+	}
+	return a, tea.Batch(cmds...)
 }
 
 // handlePullRequestsLoaded stores one fetch key's result and re-filters every
@@ -280,14 +288,31 @@ func (a *App) handlePipelineLoaded(msg pipelineLoadedMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-// handleStepSelected fetches the log of the step the user activated.
+// handleStepSelected fetches the log of the step the user activated. The
+// repository comes from the run in the pipelines view and from the pull request
+// in the other one: a standalone run has no pull request to read it off.
 func (a *App) handleStepSelected(msg views.StepSelectedMsg) (tea.Model, tea.Cmd) {
-	pr := a.currentPullRequest()
-	if pr == nil || msg.StepUUID == "" {
+	if msg.StepUUID == "" {
+		return a, nil
+	}
+	ref, ok := a.stepLogRepo()
+	if !ok {
 		return a, nil
 	}
 	a.detailView.SetStepLogLoading(msg.PipelineUUID, msg.StepUUID)
-	return a, a.fetchStepLog(pr, msg.PipelineUUID, msg.StepUUID)
+	return a, a.fetchStepLog(ref.workspace, ref.slug, msg.PipelineUUID, msg.StepUUID)
+}
+
+// stepLogRepo is the repository whose step log is being opened.
+func (a *App) stepLogRepo() (pipelineRef, bool) {
+	if a.view == viewPipelines {
+		return parsePipelineRef(a.runKey)
+	}
+	pr := a.currentPullRequest()
+	if pr == nil {
+		return pipelineRef{}, false
+	}
+	return pipelineRef{workspace: pr.Workspace(), slug: pr.RepoSlug(), build: 0}, true
 }
 
 // handleStepLogLoaded shows a step's log tail.
@@ -323,10 +348,14 @@ func (a *App) handlePullRequestSelected(msg views.PullRequestSelectedMsg) (tea.M
 	// Only re-point the panel when it is not already on this pull request:
 	// a background refresh must not throw the user out of a pipeline or a
 	// step log they are reading. PullRequestKey is "" on the splash and repo
-	// screens, so those still fall through to SetPullRequest.
-	if a.detailView.PullRequestKey() != key {
+	// screens, so those still fall through to SetPullRequest. In the pipelines
+	// view the panel belongs to a run and is not this view's to re-point at
+	// all — the pull request list is still refreshed behind it.
+	switch {
+	case a.view != viewPullRequests:
+	case a.detailView.PullRequestKey() != key:
 		a.detailView.SetPullRequest(pr)
-	} else {
+	default:
 		a.detailView.UpdatePullRequestData(pr)
 	}
 	a.buildsPanel.SetPullRequest(key)
@@ -402,8 +431,13 @@ func (a *App) selectRepo(item *views.RepoItem) tea.Cmd {
 	a.repoList.SetActiveSlug(item.Slug)
 	a.statusPanel.SetScope(scopeLabel(item.Slug))
 	a.side = sideLeft
-	a.leftFocus = focusPullRequests
+	a.leftFocus = a.mainPanel()
 	a.updateFocusState()
+	if a.view == viewPipelines {
+		// The list is fetched per repository, so narrowing it is a new fetch
+		// rather than a client-side filter.
+		return a.fetchPipelines()
+	}
 	return tea.Batch(a.previewSelected(), a.startPrefetch())
 }
 
@@ -431,7 +465,7 @@ func (a *App) openBuild(status *bitbucket.CommitStatus) (tea.Model, tea.Cmd) {
 		a.detailView.SetPipeline(key, entry.pipeline, entry.steps)
 		return a, nil
 	}
-	return a, a.fetchPipeline(pr, build)
+	return a, a.fetchPipeline(pr.Workspace(), pr.RepoSlug(), key, build)
 }
 
 // startPrefetch refills the prefetch queue for the tab in view and starts the

@@ -40,6 +40,7 @@ type StatusPanel struct {
 	errText   string
 	warnText  string
 	readOnly  bool
+	viewName  string
 	rateLimit int
 	width     int
 	height    int
@@ -72,6 +73,20 @@ func (s *StatusPanel) SetOnline(online bool) { s.online = online }
 // keybindings do and has to be visible without opening the help.
 func (s *StatusPanel) SetReadOnly(readOnly bool) { s.readOnly = readOnly }
 
+// SetViewName names the view the app is on, which the title shows next to the
+// panel name. It is empty in the pull request view, whose panels are the ones
+// the numbering is named after, and set in every other view so the reader can
+// see at a glance why [3] is a different panel than it was.
+func (s *StatusPanel) SetViewName(name string) { s.viewName = name }
+
+// title is the panel title, with the view name appended when there is one.
+func (s *StatusPanel) title() string {
+	if s.viewName == "" {
+		return statusPanelTitle
+	}
+	return statusPanelTitle + " · " + s.viewName
+}
+
 // SetError sets the global error line; "" clears it.
 func (s *StatusPanel) SetError(err string) { s.errText = err }
 
@@ -102,7 +117,7 @@ func (s *StatusPanel) Update(tea.Msg) (*StatusPanel, tea.Cmd) { return s, nil }
 // View renders the panel, collapsing to a single title bar at height 1.
 func (s *StatusPanel) View() string {
 	if s.height <= 1 {
-		return components.RenderCollapsedBar(statusPanelTitle, s.scope, s.width, s.focused)
+		return components.RenderCollapsedBar(s.title(), s.scope, s.width, s.focused)
 	}
 
 	_, innerHeight := components.PanelDimensions(s.width, s.height)
@@ -161,5 +176,5 @@ func (s *StatusPanel) View() string {
 		lines = append(lines, " "+s.theme.WarningText.Render(components.TruncateEnd(note, contentW-1)))
 	}
 
-	return components.RenderPanel(statusPanelTitle, strings.Join(lines, "\n"), s.width, innerHeight, s.focused)
+	return components.RenderPanel(s.title(), strings.Join(lines, "\n"), s.width, innerHeight, s.focused)
 }

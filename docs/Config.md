@@ -49,6 +49,7 @@ gui:
     sidePanelWidth: 40
     collapsedPanelHeight: 5
     screenMode: normal       # normal | half | full — the layout at start-up
+    startView: pullRequests  # pullRequests | pipelines — the view at start-up
     pullRequestListFields:   # default order; columns drop from the end on narrow lists
         - repo
         - id
@@ -74,6 +75,7 @@ keybinding:
         focusRepos: "4"
         nextScreenMode: "+"
         prevScreenMode: _
+        nextView: shift+tab
     navigation:
         down: j
         up: k
@@ -98,9 +100,12 @@ keybinding:
     builds:
         rerun: P
         stop: X
-    # There is no `repos` group: the Repos and Builds panels reuse
+    pipelines:
+        openPullRequest: L
+    # There is no `repos` group: the Repos, Builds and Pipelines panels reuse
     # pullRequests.select, pullRequests.open and pullRequests.focusRight;
-    # `builds` adds only the two pipeline actions.
+    # `builds` adds only the two pipeline actions, `pipelines` only the jump
+    # back to a run's pull request.
     detail:
         focusLeft: h
         back: backspace
@@ -194,6 +199,8 @@ gui:
 `collapsedPanelHeight` sets the height of non-focused left panels in lines (default 5, minimum 3).
 
 `screenMode` is the layout lazybitbucket starts in, the same three modes lazygit has: `normal` (the default) is the split described above; `half` gives the side panels and the detail panel half the window each, whatever `sidePanelWidth` says; `full` hands the whole window to the focused panel — the detail panel when it is focused, else the focused left panel — and the other panels are not drawn until you leave the mode or switch focus, which moves the full screen along. `+` and `_` cycle the modes at runtime (`universal.nextScreenMode` / `universal.prevScreenMode`). On a terminal too narrow for the side-by-side layout `half` behaves like `normal`.
+
+`startView` is the view lazybitbucket opens in: `pullRequests` (the default) is the pull request list with its Builds and Repos panels, `pipelines` is the [pipelines view](Keybindings.md#pipelines-view), the recent runs of every configured repository. Either way `⇧tab` switches between the two at runtime (`universal.nextView`), and the view you start in is the only thing this setting decides — it is not remembered across runs. An unknown value is an error at startup, named the way an unknown `screenMode` is.
 
 `theme` selects the color palette. Supported values: `default` (ANSI 16, original look); a preset name — the four [Catppuccin](https://github.com/catppuccin/catppuccin) flavors (`catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha`) and the three [Kanagawa](https://github.com/rebelot/kanagawa.nvim) variants (`kanagawa-wave`, `kanagawa-dragon`, `kanagawa-lotus`); or a family name that follows your terminal background — `auto` and `catppuccin` (`catppuccin-mocha` on dark, `catppuccin-latte` on light) and `kanagawa` (`kanagawa-wave` on dark, `kanagawa-lotus` on light). Omitting the `theme` key or setting it to `""` keeps the `default` ANSI 16 palette. An unknown theme name is an error. Hex-based themes require a terminal with truecolor support.
 
@@ -530,6 +537,7 @@ keybinding:
     quit: "q"
     help: "?"
     search: "/"
+    nextView: "shift+tab"
   navigation:
     down: "j"
     up: "k"
@@ -551,17 +559,23 @@ keybinding:
   builds:
     rerun: "P"
     stop: "X"
+  pipelines:
+    openPullRequest: "L"
   detail:
     back: "backspace"
 ```
 
 Only include keys you want to change. Missing keys keep their defaults.
 
-There is deliberately **no `keybinding.repos` group**. The keymap is keyed by action, and the Repos and Builds panels reuse `pullRequests.select`, `pullRequests.open` and `pullRequests.focusRight`; a separate group would silently overwrite the pull request bindings. Remapping `pullRequests.select` remaps it on all three panels. There **is** a `keybinding.builds` group, but it holds only the two pipeline actions `rerun` and `stop`, which no other panel has; selecting, opening and focus-right on the Builds panel still come from `pullRequests`.
+There is deliberately **no `keybinding.repos` group**. The keymap is keyed by action, and the Repos, Builds and Pipelines panels reuse `pullRequests.select`, `pullRequests.open` and `pullRequests.focusRight`; a separate group would silently overwrite the pull request bindings. Remapping `pullRequests.select` remaps it on all four panels. There **is** a `keybinding.builds` group, but it holds only the two pipeline actions `rerun` and `stop`, which no other panel has, and a `keybinding.pipelines` group holding only `openPullRequest` (`L`), which only the Pipelines panel has; selecting, opening and focus-right on either panel still come from `pullRequests`.
+
+`rerun` and `stop` stay under `builds` even though the Pipelines panel answers to them too: they are one action against one pipeline run, whether it was reached through a build status or through the run list, and splitting them across two groups would mean remapping the same key twice to keep the app consistent with itself.
 
 The `navigation` section controls list navigation keys used across all panels. These default to vim-style keys (`j`/`k`/`g`/`G`/`ctrl+d`/`ctrl+u`).
 
-The `pullRequests` section also carries the six [pull request actions](Keybindings.md#pull-request-actions) — `merge`, `sync`, `edit`, `reviewers`, `toggleDraft` and `approve` (`M`/`S`/`E`/`V`/`D`/`A`) — which act on the selected pull request from the list and from the detail panel alike. The `builds` section carries the two [pipeline actions](Keybindings.md#rerun-and-stop-a-pipeline) — `rerun` and `stop` (`P`/`X`) — which act on the pipeline run behind the selected build, from the Builds panel and from the detail panel's pipeline and step-log views. The keys *inside* the dialogs any of them open are fixed and not remappable.
+The `pullRequests` section also carries the six [pull request actions](Keybindings.md#pull-request-actions) — `merge`, `sync`, `edit`, `reviewers`, `toggleDraft` and `approve` (`M`/`S`/`E`/`V`/`D`/`A`) — which act on the selected pull request from the list and from the detail panel alike. The `builds` section carries the two [pipeline actions](Keybindings.md#rerun-and-stop-a-pipeline) — `rerun` and `stop` (`P`/`X`) — which act on the pipeline run behind the selected build, from the Builds panel, from the Pipelines panel and from the detail panel's pipeline and step-log views. The `pipelines` section carries `openPullRequest` (`L`), which jumps from a run in the [pipelines view](Keybindings.md#pipelines-view) to the pull request it ran for. The keys *inside* the dialogs any of them open are fixed and not remappable.
+
+`universal.nextView` (`shift+tab`) switches between the two views; which one the app starts in is [`gui.startView`](#gui).
 
 The `detail` section includes keys for scrolling the detail panel from any left panel without switching focus (defaults: `J`/`K` for line scroll, `ctrl+f`/`ctrl+b` for half-page), plus the keys the detail panel answers to itself: `overviewTab`/`filesTab`/`commitsTab`/`commentsTab` (`i`/`d`/`m`/`t`) jump straight to one pull request tab, `nextFile`/`prevFile` (`n`/`p`) step through the changed files, and `openEditor` (`e`) opens the file under the cursor in [your editor](#editor). Those seven only act while the detail panel is focused.
 
@@ -674,6 +688,8 @@ Custom commands are matched before built-in keys, so a binding can shadow any ac
 | `repos` | The Repos panel is focused, or the detail panel is showing a repository | `Repo` |
 | `detail` | The right detail panel is showing a pull request, a pipeline run or a step log | `PR`, `Repo` |
 | `diff` | The detail panel is on the Files tab or showing one file's diff | `PR`, `Repo`, `File` |
+
+All five are contexts of the pull requests view. Nothing matches while the [pipelines view](Keybindings.md#pipelines-view) is on screen, the Repos panel there included, so no custom command fires there — four of the five scopes need a selected pull request, and that view has none.
 
 ### Template variables
 

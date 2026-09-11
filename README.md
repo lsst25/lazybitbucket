@@ -32,6 +32,7 @@ make build-demo
 - **Commits** — hash, author, age and subject per commit; `enter` expands the full message
 - **Review threads** — inline comments read as threads anchored to a file and line, with replies and resolved state; commented lines are marked `●` in the diff and `enter` jumps to the thread
 - **Builds** — the commit statuses of the selected PR, with drill-down into the pipeline run, its steps and each step's log
+- **Pipelines view** — `⇧tab` swaps the pull request list for the recent pipeline runs of every configured repository, newest first: branch builds, scheduled and manual runs, not just the ones a PR owns. Same drill-down into steps and logs, same `P` / `X`, and `L` jumps back to the PR a run ran for
 - **Repo filter** — narrow the list to a single repository from the Repos panel
 - **Search** — `/` filters the focused list as you type
 - **Browser hand-off** — `o` opens what you are looking at (the PR, a commit, a thread, the diff), `y` copies that URL, `u` opens a picker of every URL the PR reaches (builds, links in the description, plus commits and threads once those tabs have been opened)
@@ -146,7 +147,7 @@ The actions that change something need a write scope, one each:
 | Scope | Needed for |
 |-------|------------|
 | `write:pullrequest:bitbucket` | the six [pull request actions](docs/Keybindings.md#pull-request-actions): editing the title or description, setting reviewers, toggling draft, approving, and merging |
-| `write:pipeline:bitbucket` | [rerunning and stopping pipeline runs](docs/Keybindings.md#rerun-and-stop-a-pipeline) from the Builds panel (`P` / `X`) |
+| `write:pipeline:bitbucket` | [rerunning and stopping pipeline runs](docs/Keybindings.md#rerun-and-stop-a-pipeline) from the Builds panel or the [pipelines view](docs/Keybindings.md#pipelines-view) (`P` / `X`) |
 
 The two are independent: the pull request actions do not need the pipeline scope, and `P` / `X` do not need the pull request one. Leave them off and every read still works while a write comes back `403` — no harm done, just a message in the hint bar. If you would rather not have the possibility at all, use [read-only mode](docs/Config.md#read-only-mode), which needs neither and refuses writes before they are sent. Sync needs no scope of its own: it is local git, so what it needs is push permission on the remote. On a repository, project or workspace access token the same permission is spelled `pullrequest:write`.
 
@@ -225,6 +226,7 @@ Press `?` inside the app for all keybindings.
 | Key | Action |
 |-----|--------|
 | `0` `1` `2` `3` `4` | Focus Detail, Status, Pull Requests, Builds, Repos |
+| `⇧tab` | Switch between the pull requests view and the pipelines view |
 | `j` / `k` | Move down / up |
 | `space` / `enter` | Open the highlighted row |
 | `tab` | Switch between the left panels and the detail panel |
@@ -244,6 +246,7 @@ Press `?` inside the app for all keybindings.
 | `A` | Approve, or remove your approval |
 | `P` | Rerun the pipeline run of the selected build |
 | `X` | Stop the running pipeline run of the selected build |
+| `L` | From a run in the pipelines view, jump to the pull request it ran for |
 | `i` `d` `m` `t` | Jump to the Overview / Files / Commits / Comments tab of the PR |
 | `n` / `p` | Next / previous changed file |
 | `e` | Open the file under the cursor in your editor |

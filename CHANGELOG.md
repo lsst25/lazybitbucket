@@ -106,11 +106,23 @@ one are upstream lazyjira history, and their compare links still point at upstre
   still going, stopping one that is over). They need the `write:pipeline:bitbucket` scope, are bound
   under the new `keybinding.builds` group, and are refused in read-only mode like the pull request
   writes
+- A second view, on `shift+tab`: the pipelines view lists the recent runs of every configured
+  repository, newest first, instead of the pull request list — branch builds, scheduled and manual
+  runs included, which the Builds panel never showed because no pull request owns them. The detail
+  panel is shared, so a run drills into its steps and each step's log exactly as before, and `P` / `X`
+  work there with no pull request loaded at all; `L` jumps from a run back to the pull request it ran
+  for. The Repos filter narrows the list, `/` filters it, `R` refetches it — never the background
+  tick, which would cost a round of requests per repository. `gui.startView: pipelines` opens there,
+  `keybinding.universal.nextView` rebinds the switch and the new `keybinding.pipelines` group rebinds
+  `L`. Custom commands do not fire in this view
 - Read-only mode — `bitbucket.readOnly: true`, the `--read-only` flag or `LAZYBITBUCKET_READ_ONLY=1`,
   none of which can turn it off again. The client refuses every non-GET request with `ErrReadOnly`
   before a socket is opened, the status panel shows `read-only`, and the six pull request action keys
   and the two pipeline ones disappear from the help surfaces and answer with a hint-bar message.
   Sync is refused too: it ends in a push
+- `pkg/bitbucket`: `FetchPipelines` and `MergePipelines` — the cross-repository pipeline fetch behind
+  the pipelines view, modelled on the pull request one: one result per repository in input order, a
+  failure isolated to its own repository, and a merge into one list newest run first
 - `pkg/bitbucket`: `MergePullRequest`, `GetMergeTaskStatus`, `UpdatePullRequest`,
   `ApprovePullRequest`, `UnapprovePullRequest`, `ListEffectiveDefaultReviewers`,
   `ListWorkspaceMembers`, `RunPipeline` and `StopPipeline`, plus `MergeStrategy` with the six

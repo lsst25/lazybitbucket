@@ -67,6 +67,27 @@ func validateScreenMode(value string) error {
 	}
 }
 
+// Valid values for GUIConfig.StartView, the view the app opens in. Empty string
+// is treated as StartViewPullRequests. The same two views are what the nextView
+// key cycles through at runtime.
+const (
+	// StartViewPullRequests is the pull request view: Status, Pull Requests,
+	// Builds, Repos.
+	StartViewPullRequests = "pullRequests"
+	// StartViewPipelines is the pipelines view: Status, Pipelines, Repos.
+	StartViewPipelines = "pipelines"
+)
+
+func validateStartView(value string) error {
+	switch value {
+	case "", StartViewPullRequests, StartViewPipelines:
+		return nil
+	default:
+		return fmt.Errorf("invalid gui.startView %q: must be one of %s, %s",
+			value, StartViewPullRequests, StartViewPipelines)
+	}
+}
+
 func validateRendererStyle(value string) error {
 	switch value {
 	case "", RendererStyleAuto, RendererStyleDark, RendererStyleLight, RendererStyleNoTTY:
@@ -247,6 +268,7 @@ type KeybindingConfig struct {
 	Navigation   NavigationKeys  `yaml:"navigation"`
 	PullRequests PullRequestKeys `yaml:"pullRequests"`
 	Builds       BuildsKeys      `yaml:"builds"`
+	Pipelines    PipelineKeys    `yaml:"pipelines"`
 	Detail       DetailKeys      `yaml:"detail"`
 }
 
@@ -275,6 +297,9 @@ type UniversalKeys struct {
 	FocusRepos        string `yaml:"focusRepos"`
 	NextScreenMode    string `yaml:"nextScreenMode"`
 	PrevScreenMode    string `yaml:"prevScreenMode"`
+	// NextView switches between the pull request view and the pipelines view.
+	// Default: shift+tab.
+	NextView string `yaml:"nextView"`
 }
 
 // PullRequestKeys are the keys active with a pull request selected, in the
@@ -320,6 +345,15 @@ type BuildsKeys struct {
 	Stop string `yaml:"stop"`
 }
 
+// PipelineKeys are the keys of the Pipelines panel that no other panel has.
+// Rerunning and stopping a run stay in BuildsKeys: they are one action whether
+// it is pressed on a build status or on a run, so they keep one binding.
+type PipelineKeys struct {
+	// OpenPullRequest switches to the pull request view and selects the pull
+	// request the selected run ran for. Default: L.
+	OpenPullRequest string `yaml:"openPullRequest"`
+}
+
 // DetailKeys are the keys active while the detail panel is focused: panel
 // navigation, the four pull request tabs (Overview, Files, Commits, Comments)
 // and the diff view's file stepping and open-in-editor keys.
@@ -353,6 +387,9 @@ type GUIConfig struct {
 	// ScreenMode is the layout the app starts in: "normal" (default), "half"
 	// or "full". See ScreenModeNormal and friends.
 	ScreenMode string `yaml:"screenMode"`
+	// StartView is the view the app opens in: "pullRequests" (default) or
+	// "pipelines". See StartViewPullRequests.
+	StartView string `yaml:"startView"`
 }
 
 // DefaultConfig returns a Config populated with sensible defaults
@@ -574,6 +611,9 @@ func validate(cfg *Config) error {
 		return err
 	}
 	if err := validateScreenMode(cfg.GUI.ScreenMode); err != nil {
+		return err
+	}
+	if err := validateStartView(cfg.GUI.StartView); err != nil {
 		return err
 	}
 	if err := validateEditorInTmux(cfg.EditorInTmux); err != nil {

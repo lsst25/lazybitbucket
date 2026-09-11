@@ -38,21 +38,53 @@ func (a *App) detailScrollBindings() []Binding {
 	}
 }
 
+// globalBindings are the keys every panel answers to. The panel keys and the
+// two refresh keys are worded per view, because the numbers focus different
+// panels there and the refreshes read a different list.
 func (a *App) globalBindings() []Binding {
-	return []Binding{
+	bindings := []Binding{
 		a.bind(ActQuit, "quit"),
 		a.bind(ActSwitchPanel, "switch left/right panels"),
 		a.bind(ActFocusStatus, "focus status panel"),
-		a.bind(ActFocusPullRequests, "focus pull requests panel"),
-		a.bind(ActFocusBuilds, "focus builds panel"),
-		a.bind(ActFocusRepos, "focus repos panel"),
-		a.bind(ActSearch, "search / filter current list"),
-		a.bind(ActRefresh, "refresh the selected pull request"),
-		a.bind(ActRefreshAll, "refresh the pull request list"),
+	}
+	if a.view == viewPipelines {
+		bindings = append(bindings,
+			a.bind(ActFocusPullRequests, "focus pipelines panel"),
+			a.bind(ActFocusRepos, "focus repos panel"),
+			a.bind(ActSearch, "search / filter current list"),
+			a.bind(ActRefresh, "refresh the selected run"),
+			a.bind(ActRefreshAll, "refresh the pipeline list"),
+		)
+	} else {
+		bindings = append(bindings,
+			a.bind(ActFocusPullRequests, "focus pull requests panel"),
+			a.bind(ActFocusBuilds, "focus builds panel"),
+			a.bind(ActFocusRepos, "focus repos panel"),
+			a.bind(ActSearch, "search / filter current list"),
+			a.bind(ActRefresh, "refresh the selected pull request"),
+			a.bind(ActRefreshAll, "refresh the pull request list"),
+		)
+	}
+	return append(bindings,
 		a.bind(ActNextScreenMode, "next screen mode: normal → half → full"),
 		a.bind(ActPrevScreenMode, "previous screen mode"),
+		a.viewSwitchBinding(),
 		a.bind(ActHelp, "show all keybindings"),
+	)
+}
+
+// pipelineBackBinding is where backspace goes from the run or step log on
+// screen, and whether it goes anywhere at all: a step log always has its run
+// behind it, but a standalone run in the pipelines view was not drilled into
+// from anything.
+func (a *App) pipelineBackBinding() (Binding, bool) {
+	if a.detailView.Mode() == views.ModeStepLog {
+		return a.bind(ActBack, "back to the pipeline run"), true
 	}
+	if a.view == viewPullRequests {
+		return a.bind(ActBack, "back to the pull request"), true
+	}
+	return Binding{Key: "", Description: ""}, false
 }
 
 // reviewTabBindings are the keys the active pull request tab answers to. Each
@@ -168,8 +200,10 @@ func (a *App) ContextBindings() []Binding {
 		bindings := slices.Concat(global, a.navBindings())
 		switch a.detailView.Mode() {
 		case views.ModePipeline, views.ModeStepLog:
+			if back, ok := a.pipelineBackBinding(); ok {
+				bindings = append(bindings, back)
+			}
 			bindings = append(bindings,
-				a.bind(ActBack, "back to the pull request"),
 				a.bind(ActOpen, "open the step log"),
 				a.bind(ActBrowser, "open the pipeline in a browser"),
 			)
@@ -228,6 +262,20 @@ func (a *App) ContextBindings() []Binding {
 		bindings = append(bindings, a.pipelineWriteBindings()...)
 		bindings = append(bindings, a.customCommandBindings(config.CtxBuilds)...)
 		return bindings
+
+	case focusPipelines:
+		bindings := slices.Concat(global, a.navBindings(), a.detailScrollBindings())
+		bindings = append(bindings,
+			a.bind(ActOpen, "open the run"),
+			a.bind(ActOpenPullRequest, "go to the pull request this run ran for"),
+			a.bind(ActBrowser, "open the run in a browser"),
+			a.bind(ActCopyURL, "copy the run URL"),
+			a.bind(ActFocusRight, "next panel"),
+			a.bind(ActFocusLeft, "previous panel"),
+		)
+		// Custom commands are deliberately absent: they are written against a
+		// pull request, and this view has none. See activeContexts.
+		return append(bindings, a.pipelineWriteBindings()...)
 
 	case focusRepos:
 		bindings := slices.Concat(global, a.navBindings())
@@ -297,10 +345,10 @@ func (a *App) helpBarItems() []components.HelpItem {
 		head := make([]components.HelpItem, 0, 6)
 		switch a.detailView.Mode() {
 		case views.ModePipeline, views.ModeStepLog:
-			head = append(head,
-				components.HelpItem{Key: km.Keys(ActOpen), Description: "step log"},
-				components.HelpItem{Key: km.Keys(ActBack), Description: "back"},
-			)
+			head = append(head, components.HelpItem{Key: km.Keys(ActOpen), Description: "step log"})
+			if _, ok := a.pipelineBackBinding(); ok {
+				head = append(head, components.HelpItem{Key: km.Keys(ActBack), Description: "back"})
+			}
 			head = append(head, a.pipelineWriteHelpItems()...)
 		case views.ModeFileDiff:
 			head = append(head,
@@ -342,16 +390,26 @@ func (a *App) helpBarItems() []components.HelpItem {
 		)
 		head = append(head, writes...)
 		return a.panelHelpItems(config.CtxBuilds, head...)
+	case focusPipelines:
+		writes := a.pipelineWriteHelpItems()
+		head := make([]components.HelpItem, 0, 4+len(writes))
+		head = append(head,
+			components.HelpItem{Key: km.Keys(ActOpen), Description: "run"},
+			components.HelpItem{Key: km.Keys(ActOpenPullRequest), Description: "pull request"},
+			components.HelpItem{Key: km.Keys(ActBrowser), Description: "browser"},
+		)
+		head = append(head, writes...)
+		// No custom command items: none fire in this view.
+		return a.closeHelpItems(head)
 	case focusRepos:
 		return a.panelHelpItems(config.CtxRepos,
 			components.HelpItem{Key: km.Keys(ActSelect), Description: "filter"},
 			components.HelpItem{Key: km.Keys(ActBrowser), Description: "browser"},
 		)
 	case focusStatus:
-		return []components.HelpItem{
+		return a.closeHelpItems([]components.HelpItem{
 			{Key: km.Keys(ActSwitchPanel) + "/" + km.Keys(ActFocusRight), Description: "detail"},
-			{Key: km.Keys(ActHelp), Description: "help"},
-		}
+		})
 	}
 	return nil
 }
@@ -384,8 +442,17 @@ func (a *App) reviewTabHelpItems() []components.HelpItem {
 // fixed hints, so every panel's strip is built the same way.
 func (a *App) panelHelpItems(ctx config.Context, head ...components.HelpItem) []components.HelpItem {
 	custom := a.customCommandHelpItems(ctx)
-	items := make([]components.HelpItem, 0, len(head)+len(custom)+1)
+	items := make([]components.HelpItem, 0, len(head)+len(custom)+2)
 	items = append(items, head...)
 	items = append(items, custom...)
-	return append(items, components.HelpItem{Key: a.keymap.Keys(ActHelp), Description: "help"})
+	return a.closeHelpItems(items)
+}
+
+// closeHelpItems ends every strip the same way: the view switch, named after
+// the view it goes to, and then the help key.
+func (a *App) closeHelpItems(items []components.HelpItem) []components.HelpItem {
+	return append(items,
+		a.viewSwitchHelpItem(),
+		components.HelpItem{Key: a.keymap.Keys(ActHelp), Description: "help"},
+	)
 }

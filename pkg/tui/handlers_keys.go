@@ -46,6 +46,8 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ActSearch:
 		a.searchBar.Activate()
 		return a, nil
+	case ActNextView:
+		return a, a.switchView()
 	case ActNextScreenMode:
 		a.cycleScreenMode(1)
 		return a, nil
@@ -231,32 +233,14 @@ func (a *App) handleFocusAction(action Action) (tea.Model, tea.Cmd, bool) {
 
 	case ActFocusRight:
 		if a.side == sideLeft {
-			switch a.leftFocus {
-			case focusStatus:
-				a.leftFocus = focusPullRequests
-			case focusPullRequests:
-				a.leftFocus = focusBuilds
-			case focusBuilds:
-				a.leftFocus = focusRepos
-			case focusRepos:
-				a.leftFocus = focusStatus
-			}
+			a.stepLeftFocus(1)
 			a.updateFocusState()
 			return a, nil, true
 		}
 
 	case ActFocusLeft:
 		if a.side == sideLeft {
-			switch a.leftFocus {
-			case focusStatus:
-				a.leftFocus = focusRepos
-			case focusPullRequests:
-				a.leftFocus = focusStatus
-			case focusBuilds:
-				a.leftFocus = focusPullRequests
-			case focusRepos:
-				a.leftFocus = focusBuilds
-			}
+			a.stepLeftFocus(-1)
 			a.updateFocusState()
 			return a, nil, true
 		}
@@ -276,28 +260,46 @@ func (a *App) handleFocusAction(action Action) (tea.Model, tea.Cmd, bool) {
 		a.updateFocusState()
 		return a, nil, true
 
+	// The number keys follow the view: [2] is whichever list the view is about,
+	// and in the pipelines view, which has no Builds panel, [3] lands on Repos
+	// beside [4] so muscle memory still ends up somewhere sane.
 	case ActFocusPullRequests:
 		a.side = sideLeft
+		if a.view == viewPipelines {
+			a.leftFocus = focusPipelines
+			a.updateFocusState()
+			return a, a.showSelectedRun(), true
+		}
 		a.leftFocus = focusPullRequests
 		a.updateFocusState()
 		return a, a.previewSelected(), true
 
 	case ActFocusBuilds:
 		a.side = sideLeft
+		if a.view == viewPipelines {
+			return a.focusReposPanel()
+		}
 		a.leftFocus = focusBuilds
 		a.updateFocusState()
 		return a, nil, true
 
 	case ActFocusRepos:
 		a.side = sideLeft
-		a.leftFocus = focusRepos
-		a.updateFocusState()
-		if repo := a.repoList.SelectedRepo(); repo != nil {
-			a.detailView.SetRepo(repo)
-		}
-		return a, nil, true
+		return a.focusReposPanel()
 	}
 	return nil, nil, false
+}
+
+// focusReposPanel moves the focus to the Repos panel and previews the
+// repository under its cursor. Two number keys reach it in the pipelines view,
+// so it is worth its own function.
+func (a *App) focusReposPanel() (tea.Model, tea.Cmd, bool) {
+	a.leftFocus = focusRepos
+	a.updateFocusState()
+	if repo := a.repoList.SelectedRepo(); repo != nil {
+		a.detailView.SetRepo(repo)
+	}
+	return a, nil, true
 }
 
 func (a *App) handleTabAction(action Action) (tea.Model, tea.Cmd, bool) {
@@ -447,7 +449,15 @@ func (a *App) handlePullRequestAction(action Action) (tea.Model, tea.Cmd, bool) 
 		return a.handleActionRefresh()
 
 	case ActRefreshAll:
-		return a, a.refreshCmd(), true
+		return a, a.refreshAllCmd(), true
+
+	case ActOpenPullRequest:
+		// L belongs to the pipelines view alone; elsewhere the key is free for
+		// a panel or a custom command to claim.
+		if a.view != viewPipelines {
+			return nil, nil, false
+		}
+		return a, a.handleActionOpenPullRequest(), true
 
 	// The six write actions. Each one opens its own dialog and returns
 	// without touching Bitbucket; see actions.go.
@@ -497,6 +507,10 @@ func (a *App) browserURL() string {
 	case focusBuilds:
 		if status := a.buildsPanel.SelectedStatus(); status != nil {
 			return status.URL
+		}
+	case focusPipelines:
+		if entry := a.pipelineList.SelectedEntry(); entry != nil {
+			return entry.Pipeline.HTMLURL()
 		}
 	case focusRepos:
 		if repo := a.repoList.SelectedRepo(); repo != nil {
@@ -565,6 +579,10 @@ func (a *App) reviewTabURL() string {
 
 // handleActionCheckout checks out the selected pull request's source branch.
 func (a *App) handleActionCheckout() (tea.Model, tea.Cmd, bool) {
+	if a.view == viewPipelines {
+		a.helpBar.SetStatusMsg(noPullRequestHere)
+		return a, nil, true
+	}
 	pr := a.currentPullRequest()
 	if pr == nil {
 		return a, nil, true
@@ -581,8 +599,13 @@ func (a *App) handleActionCheckout() (tea.Model, tea.Cmd, bool) {
 }
 
 // handleActionRefresh drops the selected pull request's caches and refetches
-// its detail and statuses.
+// its detail and statuses. In the pipelines view there is no pull request to
+// refresh, so it reads the selected run's steps again instead — the run itself
+// comes from the list, which the refresh-all key re-reads.
 func (a *App) handleActionRefresh() (tea.Model, tea.Cmd, bool) {
+	if a.view == viewPipelines {
+		return a, a.refreshSelectedRun(), true
+	}
 	pr := a.currentPullRequest()
 	if pr == nil {
 		return a, nil, true
@@ -624,6 +647,16 @@ func (a *App) handleActivate() (tea.Model, tea.Cmd) {
 		return a, nil
 	case focusBuilds:
 		return a.openBuild(a.buildsPanel.SelectedStatus())
+	case focusPipelines:
+		// The run is already on screen; Enter moves the focus onto it, the way
+		// Enter on a pull request row does.
+		if a.pipelineList.SelectedEntry() == nil {
+			return a, nil
+		}
+		cmd := a.showSelectedRun()
+		a.side = sideRight
+		a.updateFocusState()
+		return a, cmd
 	case focusRepos:
 		return a, a.selectRepo(a.repoList.SelectedRepo())
 	case focusStatus:
@@ -634,6 +667,10 @@ func (a *App) handleActivate() (tea.Model, tea.Cmd) {
 
 // handleActionURLPicker opens every URL reachable from the pull request.
 func (a *App) handleActionURLPicker() (tea.Model, tea.Cmd) {
+	if a.view == viewPipelines {
+		a.helpBar.SetStatusMsg(noPullRequestHere)
+		return a, nil
+	}
 	pr := a.currentPullRequest()
 	if pr == nil {
 		return a, nil

@@ -348,6 +348,11 @@ func TestLoad_RejectsInvalidValues(t *testing.T) {
 			`invalid gui.screenMode "wide"`,
 		},
 		{
+			"unknown start view",
+			"gui:\n  startView: builds\n",
+			`invalid gui.startView "builds"`,
+		},
+		{
 			"invalid custom command template",
 			"customCommands:\n  - key: \"y\"\n    name: broken\n    command: \"echo {{.Unclosed\"\n",
 			"template parse error",
@@ -1063,6 +1068,175 @@ func TestLoad_BuildsKeysDoNotCollideWithPullRequestKeys(t *testing.T) {
 	testkit.AssertEqual(t, "Keybinding.Builds", cfg.Keybinding.Builds, BuildsKeys{Rerun: "r", Stop: "s"})
 }
 
+// pipelineKeysFixture is a fully-populated PipelineKeys with a distinct value
+// per field, so a wrong or duplicated yaml tag shows up as a mismatch.
+func pipelineKeysFixture() PipelineKeys {
+	return PipelineKeys{
+		OpenPullRequest: "L",
+	}
+}
+
+// pipelineKeyYAMLNames are the yaml keys of every keybinding.pipelines field,
+// in declaration order.
+var pipelineKeyYAMLNames = []string{"openPullRequest"}
+
+// pipelineKeyByYAMLName maps a yaml key back to its PipelineKeys field value.
+func pipelineKeyByYAMLName(t *testing.T, keys PipelineKeys, name string) string {
+	t.Helper()
+	switch name {
+	case "openPullRequest":
+		return keys.OpenPullRequest
+	default:
+		t.Fatalf("pipelineKeyByYAMLName: unknown yaml key %q", name)
+		return ""
+	}
+}
+
+func TestLoad_ReadsPipelineKeybindingsFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+
+	want := pipelineKeysFixture()
+	var body strings.Builder
+	body.WriteString("keybinding:\n  pipelines:\n")
+	for _, name := range pipelineKeyYAMLNames {
+		fmt.Fprintf(&body, "    %s: %q\n", name, pipelineKeyByYAMLName(t, want, name))
+	}
+	writeConfigFile(t, dir, body.String())
+
+	testkit.AssertEqual(t, "Keybinding.Pipelines", loadOrFatal(t).Keybinding.Pipelines, want)
+}
+
+func TestSave_RoundTripsPipelineKeybindings(t *testing.T) {
+	t.Setenv(envConfigDir, t.TempDir())
+	clearBitbucketEnv(t)
+
+	cfg := DefaultConfig()
+	cfg.Keybinding.Pipelines = pipelineKeysFixture()
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	written, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if !strings.Contains(string(written), "pipelines:") {
+		t.Errorf("saved config is missing the pipelines key group:\n%s", written)
+	}
+	for _, name := range pipelineKeyYAMLNames {
+		if !strings.Contains(string(written), name+": ") {
+			t.Errorf("saved config is missing the %q pipelines key:\n%s", name, written)
+		}
+	}
+
+	testkit.AssertEqual(t, "Keybinding.Pipelines", loadOrFatal(t).Keybinding.Pipelines, pipelineKeysFixture())
+}
+
+func TestDefaultConfig_LeavesPipelineKeysEmpty(t *testing.T) {
+	t.Parallel()
+
+	// Like the builds keys, the L default lives in the TUI's DefaultKeymap; the
+	// config file only carries user overrides.
+	testkit.AssertEqual(t, "Keybinding.Pipelines", DefaultConfig().Keybinding.Pipelines, PipelineKeys{})
+}
+
+// TestLoad_PipelineKeysDoNotCollideWithBuildsKeys guards the split the spec
+// fixes in place: rerun and stop stay under `builds` and the pipelines group
+// carries only what no other panel binds, so neither can shadow the other.
+func TestLoad_PipelineKeysDoNotCollideWithBuildsKeys(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, "keybinding:\n"+
+		"  builds:\n    rerun: r\n    stop: s\n"+
+		"  pipelines:\n    openPullRequest: o\n")
+
+	cfg := loadOrFatal(t)
+	testkit.AssertEqual(t, "Keybinding.Builds", cfg.Keybinding.Builds, BuildsKeys{Rerun: "r", Stop: "s"})
+	testkit.AssertEqual(t, "Keybinding.Pipelines", cfg.Keybinding.Pipelines,
+		PipelineKeys{OpenPullRequest: "o"})
+}
+
+func TestLoad_ReadsNextViewFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, "keybinding:\n  universal:\n    nextView: ctrl+v\n")
+
+	testkit.AssertEqual(t, "Keybinding.Universal.NextView",
+		loadOrFatal(t).Keybinding.Universal.NextView, "ctrl+v")
+}
+
+func TestSave_RoundTripsNextView(t *testing.T) {
+	t.Setenv(envConfigDir, t.TempDir())
+	clearBitbucketEnv(t)
+
+	cfg := DefaultConfig()
+	cfg.Keybinding.Universal.NextView = "ctrl+v"
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	written, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if !strings.Contains(string(written), "nextView: ") {
+		t.Errorf("saved config is missing the universal nextView key:\n%s", written)
+	}
+
+	testkit.AssertEqual(t, "Keybinding.Universal.NextView",
+		loadOrFatal(t).Keybinding.Universal.NextView, "ctrl+v")
+}
+
+func TestDefaultConfig_LeavesNextViewEmpty(t *testing.T) {
+	t.Parallel()
+
+	// shift+tab is the TUI's default; an empty config value means "no override".
+	testkit.AssertEqual(t, "Keybinding.Universal.NextView",
+		DefaultConfig().Keybinding.Universal.NextView, "")
+}
+
+func TestLoad_ReadsStartViewFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, "gui:\n  startView: "+StartViewPipelines+"\n")
+
+	testkit.AssertEqual(t, "GUI.StartView", loadOrFatal(t).GUI.StartView, StartViewPipelines)
+}
+
+func TestSave_RoundTripsStartView(t *testing.T) {
+	t.Setenv(envConfigDir, t.TempDir())
+	clearBitbucketEnv(t)
+
+	cfg := DefaultConfig()
+	cfg.GUI.StartView = StartViewPipelines
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	written, err := os.ReadFile(ConfigPath())
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	if !strings.Contains(string(written), "startView: ") {
+		t.Errorf("saved config is missing the gui startView key:\n%s", written)
+	}
+
+	testkit.AssertEqual(t, "GUI.StartView", loadOrFatal(t).GUI.StartView, StartViewPipelines)
+}
+
+func TestDefaultConfig_LeavesStartViewEmpty(t *testing.T) {
+	t.Parallel()
+
+	// An empty value means StartViewPullRequests; the app resolves it, so the
+	// default config does not need to spell it out.
+	testkit.AssertEqual(t, "GUI.StartView", DefaultConfig().GUI.StartView, "")
+}
+
 func TestDefaultConfig_ReadOnlyIsOff(t *testing.T) {
 	t.Parallel()
 
@@ -1214,5 +1388,18 @@ func TestValidateScreenMode(t *testing.T) {
 	err := validateScreenMode("wide")
 	if err == nil || !strings.Contains(err.Error(), "wide") {
 		t.Errorf("validateScreenMode(wide) = %v, want an error naming the value", err)
+	}
+}
+
+func TestValidateStartView(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"", StartViewPullRequests, StartViewPipelines} {
+		if err := validateStartView(value); err != nil {
+			t.Errorf("validateStartView(%q) = %v, want nil", value, err)
+		}
+	}
+	err := validateStartView("builds")
+	if err == nil || !strings.Contains(err.Error(), "builds") {
+		t.Errorf("validateStartView(builds) = %v, want an error naming the value", err)
 	}
 }

@@ -19,6 +19,11 @@ const (
 	testDiffPath   = "pkg/tui/app.go"
 	testCommitHash = "abc1234def5678901234567890123456789abcde"
 
+	// Pipelines-panel fixtures: the source branch of the pull request run and
+	// the owner token a standalone run is shown under.
+	testRunBranch = "bugfix/upstream-timeout"
+	testRunOwner  = "acme/api-gateway#415"
+
 	testPipelineUUID = "{11111111-1111-1111-1111-111111111111}"
 	testStepUUID     = "{22222222-2222-2222-2222-222222222222}"
 	testStepUUID2    = "{33333333-3333-3333-3333-333333333333}"

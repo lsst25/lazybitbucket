@@ -27,6 +27,14 @@ const (
 	testBuild    = 412
 	testNewBuild = 413
 
+	// testOtherBuild is the second repository's run in the cross-repository
+	// pipeline list, and testRunKey and testOtherRunKey are the two runs'
+	// keys — the "ws/slug#build" shape the pipelines view addresses a run by.
+	testOtherBuild  = 77
+	testStepUUID    = "{step-1}"
+	testRunKey      = "acme/api-gateway#412"
+	testOtherRunKey = "acme/web-app#77"
+
 	// testRunCreator is who the fixture runs say started them, which is the
 	// third thing the pipeline dialogs name a run by.
 	testRunCreator = "Rita Runner"
@@ -50,4 +58,7 @@ const (
 	testThreadRoot  = int64(9001)
 	testCommitHash  = "cccccccccccccccccccccccccccccccccccccccc"
 	testCommitShort = "ccccccc"
+
+	// testStepLog is the body the stubbed step-log fetch answers with.
+	testStepLog = "+ go build ./..."
 )

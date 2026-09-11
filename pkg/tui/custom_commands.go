@@ -119,7 +119,16 @@ func (a *App) initCustomCommands() {
 
 // activeContexts returns the contexts that currently apply, most specific
 // first. The first match wins in handleCustomCommand.
+//
+// The pipelines view has none at all. Every context is written against a pull
+// request — {{.PR}}, its branch, its repository — and that view has no pull
+// request under the cursor, so a command fired there would either expand to
+// nothing or, worse, to whichever pull request the other view happens to have
+// selected.
 func (a *App) activeContexts() []config.Context {
+	if a.view == viewPipelines {
+		return nil
+	}
 	var out []config.Context
 	if a.side == sideRight {
 		switch a.detailView.Mode() {
@@ -149,8 +158,9 @@ func (a *App) activeContexts() []config.Context {
 		out = append(out, config.CtxBuilds)
 	case focusRepos:
 		out = append(out, config.CtxRepos)
-	case focusStatus:
-		// No commands bind to the status panel.
+	case focusStatus, focusPipelines:
+		// No commands bind to the status panel, and none fire in the pipelines
+		// view at all.
 	}
 	return out
 }
@@ -559,8 +569,13 @@ func keyShadowsContext(key string, ctx config.Context, cmds []config.ResolvedCus
 	return false
 }
 
-// customCommandHelpItems returns the help bar entries for a context.
+// customCommandHelpItems returns the help bar entries for a context. The
+// pipelines view lists none, because activeContexts fires none there: a key in
+// the help bar that does nothing is worse than no entry at all.
 func (a *App) customCommandHelpItems(ctx config.Context) []components.HelpItem {
+	if a.view == viewPipelines {
+		return nil
+	}
 	items := make([]components.HelpItem, 0)
 	for _, rc := range a.customCmds {
 		if rc.HasContext(ctx) {
@@ -570,8 +585,12 @@ func (a *App) customCommandHelpItems(ctx config.Context) []components.HelpItem {
 	return items
 }
 
-// customCommandBindings returns the help overlay entries for a context.
+// customCommandBindings returns the help overlay entries for a context, and
+// none in the pipelines view for the reason customCommandHelpItems gives.
 func (a *App) customCommandBindings(ctx config.Context) []Binding {
+	if a.view == viewPipelines {
+		return nil
+	}
 	bindings := make([]Binding, 0)
 	for _, rc := range a.customCmds {
 		if rc.HasContext(ctx) {

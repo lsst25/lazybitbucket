@@ -109,6 +109,17 @@ type DetailView struct {
 	pipelineBuild   int
 	pipelineLoading bool
 	pipelineErr     string
+	// pipelineOwner is who the run in view belongs to: a pull request key in
+	// the pull request view, an opaque run key in the pipelines view. A late
+	// response is matched against it rather than against the pull request,
+	// because a standalone run has no pull request to match.
+	pipelineOwner     string
+	pipelineOwnerIsPR bool
+	// stepsPending marks a standalone run whose steps are still being fetched,
+	// and stepsErr why that fetch failed. Neither applies to the pull request
+	// view, which fetches the run and its steps in one go.
+	stepsPending bool
+	stepsErr     string
 
 	stepUUID       string
 	stepLog        string
@@ -301,7 +312,14 @@ func (d *DetailView) PullRequestKey() string {
 		return ""
 	}
 	switch d.mode {
-	case ModePullRequest, ModePipeline, ModeStepLog, ModeFileDiff:
+	case ModePipeline, ModeStepLog:
+		// A standalone run may sit over a pull request the other view still
+		// holds; it is not what the panel is showing.
+		if !d.pipelineOwnerIsPR {
+			return ""
+		}
+		return d.pr.Key()
+	case ModePullRequest, ModeFileDiff:
 		return d.pr.Key()
 	default:
 		return ""
@@ -326,7 +344,16 @@ func (d *DetailView) SetPullRequest(pr *bitbucket.PullRequest) {
 	case ModeRepo, ModeSplash:
 		d.mode = ModePullRequest
 		d.resetPullRequestView()
-	case ModePullRequest, ModePipeline, ModeStepLog, ModeFileDiff:
+	case ModePipeline, ModeStepLog:
+		// A standalone run belongs to the pipelines view, not to this pull
+		// request, so coming back to the pull request has to leave it — the
+		// guard is only there to protect a reader inside this pull request's
+		// own drill-down.
+		if !d.pipelineOwnerIsPR {
+			d.mode = ModePullRequest
+			d.resetPullRequestView()
+		}
+	case ModePullRequest, ModeFileDiff:
 	}
 }
 
@@ -334,9 +361,22 @@ func (d *DetailView) SetPullRequest(pr *bitbucket.PullRequest) {
 // which is what the background detail fetch does while the user reads a
 // pipeline.
 func (d *DetailView) UpdatePullRequestData(pr *bitbucket.PullRequest) {
-	if d.adoptPullRequest(pr) {
-		d.resetPullRequestView()
+	if !d.adoptPullRequest(pr) {
+		return
 	}
+	// A standalone run is not this pull request's drill-down: it belongs to the
+	// pipelines view, which may be the one on screen while the pull request
+	// list refreshes behind it. The new data is adopted — it is newer — but the
+	// run stays, and re-entering the pull request view resets the panel through
+	// SetPullRequest anyway.
+	switch d.mode {
+	case ModePipeline, ModeStepLog:
+		if !d.pipelineOwnerIsPR {
+			return
+		}
+	case ModePullRequest, ModeFileDiff, ModeRepo, ModeSplash:
+	}
+	d.resetPullRequestView()
 }
 
 // adoptPullRequest stores pr and reports whether it is a different one.
@@ -363,14 +403,27 @@ func (d *DetailView) resetPullRequestView() {
 	d.threads.reset()
 	d.clearFileDiff()
 	d.clearPipeline()
+	// The pull request in view owns any run drilled into from here, so the
+	// owner token follows it. That is what used to be the d.pr comparison the
+	// pipeline entry points made.
+	d.pipelineOwner = ""
+	if d.pr != nil {
+		d.pipelineOwner = d.pr.Key()
+	}
+	d.pipelineOwnerIsPR = true
 }
 
+// clearPipeline forgets the run and its steps. The owner token is deliberately
+// left alone: walking back out of a run and drilling into another one of the
+// same pull request must not start dropping its own responses.
 func (d *DetailView) clearPipeline() {
 	d.pipeline = nil
 	d.steps = nil
 	d.pipelineBuild = 0
 	d.pipelineLoading = false
 	d.pipelineErr = ""
+	d.stepsPending = false
+	d.stepsErr = ""
 	d.invalidateBlocks()
 	d.clearStepLog()
 }
@@ -403,12 +456,13 @@ func (d *DetailView) SetStatuses(key string, statuses []bitbucket.CommitStatus) 
 }
 
 // SetPipelineLoading switches to the pipeline view with a placeholder body
-// while the run is fetched. A call for another pull request is dropped.
+// while the run is fetched. A call for another owner is dropped.
 func (d *DetailView) SetPipelineLoading(key string, buildNumber int) {
-	if d.pr == nil || d.pr.Key() != key {
+	if key != d.pipelineOwner {
 		return
 	}
 	d.clearPipeline()
+	d.pipelineOwnerIsPR = true
 	d.clearFileDiff()
 	d.mode = ModePipeline
 	d.pipelineBuild = buildNumber
@@ -417,16 +471,23 @@ func (d *DetailView) SetPipelineLoading(key string, buildNumber int) {
 	d.listCursor = 0
 }
 
-// SetPipeline shows a pipeline run and its steps. A run for another pull
-// request is dropped.
+// SetPipeline shows a pipeline run and its steps. A run for another owner is
+// dropped.
 //
 // A refetch of the run already in view — the read-back after a stop — keeps the
 // user's place: the cursor stays on the step it was on, clamped to the steps
 // that came back, and so does the scroll offset. Any other run starts at the top.
 func (d *DetailView) SetPipeline(key string, p *bitbucket.Pipeline, steps []bitbucket.PipelineStep) {
-	if d.pr == nil || d.pr.Key() != key {
+	if key != d.pipelineOwner {
 		return
 	}
+	d.pipelineOwnerIsPR = true
+	d.showRun(p, steps)
+}
+
+// showRun is what SetPipeline and SetRun share: the run, its steps and the
+// place in the step list they leave the reader at.
+func (d *DetailView) showRun(p *bitbucket.Pipeline, steps []bitbucket.PipelineStep) {
 	sameRun := d.mode == ModePipeline && d.pipeline != nil && p != nil && d.pipeline.UUID == p.UUID
 	d.clearStepLog()
 	d.clearFileDiff()
@@ -435,6 +496,8 @@ func (d *DetailView) SetPipeline(key string, p *bitbucket.Pipeline, steps []bitb
 	d.steps = steps
 	d.pipelineLoading = false
 	d.pipelineErr = ""
+	d.stepsErr = ""
+	d.invalidateBlocks()
 	if p != nil {
 		d.pipelineBuild = p.BuildNumber
 	}
@@ -447,11 +510,12 @@ func (d *DetailView) SetPipeline(key string, p *bitbucket.Pipeline, steps []bitb
 }
 
 // SetPipelineError shows why a pipeline run could not be fetched. An error for
-// another pull request is dropped.
+// another owner is dropped.
 func (d *DetailView) SetPipelineError(key, msg string) {
-	if d.pr == nil || d.pr.Key() != key {
+	if key != d.pipelineOwner {
 		return
 	}
+	d.pipelineOwnerIsPR = true
 	d.clearFileDiff()
 	d.mode = ModePipeline
 	d.pipelineErr = msg
@@ -459,6 +523,48 @@ func (d *DetailView) SetPipelineError(key, msg string) {
 	d.scrollY = 0
 	d.invalidateBlocks()
 }
+
+// SetRun shows a pipeline run that stands on its own — the pipelines view,
+// where there is no pull request behind it. owner is the token later step
+// responses are matched against. Nil steps mean they are still being fetched,
+// which the body says instead of claiming the run has none.
+func (d *DetailView) SetRun(owner string, run *bitbucket.Pipeline, steps []bitbucket.PipelineStep) {
+	d.pipelineOwner = owner
+	d.pipelineOwnerIsPR = false
+	d.showRun(run, steps)
+	d.stepsPending = steps == nil
+}
+
+// SetRunSteps fills in the steps of a standalone run. Steps for another owner
+// are dropped, and the block cursor stays where it is when the run in view is
+// the one they belong to — the same rule SetPipeline follows for a refetch.
+func (d *DetailView) SetRunSteps(owner string, steps []bitbucket.PipelineStep) {
+	if owner != d.pipelineOwner || d.pipelineOwnerIsPR {
+		return
+	}
+	d.steps = steps
+	d.stepsPending = false
+	d.stepsErr = ""
+	d.listCursor = min(d.listCursor, max(len(steps)-1, 0))
+	d.invalidateBlocks()
+}
+
+// SetRunStepsError reports why a standalone run's steps could not be fetched.
+// The run header stays: it came from the list payload and is still true, so
+// only the step list is replaced.
+func (d *DetailView) SetRunStepsError(owner, msg string) {
+	if owner != d.pipelineOwner || d.pipelineOwnerIsPR {
+		return
+	}
+	d.steps = nil
+	d.stepsPending = false
+	d.stepsErr = msg
+	d.invalidateBlocks()
+}
+
+// PipelineOwner is the token of whoever the run in view belongs to, so the app
+// can tell which run the panel is showing.
+func (d *DetailView) PipelineOwner() string { return d.pipelineOwner }
 
 // SetStepLogLoading switches to the step log view with a placeholder body. A
 // call for another pipeline, or another step, is dropped.
@@ -518,6 +624,12 @@ func (d *DetailView) stepMatches(pipelineUUID, stepUUID string) bool {
 // Pipeline returns the pipeline run in view, nil when there is none.
 func (d *DetailView) Pipeline() *bitbucket.Pipeline { return d.pipeline }
 
+// PipelineOwnerIsPR reports whether the run in view is a pull request's own
+// drill-down rather than a standalone run of the pipelines view. The two carry
+// different owner tokens — a pull request key and a run key — and only the
+// second one names a repository and a build number a caller can act on.
+func (d *DetailView) PipelineOwnerIsPR() bool { return d.pipelineOwnerIsPR }
+
 // PipelineBuild is the build number of the run the pipeline view shows, 0
 // outside it. It is tracked separately from Pipeline() because it is set the
 // moment the drill-down starts: a key pressed while the run is still loading
@@ -557,6 +669,12 @@ func (d *DetailView) Back() bool {
 		d.invalidateBlocks()
 		return true
 	case ModePipeline:
+		// A standalone run is not a drill-down out of anything: there is
+		// nowhere behind it to go back to, so the key falls through to the
+		// app's own handling instead.
+		if !d.pipelineOwnerIsPR {
+			return false
+		}
 		d.clearPipeline()
 		d.mode = ModePullRequest
 		d.scrollY = 0
@@ -1010,6 +1128,9 @@ func (d *DetailView) bodyLines(contentWidth, visible int) []string {
 		if d.pipelineLoading || d.pipelineErr != "" || d.pipeline == nil {
 			return header
 		}
+		if lines, ok := d.stepsPlaceholder(contentWidth); ok {
+			return append(header, lines...)
+		}
 		return append(header, d.renderBlockList(contentWidth, visible, len(header))...)
 	case listFiles, listCommits, listThreads, listDiffLines:
 		header := d.listModeHeader(contentWidth)
@@ -1331,6 +1452,26 @@ func (d *DetailView) reviewHeader(errMsg string, count, width int) []string {
 	return []string{" " + d.theme.ErrorText.Render(components.TruncateEnd(errMsg, max(width-2, 8)))}
 }
 
+// stepsPlaceholder is what a standalone run draws instead of its step list
+// while the steps are still on their way, or when they could not be fetched,
+// and whether there is one. The run header is already on screen above it: only
+// the list below it is missing.
+func (d *DetailView) stepsPlaceholder(width int) ([]string, bool) {
+	switch {
+	case d.stepsErr != "":
+		lines := make([]string, 0, 2)
+		for _, l := range wrapText(d.stepsErr, max(width-2, 8)) {
+			lines = append(lines, " "+d.theme.ErrorText.Render(l))
+		}
+		return lines, true
+	case d.stepsPending:
+		gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
+		return []string{" " + gray.Render("Loading steps…")}, true
+	default:
+		return nil, false
+	}
+}
+
 // pipelineHeader is the run summary drawn above the step list.
 func (d *DetailView) pipelineHeader(width int) []string {
 	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
@@ -1344,8 +1485,15 @@ func (d *DetailView) pipelineHeader(width int) []string {
 
 	p := d.pipeline
 	summary := p.State.Summary()
-	head := fmt.Sprintf("Pipeline #%d · %s · %s · %s",
-		p.BuildNumber, pipelineResultStyle(summary).Render(summary),
+	// A standalone run names its repository: the pipelines list spans every
+	// repository, so unlike the pull request view the panel title does not say
+	// which one this run is from.
+	prefix := ""
+	if !d.pipelineOwnerIsPR && p.Repository != nil && p.Repository.Slug() != "" {
+		prefix = p.Repository.Slug() + " · "
+	}
+	head := fmt.Sprintf("%sPipeline #%d · %s · %s · %s",
+		prefix, p.BuildNumber, pipelineResultStyle(summary).Render(summary),
 		formatDuration(p.Duration()), p.Trigger.Name)
 	if p.Creator != nil {
 		head += " · by " + theme.AuthorRender(p.Creator.Name())

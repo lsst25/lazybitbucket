@@ -14,6 +14,7 @@ Details live in issues/PRs, not here.
 - [x] List open PRs across the configured repos in one view (repo, title, author, state, approvals)
 - [x] PR detail pane: description (Markdown via glamour), reviewers, approval state, source/target branch
 - [x] Pipeline / build status shown per PR, with drill-down into the latest run
+- [x] Pipelines view (`shift+tab`): recent runs of every configured repo, newest first, with the same drill-down and `L` back to the run's PR
 
 ## 2. Review
 

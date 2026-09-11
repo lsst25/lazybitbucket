@@ -249,3 +249,26 @@ func TestStatusPanel_View_ClampsEveryLineToThePanelWidth(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusPanel_SetViewName_SuffixesTheTitle(t *testing.T) {
+	t.Parallel()
+	panel := NewStatusPanel(testRepo, testAuthor, testWorkspace)
+	panel.SetSize(60, 5)
+
+	if !strings.Contains(stripANSI(panel.View()), "[1] Status") {
+		t.Error("View() should show the plain title by default")
+	}
+	if strings.Contains(stripANSI(panel.View()), "·") {
+		t.Error("an unnamed view should add no suffix")
+	}
+
+	panel.SetViewName("Pipelines")
+	if !strings.Contains(stripANSI(panel.View()), "[1] Status · Pipelines") {
+		t.Errorf("View() = %q, want the view name in the title", stripANSI(panel.View()))
+	}
+
+	panel.SetSize(60, 1)
+	if !strings.Contains(stripANSI(panel.View()), "[1] Status · Pipelines") {
+		t.Error("the collapsed bar should carry the view name too")
+	}
+}

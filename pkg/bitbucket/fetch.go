@@ -112,3 +112,101 @@ func MergePullRequests(results []RepoPullRequests) []PullRequest {
 	}
 	return merged
 }
+
+// RepoPipelines is one repository's slice of a cross-repository pipeline fetch.
+type RepoPipelines struct {
+	// Repo is the slug exactly as it was passed in.
+	Repo string
+	// Pipelines is nil when Err is set.
+	Pipelines []Pipeline
+	// Err is this repository's failure. It never aborts the other repositories:
+	// one repository without Pipelines enabled must not blank the whole list.
+	Err error
+}
+
+// PipelineEntry is one run together with the repository slug it was fetched
+// from. The slug travels beside the run rather than being read back out of
+// Pipeline.Repository, which is a payload field the caller did not choose and
+// which a trimmed response may leave empty.
+type PipelineEntry struct {
+	Repo     string
+	Pipeline Pipeline
+}
+
+// FetchPipelines lists pipeline runs for every repository concurrently, bounded
+// by concurrency (0 means the default of 2), and returns one entry per
+// repository in input order.
+//
+// It never fails as a whole — a per-repository failure lands in that entry's
+// Err, which matters more here than for pull requests because a repository with
+// Pipelines switched off answers an error every time — and it stops starting
+// work once ctx is cancelled. It calls client from several goroutines, so any
+// ClientInterface handed to it must be goroutine-safe.
+func FetchPipelines(
+	ctx context.Context,
+	client ClientInterface,
+	workspace string,
+	repos []string,
+	opts ListPipelinesOptions,
+	concurrency int,
+) []RepoPipelines {
+	results := make([]RepoPipelines, len(repos))
+	slots := make(chan struct{}, orDefault(concurrency, defaultFetchConcurrency))
+
+	var wait sync.WaitGroup
+	for index, repo := range repos {
+		results[index] = RepoPipelines{Repo: repo, Pipelines: nil, Err: nil}
+
+		wait.Go(func() {
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				results[index].Err = fmt.Errorf("list pipelines %s/%s: %w", workspace, repo, ctx.Err())
+				return
+			}
+
+			pipelines, err := client.ListPipelines(ctx, workspace, repo, opts)
+			results[index].Pipelines = pipelines
+			results[index].Err = err
+		})
+	}
+	wait.Wait()
+
+	return results
+}
+
+// MergePipelines flattens a fetch into one list ordered the way the pipelines
+// pane shows it: newest run first, then repository slug, then descending build
+// number. Repositories that failed are skipped — their error is reported
+// separately rather than as a gap in the list.
+func MergePipelines(results []RepoPipelines) []PipelineEntry {
+	total := 0
+	for _, result := range results {
+		if result.Err == nil {
+			total += len(result.Pipelines)
+		}
+	}
+
+	entries := make([]PipelineEntry, 0, total)
+	for _, result := range results {
+		if result.Err != nil {
+			continue
+		}
+		for _, pipeline := range result.Pipelines {
+			entries = append(entries, PipelineEntry{Repo: result.Repo, Pipeline: pipeline})
+		}
+	}
+
+	slices.SortStableFunc(entries, func(a, b PipelineEntry) int {
+		if byCreated := b.Pipeline.CreatedOn.Compare(a.Pipeline.CreatedOn); byCreated != 0 {
+			return byCreated
+		}
+		if byRepo := strings.Compare(a.Repo, b.Repo); byRepo != 0 {
+			return byRepo
+		}
+		return cmp.Compare(b.Pipeline.BuildNumber, a.Pipeline.BuildNumber)
+	})
+
+	return entries
+}

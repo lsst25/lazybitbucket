@@ -188,7 +188,7 @@ func TestPipelineKeys_WorkFromTheDetailPanelToo(t *testing.T) {
 		fake.GetPipelineStepLogFunc = func(
 			context.Context, string, string, string, string, bitbucket.StepLogOptions,
 		) (string, error) {
-			return "+ go build ./...", nil
+			return testStepLog, nil
 		}
 		app := pipelineApp(t, fake, testNewBuild)
 
@@ -399,7 +399,7 @@ func TestStopPipeline_FromAStepLogLeavesTheLogOnScreen(t *testing.T) {
 	fake.GetPipelineStepLogFunc = func(
 		context.Context, string, string, string, string, bitbucket.StepLogOptions,
 	) (string, error) {
-		return "+ go build ./...", nil
+		return testStepLog, nil
 	}
 	fake.StopPipelineFunc = func(context.Context, string, string, string) error { return nil }
 	app := pipelineApp(t, fake, testNewBuild)
@@ -619,4 +619,114 @@ func TestPipelineAction_AReadThatLandsAfterTheUserMovedOpensNothing(t *testing.T
 		t.Error("a dialog must not open over a pull request the user has left")
 	}
 	testkit.AssertEqual(t, "run calls", fake.CallCount("RunPipeline"), 0)
+}
+
+// -----------------------------------------------------------------------------
+// The pipelines view, where there is no pull request at all
+// -----------------------------------------------------------------------------
+
+// pipelinesViewApp is the pipelines view with its list loaded and the cursor on
+// api-gateway's run, and not one pull request anywhere in the app — which is
+// the regression the pipelineRef refactor is for.
+func pipelinesViewApp(t *testing.T, fake *bitbuckettest.FakeClient) *App {
+	t.Helper()
+	stubPipelineList(fake)
+	app := pipelinesApp(t, fake)
+	runAll(t, app, app.fetchPipelines())
+	_, cmd := app.Update(runeKey('j'))
+	runAll(t, app, cmd)
+	testkit.AssertEqual(t, "the cursor is on the api-gateway run", app.runKey, testRunKey)
+	return app
+}
+
+func TestPipelineKeys_RerunFromThePipelinesPanelWithoutAPullRequest(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	original := completedRun(testBuild)
+	asked := answerRuns(fake, map[string]*bitbucket.Pipeline{"412": original})
+	fake.RunPipelineFunc = func(
+		context.Context, string, string, bitbucket.PipelineTarget,
+	) (*bitbucket.Pipeline, error) {
+		return newRun(testNewBuild, bitbucket.PipelineState{Type: "pipeline_state_pending", Name: "PENDING"}), nil
+	}
+	app := pipelinesViewApp(t, fake)
+
+	pressKey(t, app, 'P')
+	if got := plain(app.form.View()); !strings.Contains(got, "Rerun pipeline #412?") {
+		t.Fatalf("dialog = %q, want the rerun question", got)
+	}
+
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	runAll(t, app, cmd)
+
+	testkit.AssertEqual(t, "run calls", fake.CallCount("RunPipeline"), 1)
+	call := fake.RunPipelineCalls[0]
+	testkit.AssertEqual(t, "the repository comes from the run, not a pull request", call.RepoSlug, testRepo)
+	testkit.AssertEqual(t, "target", call.Target, original.Target)
+	testkit.AssertSliceEqual(t, "runs read", *asked, []string{"412"})
+	// The list is what this view drills into runs from, so it is read again and
+	// the view is pointed at the run the rerun created.
+	testkit.AssertEqual(t, "the list was refetched", fake.CallCount("ListPipelines"), 4)
+	testkit.AssertEqual(t, "the new run is what the view points at", app.runKey,
+		pipelineRef{workspace: testWorkspace, slug: testRepo, build: testNewBuild}.key())
+	if got := plain(app.helpBar.View()); !strings.Contains(got, "pipeline #413 started (rerun of #412)") {
+		t.Errorf("help bar = %q, want the started line", got)
+	}
+	if _, busy := app.pipelineWrites[testRunKey]; busy {
+		t.Error("the in-flight record must clear once the write has answered")
+	}
+}
+
+func TestPipelineKeys_StopFromThePipelinesPanelRefetchesTheList(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	_ = answerRuns(fake, map[string]*bitbucket.Pipeline{"412": runningRun(testBuild)})
+	fake.StopPipelineFunc = func(context.Context, string, string, string) error { return nil }
+	app := pipelinesViewApp(t, fake)
+
+	pressKey(t, app, 'X')
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	runAll(t, app, cmd)
+
+	testkit.AssertEqual(t, "stop calls", fake.CallCount("StopPipeline"), 1)
+	testkit.AssertEqual(t, "repository", fake.StopPipelineCalls[0].RepoSlug, testRepo)
+	testkit.AssertEqual(t, "uuid", fake.StopPipelineCalls[0].PipelineUUID, runUUID(testBuild))
+	testkit.AssertEqual(t, "the list was refetched", fake.CallCount("ListPipelines"), 4)
+	if got := plain(app.helpBar.View()); !strings.Contains(got, "stop requested for pipeline #412") {
+		t.Errorf("help bar = %q, want the stop line", got)
+	}
+}
+
+func TestPipelineKeys_WorkFromTheStandaloneRunInTheDetailPanel(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	_ = answerRuns(fake, map[string]*bitbucket.Pipeline{"412": completedRun(testBuild)})
+	app := pipelinesViewApp(t, fake)
+
+	_, cmd := app.handleActivate()
+	runAll(t, app, cmd)
+	testkit.AssertEqual(t, "focus", app.side, sideRight)
+
+	pressKey(t, app, 'P')
+
+	if got := plain(app.form.View()); !strings.Contains(got, "Rerun pipeline #412?") {
+		t.Errorf("dialog = %q, want the rerun question", got)
+	}
+}
+
+func TestPipelineKeys_InThePipelinesViewTheHintNamesThePipelinesPanel(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	app := pipelinesViewApp(t, fake)
+	app.leftFocus = focusRepos
+	app.updateFocusState()
+
+	_, cmd := app.Update(runeKey('P'))
+
+	if cmd != nil {
+		t.Error("with no run under the cursor nothing is read")
+	}
+	if got := plain(app.helpBar.View()); !strings.Contains(got, "select a run in the Pipelines panel (2) first") {
+		t.Errorf("help bar = %q, want the hint naming the Pipelines panel", got)
+	}
 }

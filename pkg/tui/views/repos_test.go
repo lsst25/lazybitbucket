@@ -201,3 +201,23 @@ func TestRepoList_View_TruncatesLongSlugsByDisplayWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestRepoList_SetPanelNumber_ChangesTheTitle(t *testing.T) {
+	t.Parallel()
+	list := makeFocusedRepoList()
+
+	if !strings.Contains(stripANSI(list.View()), "[4] Repos") {
+		t.Error("View() should default to the pull request view's number")
+	}
+
+	list.SetPanelNumber(3)
+	out := stripANSI(list.View())
+	if !strings.Contains(out, "[3] Repos") {
+		t.Errorf("View() = %q, want the pipelines view's number", out)
+	}
+
+	list.SetSize(40, 1)
+	if !strings.Contains(stripANSI(list.View()), "[3] Repos") {
+		t.Error("the collapsed bar should carry the number too")
+	}
+}

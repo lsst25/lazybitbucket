@@ -204,7 +204,7 @@ func TestFetchPipeline_AsksForTheBuildNumberAndItsSteps(t *testing.T) {
 	app := newAppWithFake(t, fake)
 	pr := newPR(testRepo, 101, testTitle)
 
-	msg, ok := app.fetchPipeline(&pr, 412)().(pipelineLoadedMsg)
+	msg, ok := app.fetchPipeline(testWorkspace, testRepo, pr.Key(), 412)().(pipelineLoadedMsg)
 
 	if !ok {
 		t.Fatal("expected a pipelineLoadedMsg")
@@ -226,7 +226,7 @@ func TestFetchPipeline_StepFailureIsCarried(t *testing.T) {
 	app := newAppWithFake(t, fake)
 	pr := newPR(testRepo, 101, testTitle)
 
-	msg, ok := app.fetchPipeline(&pr, 412)().(pipelineLoadedMsg)
+	msg, ok := app.fetchPipeline(testWorkspace, testRepo, pr.Key(), 412)().(pipelineLoadedMsg)
 
 	if !ok || msg.err == nil {
 		t.Fatalf("msg = %+v, want the step error carried", msg)
@@ -245,9 +245,8 @@ func TestFetchStepLog_AsksForTheTail(t *testing.T) {
 		return "hello", nil
 	}
 	app := newAppWithFake(t, fake)
-	pr := newPR(testRepo, 101, testTitle)
 
-	msg, ok := app.fetchStepLog(&pr, "{run}", "{step}")().(stepLogLoadedMsg)
+	msg, ok := app.fetchStepLog(testWorkspace, testRepo, "{run}", "{step}")().(stepLogLoadedMsg)
 
 	if !ok {
 		t.Fatal("expected a stepLogLoadedMsg")
@@ -261,8 +260,6 @@ func TestFetchCommands_AreNilWithoutAPullRequest(t *testing.T) {
 
 	if app.fetchStatuses(nil, 0) != nil ||
 		app.fetchPullRequestDetail(nil, 0) != nil ||
-		app.fetchPipeline(nil, 1) != nil ||
-		app.fetchStepLog(nil, "a", "b") != nil ||
 		app.fetchDiffStat(nil) != nil ||
 		app.fetchCommits(nil) != nil ||
 		app.fetchThreads(nil) != nil ||

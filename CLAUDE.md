@@ -22,7 +22,9 @@ plus a browse-only read-only mode.
 What exists:
 
 - `pkg/bitbucket` — Bitbucket Cloud REST client (auth, pagination, `APIError` + predicates, concurrent
-  multi-repo PR fetch) plus a small write surface: `MergePullRequest` (`MergeOptions`, `MergeStrategy`
+  multi-repo PR fetch, and the same fan-out for pipeline runs — `FetchPipelines` answering one
+  `RepoPipelines` per repository in input order, each failure isolated, and `MergePipelines`
+  flattening those into `PipelineEntry` values newest run first) plus a small write surface: `MergePullRequest` (`MergeOptions`, `MergeStrategy`
   with six values and `Label()`, `MergeResult.Queued()` for the 202) and `GetMergeTaskStatus`,
   `UpdatePullRequest` (`PullRequestUpdate`: title, description, draft, reviewers),
   `ApprovePullRequest` (POST with no body, answers a `Participant`) and `UnapprovePullRequest`
@@ -54,8 +56,19 @@ What exists:
   scope a command opts into rather than inheriting from its context, because it costs a diffstat
   request — it fills `{{.Files}}` with the whole changed-file list), `keybinding.pullRequests` with
   `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`/`approve`, and `keybinding.builds` with
-  `rerun`/`stop` — the only group besides `pullRequests` that carries write actions.
-- `pkg/tui` — panels Status `[1]`, Pull Requests `[2]`, Builds `[3]`, Repos `[4]`, Detail `[0]`. PR list
+  `rerun`/`stop` — the only group besides `pullRequests` that carries write actions. Also
+  `gui.startView` (`pullRequests` | `pipelines`, validated like `gui.screenMode`),
+  `keybinding.universal.nextView` (`shift+tab`) and `keybinding.pipelines` with the single
+  `openPullRequest` (`L`); rerun and stop stay under `builds` because they are one action wherever
+  they are pressed.
+- `pkg/tui` — two views over a shared detail panel, cycled with `shift+tab` (`views_switch.go`: the
+  `appView` type, `cycleView`, `mainPanel`, and the re-point of the detail panel on a switch). The pull
+  requests view has panels Status `[1]`, Pull Requests `[2]`, Builds `[3]`, Repos `[4]`, Detail `[0]`;
+  the pipelines view swaps the left column for Status `[1]`, Pipelines `[2]`, Repos `[3]` — panel
+  numbers are per view. The Pipelines panel (`views/pipelines.go`) lists recent runs of every
+  configured repository, newest first, narrowed by the Repos filter; `pipelines_data.go` holds its
+  fetch, its debounced selection, the steps drill-down and `L` back to a run's pull request. The list
+  is never on the `refreshInterval` tick, and custom commands fire in neither of that view's panels. PR list
   with Open/Mine/Reviewing tabs and configurable columns, Builds panel with drill-down into a pipeline
   run, its steps and each step's log, repo filter, `/` search, URL picker, copy URL, browser hand-off,
   source-branch checkout, custom commands, themes, and a `refreshInterval` auto-refresh of the active
@@ -75,8 +88,10 @@ What exists:
   the dialog title is never a lie, an author is refused locally with `cannot approve your own pull
   request`, and a nil `currentUser` (access token) makes it approve-only. Two further writes act on
   the pipeline behind a build rather than on the PR: `P` rerun and `X` stop, in `pipeline_actions.go`,
-  live on the selected Builds row and in the detail panel's `ModePipeline`/`ModeStepLog` and nowhere
-  else. They track their own in-flight map (`pipelineWrites`, keyed by `pipelineCacheKey` — a PR key
+  live on the selected Builds row, on the selected Pipelines row, and in the detail panel's
+  `ModePipeline`/`ModeStepLog` — and nowhere else. They resolve the run through a `pipelineRef`
+  (workspace, slug, build) rather than through the current PR, which is what lets them work in the
+  pipelines view where there is none. They track their own in-flight map (`pipelineWrites`, keyed by `pipelineCacheKey` — a PR key
   and a pipeline key share the `ws/slug#N` shape and would collide), read the run back before the
   dialog (`pipelineActionStateMsg`) so a refusal names the run's real state rather than the build
   status's, and do not require the PR to be `OPEN`, because a merged PR's pipeline can still be
@@ -99,7 +114,8 @@ Hard constraints that still hold:
 
 Not built yet (ROADMAP step 4+): the richer search / saved filters and PR creation of step 4, and
 everything left under "Later / maybe" — requesting changes, declining, posting or resolving comments,
-review tasks, triggering a custom pipeline definition, a CLI mode. Also not built: the activity feed,
+review tasks, triggering a custom pipeline definition, a CLI mode. In the pipelines view specifically:
+filter tabs over the run list, custom commands, and auto-refresh on the background tick. Also not built: the activity feed,
 side-by-side diffs, whole-file views and conflict display (deliberate step-2 non-goals), and
 side-by-side conflict resolution for a failed sync — a conflict aborts and is handed back to the user.
 

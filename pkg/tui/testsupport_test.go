@@ -51,13 +51,14 @@ func testConfig() *config.Config {
 // newTestApp is the bare struct literal: panes and configuration, no client.
 func newTestApp() *App {
 	return &App{
-		cfg:        testConfig(),
-		prList:     views.NewPullRequestList(),
-		repoList:   views.NewRepoList(),
-		detailView: views.NewDetailView(views.PlainRenderer{}, ""),
-		logFlag:    new(atomic.Bool),
-		side:       sideLeft,
-		leftFocus:  focusPullRequests,
+		cfg:          testConfig(),
+		prList:       views.NewPullRequestList(),
+		pipelineList: views.NewPipelineList(),
+		repoList:     views.NewRepoList(),
+		detailView:   views.NewDetailView(views.PlainRenderer{}, ""),
+		logFlag:      new(atomic.Bool),
+		side:         sideLeft,
+		leftFocus:    focusPullRequests,
 	}
 }
 
@@ -105,6 +106,7 @@ func sizedApp(t *testing.T, fake *bitbuckettest.FakeClient) *App {
 	app := newAppWithFake(t, fake)
 	app.keymap = DefaultKeymap()
 	app.prList.ResolveNav = app.keymap.MatchNav
+	app.pipelineList.ResolveNav = app.keymap.MatchNav
 	app.repoList.ResolveNav = app.keymap.MatchNav
 	app.buildsPanel.ResolveNav = app.keymap.MatchNav
 	app.detailView.ResolveNav = app.keymap.MatchNav
@@ -214,6 +216,69 @@ func withApproval(pr bitbucket.PullRequest, uuid string) bitbucket.PullRequest {
 		ParticipatedOn: testNow,
 	})
 	return pr
+}
+
+// newPipelineRun builds a run as ListPipelines answers with one: a pull
+// request target, so both the row's target column and the L key have something
+// to work with, and a repository ref, which is what its browser URL is built
+// from. age is how long ago it was created, which is what the merge order sorts
+// on.
+func newPipelineRun(repo string, build, prID int, age time.Duration) bitbucket.Pipeline {
+	return bitbucket.Pipeline{
+		UUID:        "{run-" + repo + "-" + strconv.Itoa(build) + "}",
+		BuildNumber: build,
+		State: bitbucket.PipelineState{
+			Type:   "pipeline_state_completed",
+			Name:   "COMPLETED",
+			Result: &bitbucket.PipelineStateResult{Type: "pipeline_state_completed_successful", Name: "SUCCESSFUL"},
+		},
+		Repository:        &bitbucket.RepositoryRef{Name: repo, FullName: testWorkspace + "/" + repo},
+		Trigger:           bitbucket.PipelineTrigger{Type: "pipeline_trigger_push", Name: "PUSH"},
+		CreatedOn:         testNow.Add(-age),
+		CompletedOn:       testNow.Add(-age + time.Minute),
+		DurationInSeconds: 60,
+		Target: bitbucket.PipelineTarget{
+			Type:        "pipeline_pullrequest_target",
+			Source:      testBranch,
+			Destination: branchMain,
+			PullRequest: &bitbucket.PipelinePullRequestRef{ID: prID},
+		},
+	}
+}
+
+// stubPipelineList makes the fake answer the cross-repository list with one run
+// per repository, the second repository's run the newer of the two, and the
+// step fetch that selecting a run sets off.
+func stubPipelineList(fake *bitbuckettest.FakeClient) {
+	fake.ListPipelineStepsFunc = func(
+		context.Context, string, string, string,
+	) ([]bitbucket.PipelineStep, error) {
+		return []bitbucket.PipelineStep{{UUID: testStepUUID, Name: "Build"}}, nil
+	}
+	fake.ListPipelinesFunc = func(
+		_ context.Context, _, repoSlug string, _ bitbucket.ListPipelinesOptions,
+	) ([]bitbucket.Pipeline, error) {
+		switch repoSlug {
+		case testRepo:
+			return []bitbucket.Pipeline{newPipelineRun(testRepo, testBuild, 101, 2*time.Hour)}, nil
+		case testRepo2:
+			return []bitbucket.Pipeline{newPipelineRun(testRepo2, testOtherBuild, 201, time.Hour)}, nil
+		default:
+			return nil, nil
+		}
+	}
+}
+
+// pipelinesApp is sizedApp in the pipelines view, focused on its [2] panel, as
+// a view switch or gui.startView would leave it.
+func pipelinesApp(t *testing.T, fake *bitbuckettest.FakeClient) *App {
+	t.Helper()
+	app := sizedApp(t, fake)
+	app.view = viewPipelines
+	app.leftFocus = focusPipelines
+	app.applyView()
+	app.updateFocusState()
+	return app
 }
 
 // newStatus builds a build status pointing at a pipeline run.

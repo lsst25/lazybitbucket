@@ -57,14 +57,30 @@ type RepoList struct {
 	all        []RepoItem
 	filter     string
 	activeSlug string
-	theme      *theme.Theme
+	// panelNumber is the number the title shows. The panel sits at [4] in the
+	// pull request view and at [3] in the pipelines view, which has one panel
+	// fewer, so the number is state rather than a constant.
+	panelNumber int
+	theme       *theme.Theme
 }
+
+// defaultRepoPanelNumber is where the panel sits in the pull request view.
+const defaultRepoPanelNumber = 4
 
 // NewRepoList constructs a list holding only the All row.
 func NewRepoList() *RepoList {
-	list := &RepoList{theme: theme.Default}
+	list := &RepoList{panelNumber: defaultRepoPanelNumber, theme: theme.Default}
 	list.SetRepos(nil)
 	return list
+}
+
+// SetPanelNumber sets the number the title shows, so the panel announces the
+// key that actually focuses it in the current view.
+func (r *RepoList) SetPanelNumber(n int) { r.panelNumber = n }
+
+// title is the panel title for the current view.
+func (r *RepoList) title() string {
+	return "[" + strconv.Itoa(r.panelNumber) + "] Repos"
 }
 
 // SetRepos replaces the repositories, prepending the synthetic All row. Counts
@@ -201,7 +217,7 @@ func (r *RepoList) View() string {
 		footer = fmt.Sprintf("%d of %d", r.Cursor+1, n)
 	}
 
-	const title = "[4] Repos"
+	title := r.title()
 	if r.Height <= 1 {
 		return components.RenderCollapsedBar(title, footer, r.Width, r.Focused)
 	}

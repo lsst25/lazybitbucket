@@ -4,7 +4,7 @@ Press `?` inside lazybitbucket to see the keys that apply to the panel you are i
 
 Keys are remappable in `config.yml` under the `keybinding` section — see [Configuration](Config.md#keybindings). Setting a key **replaces** every default for that action: `navigation.down: n` means `j`, `down` and `ctrl+j` stop navigating down.
 
-There is no `keybinding.repos` group. The Repos and Builds panels reuse the pull request `select`, `open` and `focusRight` actions, so remapping those remaps them everywhere. There is a `keybinding.builds` group, but it carries only the two pipeline actions — `rerun` and `stop` — which no other panel has.
+There is no `keybinding.repos` group. The Repos, Builds and Pipelines panels reuse the pull request `select`, `open` and `focusRight` actions, so remapping those remaps them everywhere. There is a `keybinding.builds` group, but it carries only the two pipeline actions — `rerun` and `stop` — which no other panel has, and a `keybinding.pipelines` group carrying only `openPullRequest`.
 
 ## Panels
 
@@ -19,6 +19,8 @@ There is no `keybinding.repos` group. The Repos and Builds panels reuse the pull
 | `l` / `right` | Next panel on the left; from the left side, cycles Status → Pull Requests → Builds → Repos → Status | `pullRequests.focusRight` |
 | `h` / `left` / `esc` | Previous panel on the left; from the detail panel, back to the left side | `detail.focusLeft` |
 
+The numbers belong to the view you are in. The table above is the pull requests view; in the [pipelines view](#pipelines-view) `2` focuses Pipelines, `3` and `4` both focus Repos, and `l` / `h` cycle Status → Pipelines → Repos → Status. The config keys keep their names either way.
+
 ## Universal
 
 These work everywhere except inside the help popup and modals.
@@ -32,6 +34,7 @@ These work everywhere except inside the help popup and modals.
 | `R` | Refresh the pull request list of the active tab | `universal.refreshAll` |
 | `[` / `]` | Previous / next tab | `universal.prevTab`, `universal.nextTab` |
 | `+` / `_` | Next / previous screen mode: normal → half (side panels take half the width) → full (the focused panel fills the window) | `universal.nextScreenMode`, `universal.prevScreenMode` |
+| `⇧tab` | Switch between the pull requests view and the [pipelines view](#pipelines-view) | `universal.nextView` |
 
 ## Navigation
 
@@ -241,6 +244,81 @@ A rejected write is reported in Bitbucket's own words — `stop pipeline failed:
 
 Both keys need the `write:pipeline:bitbucket` scope. It is neither one of the five read scopes nor the `write:pullrequest:bitbucket` the six pull request actions use, and the two write scopes are independent, so a token can carry either without the other — see [the scopes in the README](../README.md#get-a-token). Unlike those six actions these two do not care what state the pull request is in: the pipelines of a merged pull request can still be rerun.
 
+## Pipelines view
+
+The Builds panel answers one question — what has *this pull request* been running — and nothing else. A branch build, a scheduled run or a run someone started by hand never appears there, because no pull request owns it. The pipelines view is the other half: what the repositories themselves have been running lately. `⇧tab` switches to it, and `⇧tab` switches back.
+
+```
+ Pull requests view              Pipelines view
+ [1] Status                      [1] Status · Pipelines
+ [2] Pull Requests               [2] Pipelines
+ [3] Builds                      [3] Repos
+ [4] Repos                       [0] Detail  (shared)
+ [0] Detail
+```
+
+A view swaps the left column and nothing else — the detail panel `[0]` belongs to both. The panel numbers are per view, so Repos is `[3]` here rather than `[4]`; `3` and `4` both focus it, so muscle memory lands somewhere sane either way. Switching moves focus onto the view's `[2]` panel and re-points the detail panel at what that view has selected — the run here, the previewed pull request there. Everything else on the side you left is kept, selection, scroll and caches included, so a round trip puts you back where you were. The status panel says which side you are on: `[1] Status · Pipelines`. To start there rather than on the pull requests, set [`gui.startView`](Config.md#gui).
+
+### The list
+
+The Pipelines panel lists the recent runs of **every configured repository** merged into one list, newest first, with the repository slug in the row. A repository filter set on the Repos panel narrows the list to that repository, and changing the filter refetches it.
+
+```
+ ✔ #415  api-gateway  PR #103 bugfix/upstream-timeout  4m28s  2h ago
+```
+
+That is the state glyph, the build number, the repository, what the run was for, how long it took and how long ago it started. The target column is the flexible one: `PR #<id> <source branch>` for a pull request build, the branch for a branch build, and `target <type>` for anything else. When the window leaves it less than ten columns the fixed ones give way in order — the age first, then the duration, then the repository slug. A run that has not finished yet shows no duration.
+
+The glyphs are the Builds panel's: `✔` successful, `✘` failed or errored, `●` in progress or pending, `■` stopped, `○` expired or a state this version does not know. `/` filters the list on everything the row draws — untruncated — plus the trigger and the creator.
+
+Where the rows would be, the panel may say:
+
+| Text | Meaning |
+|------|---------|
+| `Loading pipelines…` | The fetch is in flight |
+| `No pipeline runs` | Every repository answered, none of them has run anything |
+| `No matching runs` | The `/` filter matched nothing |
+
+A repository that could not be listed does not take the others down with it: the runs that came back are shown and the help bar notes the gap — `2 of 6 repositories could not be listed`. Only when every repository fails does the panel show the error instead of rows, the way the Builds panel shows one.
+
+### Keys
+
+| Key | Action | Config key |
+|-----|--------|------------|
+| `j` / `k` | Move the cursor; the run under it is shown in the detail panel at once | `navigation.down`, `navigation.up` |
+| `enter` / `space` | Move focus to the detail panel, on the selected run | `pullRequests.open`, `pullRequests.select` |
+| `l` / `right` | Next panel (Repos) | `pullRequests.focusRight` |
+| `h` / `left` / `esc` | Previous panel (Status) | `detail.focusLeft` |
+| `o` | Open the run in a browser | `pullRequests.browser` |
+| `y` | Copy the run's URL to the clipboard | `pullRequests.copyURL` |
+| `r` | Refresh the selected run's steps | `universal.refresh` |
+| `R` | Refetch the list | `universal.refreshAll` |
+| `/` | Filter the list | `universal.search` |
+| `P` | Rerun the selected run — see [Rerun and stop a pipeline](#rerun-and-stop-a-pipeline) | `builds.rerun` |
+| `X` | Stop the selected run | `builds.stop` |
+| `L` | Jump to the pull request the selected run ran for | `pipelines.openPullRequest` |
+
+Selecting a row needs no request: the run is drawn from the list payload, which is the whole run. Its steps are fetched a moment later, once the cursor settles, and the detail panel says `Loading steps…` until they arrive. `enter` there opens a step's log, and `backspace` walks back out to the run — exactly the drill-down `enter` on a build opens in the other view. A standalone run has no pull request under it, so `backspace` stops at the run; `h` / `esc` leave the detail panel for the left column.
+
+`P` and `X` are the same two keys the Builds panel has, with the same dialogs, the same refusals and the same [`write:pipeline:bitbucket` scope](#rerun-and-stop-a-pipeline) — one action wherever it is pressed, which is why they stay in the `keybinding.builds` group. What differs is only what happens afterwards: in this view a rerun opens the run it created in the detail panel and refetches the list, and a stop refetches the list. They work here with no pull request loaded at all.
+
+`L` goes the other way, from a run back to the work that caused it. It switches to the pull requests view and puts the cursor on that pull request. Two refusals, both a line in the hint bar and nothing else:
+
+| Message | Reason |
+|---------|--------|
+| `this run is not a pull request build` | The run's target is a branch, a tag or a manual selector — there is no pull request to go to |
+| `pull request #103 is not in this tab` | The run names one, but the active pull request tab does not hold it. Switch tabs (`[` / `]`) or widen the filter and press `L` again |
+
+### Refreshing
+
+The list is fetched on the first switch into the view, on `R`, when the repository filter changes while the view is active, and after a rerun or a stop performed here. It is deliberately **not** on the [`refreshInterval`](Config.md#auto-refresh-refreshinterval) tick that keeps the pull request list warm: Bitbucket pages this endpoint at ten runs at a time, so one refresh costs a round of requests per configured repository, and a background tick doing that every couple of minutes would spend the hourly request budget on a panel you are not looking at. `R` when you want it fresh.
+
+[Custom commands](Config.md#custom-commands) do not fire in this view — not on the Pipelines panel, not on the Repos panel beside it. The five contexts are all declared against the pull requests view, and four of the five need a selected pull request to fill their scopes; rather than have a command written against `{{.PR}}` fire with nothing behind it, no context is active here at all. They are not listed in the help bar or the `?` overlay here either, for the same reason.
+
+### Keys that belong to the other view
+
+The pull request keys are not merely absent from this view's help — they refuse. `M`, `S`, `E`, `V`, `D`, `A`, `c` and `u` all answer `no pull request in the pipelines view` and do nothing. The pull request the other view has under its cursor survives the switch, and acting on it from here would be a write against something nothing on this screen names; `⇧tab` takes you to where those keys mean something.
+
 ## Repos `[4]`
 
 | Key | Action | Config key |
@@ -251,6 +329,8 @@ Both keys need the `write:pipeline:bitbucket` scope. It is neither one of the fi
 | `h` / `left` / `esc` | Previous panel (Builds) | `detail.focusLeft` |
 
 The first row is `All repositories`, which clears the filter. Selecting a repository returns focus to the pull request list.
+
+The same panel is `[3]` in the [pipelines view](#pipelines-view), where `l` goes on to Status and `h` back to Pipelines, and where the filter it sets narrows the run list instead.
 
 ## Detail panel `[0]`
 
@@ -321,6 +401,8 @@ A `●` in the marker column means the line carries at least one inline comment 
 | `X` | Stop this run | `builds.stop` |
 
 `P` and `X` act on the run on screen here — including from inside a step log, which is where a failed step is usually read — and behave exactly as they do on the Builds panel; see [Rerun and stop a pipeline](#rerun-and-stop-a-pipeline).
+
+The same two levels are what the [pipelines view](#pipelines-view) drills into, with one difference: a run reached from there has no pull request under it, so `backspace` stops at the run rather than walking on, and the run's header carries the repository slug the panel title would otherwise have given it.
 
 ## Help popup
 

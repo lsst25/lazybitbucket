@@ -30,6 +30,10 @@ const (
 	focusPullRequests
 	focusBuilds
 	focusRepos
+	// focusPipelines is the pipelines view's [2] panel. It is last rather than
+	// beside the pull request list because the two never share a screen: a
+	// view draws one left column or the other.
+	focusPipelines
 )
 
 type focusSide int
@@ -78,12 +82,13 @@ type App struct {
 	client     bitbucket.ClientInterface
 	splashInfo views.SplashInfo
 
-	statusPanel *views.StatusPanel
-	prList      *views.PullRequestList
-	buildsPanel *views.BuildsPanel
-	repoList    *views.RepoList
-	detailView  *views.DetailView
-	logPanel    *views.LogPanel
+	statusPanel  *views.StatusPanel
+	prList       *views.PullRequestList
+	buildsPanel  *views.BuildsPanel
+	pipelineList *views.PipelineList
+	repoList     *views.RepoList
+	detailView   *views.DetailView
+	logPanel     *views.LogPanel
 
 	keymap    Keymap
 	helpBar   components.HelpBar
@@ -130,6 +135,9 @@ type App struct {
 
 	side      focusSide
 	leftFocus focusPanel
+	// view is the screen the app is on; see appView. It starts from
+	// gui.startView and the nextView key cycles it.
+	view appView
 	// screen is the current screen mode; see screenMode. It starts from
 	// gui.screenMode and the nextScreenMode / prevScreenMode keys cycle it.
 	screen screenMode
@@ -201,6 +209,17 @@ type App struct {
 	previewKey   string
 	previewEpoch int
 
+	// The pipelines view's own state. pipelineEntries is the list as it was
+	// last fetched, pipelinesLoaded records that the fetch has happened at all
+	// (the first entry into the view is what pays for it), pipelinesEpoch drops
+	// responses from a superseded fetch, and runKey is the run the detail panel
+	// is showing there — the same "ws/slug#build" shape the pipeline caches and
+	// the detail panel's owner token use.
+	pipelineEntries []bitbucket.PipelineEntry
+	pipelinesLoaded bool
+	pipelinesEpoch  int
+	runKey          string
+
 	repoFilter   string
 	refreshEvery time.Duration
 
@@ -242,14 +261,15 @@ type App struct {
 	// {{.Files}} needs; nil the rest of the time. See awaitChangedFiles.
 	pendingCmd *pendingCustomCommand
 
-	panelSideW    int
-	panelStatusH  int
-	panelPRH      int
-	panelBuildsH  int
-	panelReposH   int
-	panelDetailH  int
-	panelLogH     int
-	width, height int
+	panelSideW      int
+	panelStatusH    int
+	panelPRH        int
+	panelBuildsH    int
+	panelPipelinesH int
+	panelReposH     int
+	panelDetailH    int
+	panelLogH       int
+	width, height   int
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -301,6 +321,7 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 		statusPanel:    statusPanel,
 		prList:         prList,
 		buildsPanel:    views.NewBuildsPanel(),
+		pipelineList:   views.NewPipelineList(),
 		repoList:       views.NewRepoList(),
 		detailView:     views.NewDetailView(renderer, views.ChromaStyleFor(glamourStyle)),
 		logPanel:       logPanel,
@@ -313,6 +334,7 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 		side:           sideLeft,
 		leftFocus:      focusPullRequests,
 		screen:         screenModeFromConfig(cfg.GUI.ScreenMode),
+		view:           viewFromConfig(cfg.GUI.StartView),
 		logFlag:        logFlag,
 		demoMode:       authMethod == AuthDemo,
 		exec:           execExternal,
@@ -364,6 +386,7 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 	navResolver := app.keymap.MatchNav
 	app.prList.ResolveNav = navResolver
 	app.buildsPanel.ResolveNav = navResolver
+	app.pipelineList.ResolveNav = navResolver
 	app.repoList.ResolveNav = navResolver
 	app.detailView.ResolveNav = navResolver
 
@@ -402,6 +425,14 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 			app.gitRemoteRepos = git.RemoteRepositories(cwd)
 		}
 	}
+
+	// The configured start view decides which left column is drawn and which
+	// panel the focus starts on, so it has to be applied before the first
+	// render rather than on the first switch.
+	app.leftFocus = app.mainPanel()
+	app.applyView()
+	app.prList.SetFocused(app.view == viewPullRequests)
+	app.pipelineList.SetFocused(app.view == viewPipelines)
 
 	app.detailView.SetSplash(app.splashInfo)
 	app.helpBar.SetItems(app.helpBarItems())
@@ -551,6 +582,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handlePrefetched(msg)
 	case pipelineLoadedMsg:
 		return a.handlePipelineLoaded(msg)
+	case pipelinesLoadedMsg:
+		return a.handlePipelinesLoaded(msg)
+	case pipelineRunDebounceMsg:
+		return a.handlePipelineRunDebounce(msg)
+	case pipelineStepsLoadedMsg:
+		return a.handlePipelineStepsLoaded(msg)
 	case stepLogLoadedMsg:
 		return a.handleStepLogLoaded(msg)
 	case diffStatLoadedMsg:
@@ -564,6 +601,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case views.PullRequestSelectedMsg:
 		return a.handlePullRequestSelected(msg)
+	case views.PipelineSelectedMsg:
+		return a.handlePipelineSelected(msg)
 	case views.RepoHoveredMsg:
 		if msg.Repo != nil && a.side == sideLeft && a.leftFocus == focusRepos {
 			a.detailView.SetRepo(msg.Repo)
@@ -649,20 +688,10 @@ func (a *App) View() string {
 		content = a.panelView(panel)
 	} else if a.isVerticalLayout() {
 		content = lipgloss.JoinVertical(lipgloss.Left,
-			a.statusPanel.View(),
-			a.prList.View(),
-			a.buildsPanel.View(),
-			a.repoList.View(),
-			a.detailView.View(),
-			a.logPanel.View(),
+			append(a.leftColumnViews(), a.detailView.View(), a.logPanel.View())...,
 		)
 	} else {
-		leftCol := lipgloss.JoinVertical(lipgloss.Left,
-			a.statusPanel.View(),
-			a.prList.View(),
-			a.buildsPanel.View(),
-			a.repoList.View(),
-		)
+		leftCol := lipgloss.JoinVertical(lipgloss.Left, a.leftColumnViews()...)
 		rightCol := lipgloss.JoinVertical(lipgloss.Left,
 			a.detailView.View(),
 			a.logPanel.View(),
@@ -809,10 +838,25 @@ func (a *App) refreshCmd() tea.Cmd {
 	return a.fetchActiveTab()
 }
 
+// refreshAllCmd is what the refresh-all key re-reads: the list the view on
+// screen is about. The pipelines list is not on the auto-refresh tick — it
+// costs a round of requests per repository — so this key is the only thing
+// that re-reads it.
+func (a *App) refreshAllCmd() tea.Cmd {
+	// Discovery comes first even here: without repoSlugs the pipelines fetch is
+	// a silent no-op, which would leave the refresh key doing nothing at all in
+	// the view the user is looking at.
+	if a.view == viewPipelines && !a.needsRepoDiscovery() {
+		return a.fetchPipelines()
+	}
+	return a.refreshCmd()
+}
+
 func (a *App) updateFocusState() {
 	a.statusPanel.SetFocused(false)
 	a.prList.SetFocused(false)
 	a.buildsPanel.SetFocused(false)
+	a.pipelineList.SetFocused(false)
 	a.repoList.SetFocused(false)
 	a.detailView.SetFocused(false)
 
@@ -824,6 +868,8 @@ func (a *App) updateFocusState() {
 			a.prList.SetFocused(true)
 		case focusBuilds:
 			a.buildsPanel.SetFocused(true)
+		case focusPipelines:
+			a.pipelineList.SetFocused(true)
 		case focusRepos:
 			a.repoList.SetFocused(true)
 		}
