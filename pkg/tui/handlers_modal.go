@@ -16,6 +16,8 @@ func (a *App) clearOverlayCallbacks() {
 	a.onForm = nil
 	a.onFormID = ""
 	a.onInput = nil
+	// A cancelled or answered popup is no longer writing a comment.
+	a.pendingComment = nil
 }
 
 // handleModalSelected dispatches a modal pick through the pending callback.

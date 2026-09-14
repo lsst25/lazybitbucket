@@ -141,10 +141,6 @@ type DetailView struct {
 	// per keystroke is exactly what blockCache exists to prevent.
 	threadBody threadBodyCache
 
-	// composer is the docked reply box, open only while a comment is being
-	// written. See detail_composer.go.
-	composer composerState
-
 	repo   *RepoItem
 	splash SplashInfo
 
@@ -412,7 +408,6 @@ func (d *DetailView) adoptPullRequest(pr *bitbucket.PullRequest) bool {
 }
 
 func (d *DetailView) resetPullRequestView() {
-	d.CancelComment()
 	d.scrollY = 0
 	d.listCursor = 0
 	d.activeTab = TabOverview
@@ -680,7 +675,6 @@ func (d *DetailView) SelectedStep() *bitbucket.PipelineStep {
 // the cursor left on the file just read), step log to pipeline, pipeline to
 // pull request. It reports whether the mode changed.
 func (d *DetailView) Back() bool {
-	d.CancelComment()
 	switch d.mode {
 	case ModeFileDiff:
 		path := d.fileDiff.path
@@ -763,10 +757,6 @@ func (d *DetailView) ActiveTab() DetailTab { return d.activeTab }
 // first, so a tab key pressed inside a diff lands on the tab rather than on a
 // diff wearing another tab's title.
 func (d *DetailView) SetActiveTab(tab DetailTab) {
-	// A tab key while the composer is open cannot reach here — the composer has
-	// the keyboard — so this is the app moving the panel, and a box answering a
-	// conversation the reader is leaving goes with it.
-	d.CancelComment()
 	switch d.mode {
 	case ModeFileDiff:
 		d.clearFileDiff()
@@ -1013,12 +1003,6 @@ func (d *DetailView) Update(msg tea.Msg) (*DetailView, tea.Cmd) {
 	if !ok {
 		return d, nil
 	}
-	// The composer owns every key while it is open, bindings included: a reply
-	// that says "q" is a reply, not a quit.
-	if d.composer.active {
-		return d, d.composerKey(km)
-	}
-
 	key := km.String()
 
 	// Tab cycling is the app's: ActNextTab/ActPrevTab pair it with the review
@@ -1183,19 +1167,9 @@ func (d *DetailView) View() string {
 	}
 
 	visible := d.VisibleRows()
-	// The composer is not part of the scrolling body: it takes its rows off the
-	// top of the panel's budget and is drawn under whatever is left, so the
-	// conversation scrolls behind a box that stays put.
-	var composer []string
-	if d.composer.active {
-		composer = d.composerLines(contentWidth)
-		visible = max(visible-composerRows, 1)
-	}
-
 	contentLines := d.bodyLines(contentWidth, visible)
 	totalLines := len(contentLines)
 	contentLines = clampLines(d.clampAndSliceScroll(contentLines, visible), contentWidth)
-	contentLines = append(contentLines, clampLines(composer, contentWidth)...)
 
 	footer := ""
 	if count := d.listTabItemCount(); count > 0 {

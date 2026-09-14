@@ -15,18 +15,18 @@ one are upstream lazyjira history, and their compare links still point at upstre
 ### Added
 
 - `C` on a line of a file's diff writes an inline comment anchored to it, on the side that line lives
-  on — the new side for an added or context line, the old side for a removed one. The composer names
-  the line it is anchored to, sending leaves the cursor exactly where it was with the line's `●`
+  on — the new side for an added or context line, the old side for a removed one. The popup is headed
+  with the line it is anchored to, sending leaves the cursor exactly where it was with the line's `●`
   marker lit up, and the hint bar says where the comment landed: a review is a pass down a file, and
   being thrown into a thread after every remark would break it. A line that already carries a
   conversation takes a second one — joining the first is `enter` and then `C`. A hunk header, and a
   row of the Files tab, comment on the file itself, which is where Bitbucket shows them. Multi-line
   ranges are not implemented
 - `C` writes a comment: a reply to the conversation on screen or the thread under the cursor on the
-  Comments tab, a new comment on the pull request from the Overview tab. The composer is a one-line
-  box docked under what you are reading rather than a dialog — it takes every key while it is open,
-  `enter` sends, `esc` drops it and `ctrl+e` continues in `$EDITOR` for a reply that wants
-  paragraphs. What Bitbucket answers with is folded straight into the thread, rendering and all, so
+  Comments tab, a new comment on the pull request from the Overview tab. It asks the way `E` asks for
+  a title — the same input popup, headed with what the comment answers or hangs off — and it takes
+  every key while it is open, `enter` sends, `esc` drops it and `ctrl+e` continues in `$EDITOR` for a
+  comment that wants paragraphs (in the title editor that key stays readline's end-of-line). What Bitbucket answers with is folded straight into the thread, rendering and all, so
   a new comment needs no refetch and its mentions read as names; a new conversation is opened as
   soon as it exists. Nothing typed is lost to a failure — the text goes back into the box, or stays
   in the editor's file with the hint bar naming it. Unlike the other writes it is not refused on a

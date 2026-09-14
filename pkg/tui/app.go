@@ -107,6 +107,9 @@ type App struct {
 	onChecklist onChecklistFunc
 	onForm      onFormFunc
 	onInput     onInputFunc
+	// pendingComment is set while the comment popup is open: what the confirmed
+	// text will be posted as. See comments.go.
+	pendingComment *pendingComment
 
 	// onFormID is the id of the dialog onForm was armed for. A form result
 	// carries the id of the form that produced it, so one that outlived its
@@ -549,6 +552,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// The comment popup's own key, answered before the overlay stack: the input
+	// modal reads ctrl+e as "end of line", which is what it goes on meaning for
+	// the title editor.
+	if km, ok := msg.(tea.KeyMsg); ok {
+		if cmd, handled := a.commentInputKey(km); handled {
+			return a, cmd
+		}
+	}
+
 	if cmd, ok := a.overlays.Intercept(msg); ok {
 		return a, cmd
 	}
@@ -625,10 +637,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleFileSelected(msg)
 	case views.ThreadSelectedMsg:
 		return a.handleThreadSelected(msg)
-	case views.CommentSubmittedMsg:
-		return a.handleCommentSubmitted(msg)
-	case views.ComposeCommentInEditorMsg:
-		return a.handleComposeCommentInEditor(msg)
 
 	case components.ModalSelectedMsg:
 		return a.handleModalSelected(msg)

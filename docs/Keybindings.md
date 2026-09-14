@@ -73,11 +73,11 @@ From any left panel except Status, these scroll the detail panel without moving 
 | `V` | Reviewers… | `pullRequests.reviewers` |
 | `D` | Toggle draft… | `pullRequests.toggleDraft` |
 | `A` | Approve, or remove your approval… | `pullRequests.approve` |
-| `C` | Comment — on the pull request, a thread, a file or a diff line, depending on where you are | `pullRequests.comment` |
+| `C` | Comment… — on the pull request, a thread, a file or a diff line, depending on where you are | `pullRequests.comment` |
 
 ## Pull request actions
 
-The seven keys above are the only ones that change a pull request — `P` and `X` write too, but to a pipeline run rather than the pull request (see [Rerun and stop a pipeline](#rerun-and-stop-a-pipeline)). They work from the pull request list and from the detail panel alike — whatever has focus, they act on the pull request the list cursor is on — and each one asks before it writes. Six open a dialog: nothing is sent until you confirm, and `esc` closes a dialog without a request. `C` is the seventh and asks differently — it opens the [comment composer](#c--comment-or-reply) in the detail panel, and what you send there is the confirmation.
+The seven keys above are the only ones that change a pull request — `P` and `X` write too, but to a pipeline run rather than the pull request (see [Rerun and stop a pipeline](#rerun-and-stop-a-pipeline)). They work from the pull request list and from the detail panel alike — whatever has focus, they act on the pull request the list cursor is on — and each one asks before it writes. Six open a dialog: nothing is sent until you confirm, and `esc` closes a dialog without a request. `C` is the seventh: it opens the [comment popup](#c--comment-or-reply) — the same input the title editor uses — and what you send there is the confirmation.
 
 A refusal is a one-line message in the hint bar and no dialog:
 
@@ -190,15 +190,15 @@ The pull request is read back afterwards rather than patched from the answer: th
 
 ### `C` — comment or reply
 
-`C` opens a one-line composer docked at the bottom of the detail panel. There is no dialog and no modal: the box sits under whatever you are reading, and the panel keeps scrolling behind it.
+`C` opens the same input popup `E` opens for a title, headed with what the comment will answer or hang off:
 
 ```
- ↳ Ken Thompson · 1h ago
-
-   Never mind — the RFC says it. Resolving.
- Reply █
- enter send · ctrl+e editor · esc cancel
+ ╭─Reply to Ken Thompson───────────────────────────────╮
+ │ thanks, that clears it up█                          │
+ ╰─────────────────────────────────────────────────────╯
 ```
+
+Long text wraps inside the box rather than scrolling sideways, so a paragraph stays readable while you type it. `enter` sends, `esc` cancels, and the hint bar carries the keys.
 
 What the comment answers, or hangs off, depends on where you press it:
 
@@ -215,35 +215,35 @@ What the comment answers, or hangs off, depends on where you press it:
 
 ### Inline comments
 
-`C` inside a file's diff anchors the comment to the line the cursor is on, and the box says which:
+`C` inside a file's diff anchors the comment to the line the cursor is on, and the popup's title says which:
 
 ```
-    13 +  ctx, cancel := context.WithTimeout(ctx, budget)
- ●  14    defer cancel()
-    15 +  return do(ctx, req)
- retry.go:13 █
- enter send · ctrl+e editor · esc cancel
+  18  21 │             return resp, nil
+  19  22 │         }
+ ╭─Comment on retry.go:13──────────────────────────────╮
+ │ off by one?█                                        │
+ ╰─────────────────────────────────────────────────────╯
 ```
 
-The side comes from the line itself: an added or a context line anchors to the new side of the diff, a removed line to the old side — the same line the `●` marker would appear on. The prompt shows the file's base name and the line; the panel title already carries the path.
+The side comes from the line itself: an added or a context line anchors to the new side of the diff, a removed line to the old side — the same line the `●` marker would appear on. The title shows the file's base name and the line; the panel behind it already carries the path.
 
 Sending leaves you exactly where you were, cursor on the same line, with the `●` on it lit up (a digit once a line carries more than one conversation) and the hint bar naming where the comment landed — `comment posted on internal/upstream/retry.go:13`. Reviewing a file is a pass down it, and being thrown into a thread after every remark would break that pass.
 
 `C` on a line that already carries a comment starts a *second* conversation there, which is what Bitbucket's own line threads do. To join the conversation that is already on the line, press `enter` on it — that jumps to the thread — and `C` there replies to it.
 
-A line the diff has moved past is refused by Bitbucket, not by lazybitbucket: the failure is its own message in the hint bar, and your text comes back into the box. Ranges spanning several lines are not implemented — a comment anchors to one line.
+A line the diff has moved past is refused by Bitbucket, not by lazybitbucket: the failure is its own message in the hint bar, and the popup opens again with your text in it. Ranges spanning several lines are not implemented — a comment anchors to one line.
 
-While the composer is open it owns the keyboard: every key is text, bindings and custom commands included, so a reply may say `q` without quitting. The three keys that are not text are the ones under the box —
+While the popup is open it owns the keyboard, exactly as the title editor does: every key is text, bindings and custom commands included, so a reply may say `q` without quitting. The three keys that are not text:
 
 | Key | Action |
 |-----|--------|
 | `enter` | Send. An empty box just closes |
-| `ctrl+e` | Continue in `editor` — the text so far is written to a temp `.md`, opened the way `E` opens a description, and posted when the editor exits. An empty file discards the comment |
+| `ctrl+e` | Continue in `editor` — the text so far is written to a temp `.md`, opened the way `E` opens a description, and posted when the editor exits. An empty file discards the comment. (In the title editor the same key stays readline's end-of-line) |
 | `esc` | Close and drop what was typed |
 
 A sent comment is folded straight into the conversation from Bitbucket's answer — no refetch, and mentions in it read as names because the answer carries the server's own rendering. A new comment on the pull request opens its thread, so the conversation you just started is what you are looking at.
 
-Nothing typed is lost to a failure. A reply typed in the box goes back into the box, with the error in the hint bar; one composed in the editor stays in its file and the hint bar names the path.
+Nothing typed is lost to a failure. A comment typed in the popup is asked again, prefilled with it and the error in the hint bar; one composed in the editor stays in its file and the hint bar names the path.
 
 Editing a comment, deleting one and resolving a thread are not implemented — those still want the browser (`o`).
 

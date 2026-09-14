@@ -58,9 +58,14 @@ func commentApp(t *testing.T, fake *bitbuckettest.FakeClient) *App {
 	return app
 }
 
-// typeComment types text into the open composer and presses Enter.
+// typeComment types text into the open comment popup and confirms it, which is
+// the same path the title editor takes: the overlay stack owns the keys, and
+// Enter answers with an InputConfirmedMsg the app then dispatches.
 func typeComment(t *testing.T, app *App, text string) {
 	t.Helper()
+	if !app.input.IsVisible() {
+		t.Fatal("the comment popup should be open")
+	}
 	for _, r := range text {
 		key := runeKey(r)
 		if r == ' ' {
@@ -74,16 +79,27 @@ func typeComment(t *testing.T, app *App, text string) {
 	runAll(t, app, cmd)
 }
 
+// openComment presses C and fails unless the popup opened.
+func openComment(t *testing.T, app *App) {
+	t.Helper()
+	_, cmd := app.Update(runeKey(commentKey))
+	runAll(t, app, cmd)
+	if !app.input.IsVisible() {
+		t.Fatalf("C should open the comment popup, help bar = %q", plain(app.helpBar.View()))
+	}
+}
+
 func TestComment_ReplyReachesBitbucketAndJoinsTheThread(t *testing.T) {
 	t.Parallel()
 	fake := &bitbuckettest.FakeClient{T: t}
 	stubCreateComment(fake)
 	app := commentApp(t, fake)
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
-	if !app.detailView.Composing() {
-		t.Fatal("C should open the composer on the Comments tab")
+	openComment(t, app)
+	// The popup names what is being answered, the way the title editor names
+	// what is being edited.
+	if got := plain(app.input.View()); !strings.Contains(got, "Reply to") {
+		t.Errorf("popup = %q, want it to name the conversation", got)
 	}
 
 	typeComment(t, app, "rotating weekly still leaves a window")
@@ -109,8 +125,8 @@ func TestComment_ReplyReachesBitbucketAndJoinsTheThread(t *testing.T) {
 	}
 	testkit.AssertEqual(t, "the cache carries it too",
 		len(app.threadsCache[testPRKey].value[0].Replies), 1)
-	if app.detailView.Composing() {
-		t.Error("the composer should have closed")
+	if app.input.IsVisible() {
+		t.Error("the popup should have closed")
 	}
 }
 
@@ -121,8 +137,7 @@ func TestComment_ReplyFromInsideTheThreadSection(t *testing.T) {
 	app := commentApp(t, fake)
 	openTheThread(t, app)
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
+	openComment(t, app)
 	typeComment(t, app, "agreed")
 
 	testkit.AssertEqual(t, "parent", fake.CreateCommentCalls[0].Create.ParentID, testThreadRoot)
@@ -140,8 +155,7 @@ func TestComment_NewCommentFromTheOverviewOpensItsThread(t *testing.T) {
 	app := commentApp(t, fake)
 	runAll(t, app, app.jumpToTab(views.TabOverview))
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
+	openComment(t, app)
 	typeComment(t, app, "ready from my side")
 
 	testkit.AssertEqual(t, "parent", fake.CreateCommentCalls[0].Create.ParentID, int64(0))
@@ -157,22 +171,22 @@ func TestComment_TheComposerSwallowsBindings(t *testing.T) {
 	fake := &bitbuckettest.FakeClient{T: t}
 	app := commentApp(t, fake)
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
-	// q quits, / searches, M merges. Inside a reply they are letters.
+	openComment(t, app)
+	// q quits, / searches, M merges. Inside the popup they are letters, exactly
+	// as they are while a title is being edited.
 	for _, r := range []rune{'q', '/', 'M'} {
 		app.Update(runeKey(r))
 	}
 
-	if !app.detailView.Composing() {
-		t.Fatal("the composer should still be open")
+	if !app.input.IsVisible() {
+		t.Fatal("the popup should still be open")
 	}
-	testkit.AssertEqual(t, "text", app.detailView.ComposerText(), "q/M")
+	testkit.AssertEqual(t, "text", app.input.Value(), "q/M")
 	if app.searchBar.IsActive() {
 		t.Error("the search bar must not have opened")
 	}
-	if app.overlayVisible() {
-		t.Error("no dialog may open while a reply is being written")
+	if app.modal.IsVisible() || app.form.IsVisible() {
+		t.Error("no dialog may open while a comment is being written")
 	}
 }
 
@@ -185,8 +199,8 @@ func TestComment_IsRefusedInReadOnlyMode(t *testing.T) {
 	_, cmd := app.Update(runeKey(commentKey))
 	runAll(t, app, cmd)
 
-	if app.detailView.Composing() {
-		t.Error("read-only mode must not even open the composer")
+	if app.input.IsVisible() {
+		t.Error("read-only mode must not even open the popup")
 	}
 	if got := plain(app.helpBar.View()); !strings.Contains(got, "read-only") {
 		t.Errorf("help bar = %q, want the read-only refusal", got)
@@ -203,8 +217,7 @@ func TestComment_IsAllowedOnAMergedPullRequest(t *testing.T) {
 	pr := app.prCache[testPRKey]
 	pr.State = bitbucket.PullRequestMerged
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
+	openComment(t, app)
 	typeComment(t, app, "noting this for the follow-up")
 
 	testkit.AssertEqual(t, "calls", len(fake.CreateCommentCalls), 1)
@@ -220,15 +233,17 @@ func TestComment_AFailedPostGivesTheTextBack(t *testing.T) {
 	}
 	app := commentApp(t, fake)
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
+	openComment(t, app)
 	typeComment(t, app, "worth keeping")
 
-	if !app.detailView.Composing() {
-		t.Fatal("a failed post should reopen the composer")
+	if !app.input.IsVisible() {
+		t.Fatal("a failed post should ask again")
 	}
-	testkit.AssertEqual(t, "text", app.detailView.ComposerText(), "worth keeping")
-	testkit.AssertEqual(t, "parent", app.detailView.ComposerParent(), testThreadRoot)
+	testkit.AssertEqual(t, "text", app.input.Value(), "worth keeping")
+	if app.pendingComment == nil {
+		t.Fatal("the reopened popup should still know where the comment goes")
+	}
+	testkit.AssertEqual(t, "parent", app.pendingComment.target.ParentID, testThreadRoot)
 	if got := plain(app.helpBar.View()); !strings.Contains(got, "network is unreachable") {
 		t.Errorf("help bar = %q, want the failure", got)
 	}
@@ -246,8 +261,8 @@ func TestComment_IsRefusedWhileAnotherWriteRuns(t *testing.T) {
 	_, cmd := app.Update(runeKey(commentKey))
 	runAll(t, app, cmd)
 
-	if app.detailView.Composing() {
-		t.Error("a write in flight should keep the composer shut")
+	if app.input.IsVisible() {
+		t.Error("a write in flight should keep the popup shut")
 	}
 	if got := plain(app.helpBar.View()); !strings.Contains(got, verbMerge) {
 		t.Errorf("help bar = %q, want it to name the running write", got)
@@ -271,7 +286,9 @@ func TestComment_EditorTextIsPostedAndTheFileKeptOnFailure(t *testing.T) {
 	}
 
 	_, cmd := app.Update(commentEditedMsg{
-		key: testPRKey, parentID: testThreadRoot, path: path, err: nil,
+		key:    testPRKey,
+		target: views.CommentTarget{ParentID: testThreadRoot, Anchor: nil, Title: "Reply"},
+		path:   path, err: nil,
 	})
 	runAll(t, app, cmd)
 
@@ -300,7 +317,9 @@ func TestComment_AnEmptyEditorFileDiscardsTheComment(t *testing.T) {
 	}
 
 	_, cmd := app.Update(commentEditedMsg{
-		key: testPRKey, parentID: testThreadRoot, path: path, err: nil,
+		key:    testPRKey,
+		target: views.CommentTarget{ParentID: testThreadRoot, Anchor: nil, Title: "Reply"},
+		path:   path, err: nil,
 	})
 	runAll(t, app, cmd)
 
@@ -319,8 +338,7 @@ func TestComment_PostedReplyKeepsTheDiffMarkers(t *testing.T) {
 	stubCreateComment(fake)
 	app := commentApp(t, fake)
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
+	openComment(t, app)
 	typeComment(t, app, "one more thing")
 
 	// The diff's markers are rebuilt from the threads the reply joined. They
@@ -337,8 +355,7 @@ func TestComment_HelpBarShowsTheComposerKeysWhileItIsOpen(t *testing.T) {
 	fake := &bitbuckettest.FakeClient{T: t}
 	app := commentApp(t, fake)
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
+	openComment(t, app)
 	_ = app.View()
 
 	got := plain(app.helpBar.View())
@@ -366,8 +383,7 @@ func TestDemo_ReplyIsWrittenAndReadBackInTheThread(t *testing.T) {
 	rootID := before[0].Root.ID
 	replies := len(before[0].Replies)
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
+	openComment(t, app)
 	typeComment(t, app, "one more round and this is good")
 
 	// Through the real client, the real routes and the real thread rebuild.
@@ -401,33 +417,32 @@ func TestDemo_ReplyIsRefusedInReadOnlyMode(t *testing.T) {
 	_, cmd := app.Update(runeKey(commentKey))
 	runAll(t, app, cmd)
 
-	if app.detailView.Composing() {
-		t.Error("browse-only mode must not open the composer")
+	if app.input.IsVisible() {
+		t.Error("browse-only mode must not open the popup")
 	}
 }
 
-func TestComment_ACustomCommandDoesNotFireFromInsideTheComposer(t *testing.T) {
+func TestComment_ACustomCommandDoesNotFireFromInsideThePopup(t *testing.T) {
 	t.Parallel()
 	fake := &bitbuckettest.FakeClient{T: t}
 	app := commentApp(t, fake)
 	// A custom command on a letter and on the editor key: custom commands
-	// override built-in bindings, but not the composer, which is text.
+	// override built-in bindings, but never the popup, which is text.
 	app.cfg.CustomCommands = []config.CustomCommandConfig{
 		{Key: "x", Name: "Say hello", Contexts: []string{"detail"}, Command: "echo hello"},
 		{Key: "ctrl+e", Name: "Open in nvim", Contexts: []string{"detail"}, Command: "echo nvim"},
 	}
 	app.initCustomCommands()
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
-	_, cmd = app.Update(runeKey('x'))
+	openComment(t, app)
+	_, cmd := app.Update(runeKey('x'))
 
 	if cmd != nil {
-		t.Errorf("a custom command fired from inside the composer: %T", cmd())
+		t.Errorf("a custom command fired from inside the popup: %T", cmd())
 	}
-	testkit.AssertEqual(t, "text", app.detailView.ComposerText(), "x")
-	if !app.detailView.Composing() {
-		t.Error("the composer should still be open")
+	testkit.AssertEqual(t, "text", app.input.Value(), "x")
+	if !app.input.IsVisible() {
+		t.Error("the popup should still be open")
 	}
 }
 
@@ -461,11 +476,7 @@ func TestComment_InlineCommentCarriesTheLineUnderTheCursor(t *testing.T) {
 	// is anchored to as well, so this is also a second conversation on it.
 	app := diffCommentApp(t, fake, 5)
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
-	if !app.detailView.Composing() {
-		t.Fatal("C should open the composer inside a file diff")
-	}
+	openComment(t, app)
 	typeComment(t, app, "off by one?")
 
 	if len(fake.CreateCommentCalls) != 1 {
@@ -497,8 +508,7 @@ func TestComment_InlineCommentLeavesTheReaderInTheDiff(t *testing.T) {
 	app := diffCommentApp(t, fake, 4)
 	lineBefore, _ := app.detailView.SelectedDiffLine()
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
+	openComment(t, app)
 	typeComment(t, app, "this reads better as a guard clause")
 
 	testkit.AssertEqual(t, "mode", app.detailView.Mode(), views.ModeFileDiff)
@@ -524,8 +534,7 @@ func TestComment_ARemovedLineAnchorsToTheOldSide(t *testing.T) {
 	// Row 3 is the removed line, old-side 12.
 	app := diffCommentApp(t, fake, 3)
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
+	openComment(t, app)
 	typeComment(t, app, "why did this go?")
 
 	create := fake.CreateCommentCalls[0].Create
@@ -539,8 +548,7 @@ func TestComment_AHunkHeaderAnchorsToTheFile(t *testing.T) {
 	stubCreateComment(fake)
 	app := diffCommentApp(t, fake, 0)
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
+	openComment(t, app)
 	typeComment(t, app, "this whole hunk wants a test")
 
 	create := fake.CreateCommentCalls[0].Create
@@ -558,8 +566,7 @@ func TestComment_TheFilesTabCommentsOnTheSelectedFile(t *testing.T) {
 	runAll(t, app, app.jumpToTab(views.TabFiles))
 	_ = app.detailView.View()
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
+	openComment(t, app)
 	typeComment(t, app, "worth splitting this file")
 
 	create := fake.CreateCommentCalls[0].Create
@@ -579,19 +586,17 @@ func TestComment_AFailedInlinePostKeepsTheAnchor(t *testing.T) {
 	}
 	app := diffCommentApp(t, fake, 4)
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
+	openComment(t, app)
 	typeComment(t, app, "worth keeping")
 
-	if !app.detailView.Composing() {
-		t.Fatal("a failed post should reopen the composer")
+	if !app.input.IsVisible() {
+		t.Fatal("a failed post should ask again")
 	}
-	anchor := app.detailView.ComposerAnchor()
-	if anchor == nil {
-		t.Fatal("the reopened composer should still know where the comment goes")
+	if app.pendingComment == nil || app.pendingComment.target.Anchor == nil {
+		t.Fatal("the reopened popup should still know where the comment goes")
 	}
-	testkit.AssertEqual(t, "line", anchor.Line, 12)
-	testkit.AssertEqual(t, "text", app.detailView.ComposerText(), "worth keeping")
+	testkit.AssertEqual(t, "line", app.pendingComment.target.Anchor.Line, 12)
+	testkit.AssertEqual(t, "text", app.input.Value(), "worth keeping")
 }
 
 func TestDemo_InlineCommentIsWrittenAndMarksTheLine(t *testing.T) {
@@ -610,8 +615,7 @@ func TestDemo_InlineCommentIsWrittenAndMarksTheLine(t *testing.T) {
 		t.Fatal("the diff should have a line under the cursor")
 	}
 
-	_, cmd := app.Update(runeKey(commentKey))
-	runAll(t, app, cmd)
+	openComment(t, app)
 	typeComment(t, app, "is this still needed?")
 
 	// Through the real routes: the server anchored it, and the thread it built
@@ -632,4 +636,79 @@ func TestDemo_InlineCommentIsWrittenAndMarksTheLine(t *testing.T) {
 		t.Fatal("the written comment is not in the thread list")
 	}
 	testkit.AssertEqual(t, "mode", app.detailView.Mode(), views.ModeFileDiff)
+}
+
+// commentTempFiles lists the comment temp files the app has written into dir.
+func commentTempFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, "lazybitbucket-*-comment-*.md"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	return matches
+}
+
+func TestComment_CtrlEHandsThePopupsTextToTheEditor(t *testing.T) {
+	// No t.Parallel: the temp directory is where the hand-off is observed, and
+	// it is set through the environment.
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	fake := &bitbuckettest.FakeClient{T: t}
+	app := commentApp(t, fake)
+	app.cfg.Editor = testEditor
+
+	openComment(t, app)
+	for _, r := range "a longer thought" {
+		key := runeKey(r)
+		if r == ' ' {
+			key = tea.KeyMsg{Type: tea.KeySpace}
+		}
+		app.Update(key)
+	}
+
+	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
+
+	if cmd == nil {
+		t.Fatal("ctrl+e should suspend into the editor")
+	}
+	if app.input.IsVisible() {
+		t.Error("the popup closes while the editor has the terminal")
+	}
+	if app.pendingComment != nil {
+		t.Error("the popup is no longer the thing writing the comment")
+	}
+
+	// The text went with it: the editor opens on what was already typed.
+	files := commentTempFiles(t, tmp)
+	if len(files) != 1 {
+		t.Fatalf("temp files = %v, want exactly one", files)
+	}
+	body, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatalf("read the temp file: %v", err)
+	}
+	testkit.AssertEqual(t, "temp file", string(body), "a longer thought")
+}
+
+func TestComment_TheTitleEditorKeepsCtrlEAsEndOfLine(t *testing.T) {
+	// No t.Parallel: see above.
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	fake := &bitbuckettest.FakeClient{T: t}
+	app := commentApp(t, fake)
+	app.cfg.Editor = testEditor
+
+	// The same popup widget, opened for a title: ctrl+e is readline's
+	// end-of-line there and must go on meaning that.
+	runAll(t, app, app.editTitle(testPRKey))
+	app.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
+
+	if !app.input.IsVisible() {
+		t.Error("the title editor should still be open")
+	}
+	if files := commentTempFiles(t, tmp); len(files) != 0 {
+		t.Errorf("the title editor handed off to an editor: %v", files)
+	}
 }

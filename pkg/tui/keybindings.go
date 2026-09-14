@@ -319,12 +319,6 @@ func (a *App) helpBarItems() []components.HelpItem {
 	km := a.keymap
 
 	switch {
-	case a.detailView.Composing():
-		return []components.HelpItem{
-			{Key: "enter", Description: "send"},
-			{Key: "ctrl+e", Description: "editor"},
-			{Key: "esc", Description: "cancel"},
-		}
 	case a.showHelp:
 		return []components.HelpItem{
 			{Key: "/", Description: "filter"},
@@ -344,6 +338,10 @@ func (a *App) helpBarItems() []components.HelpItem {
 			{Key: "esc", Description: "cancel"},
 		}
 	case a.input.IsVisible():
+		// The comment popup answers one key the title editor does not.
+		if a.pendingComment != nil {
+			return commentHelpBarItems()
+		}
 		return []components.HelpItem{
 			{Key: "enter", Description: "confirm"},
 			{Key: "esc", Description: "cancel"},

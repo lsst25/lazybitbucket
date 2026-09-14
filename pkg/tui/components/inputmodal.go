@@ -62,6 +62,10 @@ func (m *InputModal) SetHints(hints []string) {
 	m.hintCursor = 0
 }
 
+// Value is what has been typed so far, which is what a caller needs to hand the
+// text to something else — the comment composer's editor hand-off does.
+func (m *InputModal) Value() string { return string(m.text) }
+
 func (m *InputModal) Hide()           { m.visible = false }
 func (m *InputModal) IsVisible() bool { return m.visible }
 func (m *InputModal) HasHints() bool  { return len(m.hints) > 0 }

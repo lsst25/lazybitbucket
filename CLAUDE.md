@@ -108,16 +108,19 @@ What exists:
   `ModeThread` (`detail_threads.go`): `enter` opens one conversation in the panel as scrolling text
   — no modal — keyed by the root comment id and looked up in the thread list on every render, so a
   refetch changes what is read rather than leaving a stale copy and a thread that is gone says so.
-  `backspace` returns to the tab with the cursor on it. `C` writes a comment there and on the
-  Comments and Overview tabs (`comments.go`, `views/detail_composer.go`): a one-line composer docked
-  under the body rather than a dialog — it owns the keyboard while it is open, `enter` sends, `esc`
-  drops it, `ctrl+e` hands the text to `config.ResolveEditor()` through a temp `.md` the way the
-  description editor does. The parent is resolved from the mode and the tab (the open thread, the
-  thread under the cursor, the diff line under the cursor — added and context lines are the new
-  side, a removed line the old, a hunk header the file — or none for a comment on the pull request);
-  the 201 is folded into
+  `backspace` returns to the tab with the cursor on it. `C` writes a comment there, on the
+  Comments, Overview and Files tabs and in a file diff (`comments.go`, `views/detail_comment.go`):
+  it opens the same `components.InputModal` the title editor does, titled with what the comment
+  answers or hangs off, and what is confirmed is posted. The panel owns only the target
+  (`views.CommentTarget{ParentID, Anchor, Title}`, resolved from the mode and the tab: the open
+  thread, the thread under the cursor, the selected file, the diff line under the cursor — added and
+  context lines are the new side, a removed line the old, a hunk header the file — or none for a
+  comment on the pull request); the app holds it in `pendingComment` while the popup is open. `ctrl+e`
+  hands the text to `config.ResolveEditor()` through a temp `.md` the way the description editor
+  does, and is answered in `Update` **before** `overlays.Intercept` because the input modal reads
+  ctrl+e as end-of-line — which it goes on meaning for the title editor. The 201 is folded into
   `threadsCache` with `bitbucket.AppendComment` and pushed to the view, so nothing is refetched; a
-  failed post hands the text back to the box, or leaves it in the editor's file and names it. An
+  failed post asks again with the text prefilled, or leaves it in the editor's file and names it. An
   inline comment leaves the panel in the diff with its `●` marker lit up rather than opening the
   thread it made, because a review is a pass down a file. It is the one write `writeTargetInState`
   does not require an `OPEN` pull request for.

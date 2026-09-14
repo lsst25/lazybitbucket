@@ -9,19 +9,21 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
+	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
-// Writing a comment is the seventh write action and the only one without a
-// dialog: C opens the composer docked in the detail panel (views/composer), and
-// what the composer sends is the confirmation. The guards are the same as every
+// Writing a comment is the seventh write action, and it asks the way the title
+// editor asks: C opens the same InputModal, titled with what the comment will
+// answer or hang off, and what is confirmed there is sent. The guards are every
 // other write's — nothing selected, read-only mode, another overlay, another
 // write in flight — with one deliberate difference: a comment is not refused on
 // a merged or declined pull request, because a conversation outlives the branch.
 //
-// Where the comment lands is the view's to decide and travels with the text: a
-// reply carries the comment it answers, an inline comment the file and line it
-// hangs off, a comment on the pull request neither.
+// Where the comment lands is the detail panel's to decide (views.CommentTarget)
+// and is held here while the popup is open: a reply carries the comment it
+// answers, an inline comment the file and line it hangs off, a comment on the
+// pull request neither.
 //
 // What comes back is applied optimistically. Bitbucket answers the POST with
 // the created comment, rendering included, so the thread it belongs to is
@@ -32,52 +34,65 @@ import (
 // verbs it appears in the refusal, the in-flight guard and the failure line.
 const verbComment = "comment"
 
-// commentEditorHint is what the help bar says while the composer is open, so
-// the three ways out are not only under the input.
+// commentEditorHint is what the help bar says while the popup is open, so the
+// way out to a real editor is not a secret.
 const commentEditorHint = "enter to send · ctrl+e for the editor · esc to cancel"
 
-// commentPostedMsg carries a written comment back. parentID and text are echoed
-// so a failure can hand the reply back to the composer exactly as it was typed,
-// and tmpPath names the file an editor-composed reply is still sitting in.
+// pendingComment is the comment the open popup is writing: which pull request
+// it is for and where in it the comment goes, so a failure — or the hand-off to
+// an editor — can ask exactly the same question again.
+type pendingComment struct {
+	key    string
+	target views.CommentTarget
+}
+
+// commentPostedMsg carries a written comment back. The target and the text are
+// echoed so a failure can ask again with what was typed, and tmpPath names the
+// file an editor-composed comment is still sitting in.
 type commentPostedMsg struct {
-	key      string
-	parentID int64
-	anchor   *bitbucket.CommentAnchor
-	text     string
-	tmpPath  string
-	comment  *bitbucket.Comment
-	err      error
+	key     string
+	target  views.CommentTarget
+	text    string
+	tmpPath string
+	comment *bitbucket.Comment
+	err     error
 }
 
 // commentEditedMsg is the editor exiting on a comment composed outside the app.
 type commentEditedMsg struct {
-	key      string
-	parentID int64
-	anchor   *bitbucket.CommentAnchor
-	path     string
-	err      error
+	key    string
+	target views.CommentTarget
+	path   string
+	err    error
 }
 
-// handleActionComment opens the composer on whatever the panel is showing. It
-// is the C key's whole job: nothing is written until the composer says so.
+// handleActionComment opens the popup on whatever the panel is showing. It is
+// the C key's whole job: nothing is written until the popup is confirmed.
 func (a *App) handleActionComment() tea.Cmd {
 	pr, ok := a.commentTarget()
 	if !ok {
 		return nil
 	}
-
-	// The composer lives in the detail panel, so the panel has to be the thing
-	// with the keyboard before there is anywhere to type.
-	var cmd tea.Cmd
-	if a.side != sideRight {
-		cmd = a.focusDetail()
-	}
-	if !a.detailView.BeginComment() {
+	target, ok := a.detailView.CommentTarget()
+	if !ok {
 		a.helpBar.SetStatusMsg("nothing to comment on here (#" + strconv.Itoa(pr.ID) + ")")
-		return cmd
+		return nil
 	}
+	a.askForComment(pr.Key(), target, "")
+	return nil
+}
+
+// askForComment opens the input popup on a target, prefilled with text — empty
+// for a new comment, and what was typed when a failed post asks again.
+func (a *App) askForComment(key string, target views.CommentTarget, text string) {
+	a.pendingComment = &pendingComment{key: key, target: target}
+	a.onInput = func(confirmed string) tea.Cmd {
+		a.pendingComment = nil
+		return a.postComment(commentWrite{key: key, target: target, text: confirmed, tmpPath: ""})
+	}
+	a.input.SetSize(a.width, a.height)
+	a.input.Show(target.Title, text)
 	a.helpBar.SetStatusMsg(commentEditorHint)
-	return cmd
 }
 
 // commentTarget is writeTarget for the one write a closed pull request still
@@ -86,31 +101,39 @@ func (a *App) commentTarget() (*bitbucket.PullRequest, bool) {
 	return a.writeTargetInState(verbComment, false)
 }
 
-// handleCommentSubmitted posts what the composer sent.
-func (a *App) handleCommentSubmitted(msg views.CommentSubmittedMsg) (tea.Model, tea.Cmd) {
-	return a, a.postComment(commentWrite{
-		key: msg.PullRequestKey, parentID: msg.ParentID, anchor: msg.Anchor,
-		text: msg.Text, tmpPath: "",
-	})
+// commentInputKey answers ctrl+e inside the comment popup: the way out to a
+// real editor for a comment that wants paragraphs. It runs before the overlay
+// stack sees the key, because the input modal reads ctrl+e as "end of line" —
+// which is what it has to keep meaning for the title editor.
+func (a *App) commentInputKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+	if msg.Type != tea.KeyCtrlE || a.pendingComment == nil || !a.input.IsVisible() {
+		return nil, false
+	}
+	pending := a.pendingComment
+	text := a.input.Value()
+
+	a.input.Hide()
+	a.clearOverlayCallbacks()
+
+	_, cmd := a.composeCommentInEditor(pending.key, pending.target, text)
+	return cmd, true
 }
 
 // commentWrite is one comment on its way to Bitbucket: what to say, where it
 // belongs, and the editor file it is still recoverable from.
 type commentWrite struct {
-	key      string
-	parentID int64
-	anchor   *bitbucket.CommentAnchor
-	text     string
+	key    string
+	target views.CommentTarget
+	text   string
 	// tmpPath is the file an editor-composed comment was written in, kept until
 	// the post succeeds so a failure never costs the text. It is empty for one
-	// typed in the composer, which is handed back to the composer instead.
+	// typed in the popup, which is asked again instead.
 	tmpPath string
 }
 
 // postComment writes one comment.
 func (a *App) postComment(write commentWrite) tea.Cmd {
-	key, parentID, anchor := write.key, write.parentID, write.anchor
-	text, tmpPath := write.text, write.tmpPath
+	key, target, text, tmpPath := write.key, write.target, write.text, write.tmpPath
 	pr := a.pullRequestByKey(key)
 	if pr == nil || strings.TrimSpace(text) == "" {
 		a.discardCommentTempFile(tmpPath)
@@ -128,7 +151,9 @@ func (a *App) postComment(write commentWrite) tea.Cmd {
 
 	ctx, client := a.context(), a.client
 	workspace, slug, id := pr.Workspace(), pr.RepoSlug(), pr.ID
-	create := bitbucket.CommentCreate{Raw: text, ParentID: parentID, Anchor: anchor}
+	create := bitbucket.CommentCreate{
+		Raw: text, ParentID: target.ParentID, Anchor: target.Anchor,
+	}
 
 	a.beginWrite(key, verbComment)
 	a.helpBar.SetStatusMsg("posting a comment on #" + strconv.Itoa(id) + "…")
@@ -136,7 +161,7 @@ func (a *App) postComment(write commentWrite) tea.Cmd {
 	return func() tea.Msg {
 		comment, err := client.CreateComment(ctx, workspace, slug, id, create)
 		return commentPostedMsg{
-			key: key, parentID: parentID, anchor: anchor, text: text, tmpPath: tmpPath,
+			key: key, target: target, text: text, tmpPath: tmpPath,
 			comment: comment, err: err,
 		}
 	}
@@ -162,7 +187,7 @@ func (a *App) handleCommentPosted(msg commentPostedMsg) (tea.Model, tea.Cmd) {
 		// Nothing to fold it into: the Comments tab has not been read on this
 		// pull request, so the comment is on the server and the next entry to
 		// the tab fetches it with everything else.
-		a.helpBar.SetStatusMsg(commentDoneText(msg.parentID, msg.anchor))
+		a.helpBar.SetStatusMsg(commentDoneText(msg.target))
 		return a, nil
 	}
 
@@ -179,21 +204,22 @@ func (a *App) handleCommentPosted(msg commentPostedMsg) (tea.Model, tea.Cmd) {
 	// lights up the marker on the line the cursor is still sitting on — being
 	// thrown out of the diff halfway through reading it would be the opposite
 	// of helpful.
-	if msg.parentID == 0 && msg.anchor == nil && a.detailView.PullRequestKey() == msg.key {
+	if msg.target.ParentID == 0 && msg.target.Anchor == nil &&
+		a.detailView.PullRequestKey() == msg.key {
 		a.detailView.FocusThread(msg.comment.ID)
 	}
-	a.helpBar.SetStatusMsg(commentDoneText(msg.parentID, msg.anchor))
+	a.helpBar.SetStatusMsg(commentDoneText(msg.target))
 	return a, nil
 }
 
 // commentDoneText is the line a written comment leaves behind. An inline one
 // names where it landed: the reader stays in the diff, where a new marker on
 // one line is easy to miss.
-func commentDoneText(parentID int64, anchor *bitbucket.CommentAnchor) string {
-	if parentID != 0 {
+func commentDoneText(target views.CommentTarget) string {
+	if target.ParentID != 0 {
 		return "reply posted"
 	}
-	if where := commentAnchorText(anchor); where != "" {
+	if where := commentAnchorText(target.Anchor); where != "" {
 		return "comment posted on " + where
 	}
 	return "comment posted"
@@ -211,9 +237,9 @@ func commentAnchorText(anchor *bitbucket.CommentAnchor) string {
 	}
 }
 
-// noteCommentFailure says what went wrong and gives the text back. A reply
-// typed in the composer goes back into the composer; one composed in the editor
-// stays in its file, and the message says where, because a paragraph of
+// noteCommentFailure says what went wrong and gives the text back. A comment
+// typed in the popup is asked again, prefilled with it; one composed in the
+// editor stays in its file, and the message says where, because a paragraph of
 // Markdown does not belong in a one-line input.
 func (a *App) noteCommentFailure(msg commentPostedMsg) tea.Cmd {
 	reason := verbComment + " failed: " + a.writeErrorText(verbComment, msg.err)
@@ -225,42 +251,44 @@ func (a *App) noteCommentFailure(msg commentPostedMsg) tea.Cmd {
 		a.helpBar.SetStatusMsg(reason + " — your text is in " + msg.tmpPath)
 		return nil
 	}
-	a.helpBar.SetStatusMsg(reason)
-	if a.detailView.PullRequestKey() == msg.key {
-		a.detailView.ResumeComment(msg.parentID, msg.anchor, msg.text)
+	// Asking again is only possible if nothing else has taken the screen in the
+	// meantime; a dialog the user opened while the post was in flight is not
+	// something to shove aside.
+	if !a.overlayVisible() {
+		a.askForComment(msg.key, msg.target, msg.text)
 	}
+	a.helpBar.SetStatusMsg(reason)
 	return nil
 }
 
-// handleComposeCommentInEditor takes the composer's text out to the configured
-// editor. It is the same hand-off the description editor makes: a temp file,
-// tea.ExecProcess, and the file read back when the editor exits.
-func (a *App) handleComposeCommentInEditor(msg views.ComposeCommentInEditorMsg) (tea.Model, tea.Cmd) {
-	pr := a.pullRequestByKey(msg.PullRequestKey)
+// composeCommentInEditor takes the text out to the configured editor. It is the
+// same hand-off the description editor makes: a temp file, tea.ExecProcess, and
+// the file read back when the editor exits.
+func (a *App) composeCommentInEditor(
+	key string, target views.CommentTarget, text string,
+) (tea.Model, tea.Cmd) {
+	pr := a.pullRequestByKey(key)
 	if pr == nil {
 		return a, nil
 	}
 
-	path, err := writeCommentTempFile(pr.RepoSlug(), pr.ID, msg.Text)
+	path, err := writeCommentTempFile(pr.RepoSlug(), pr.ID, text)
 	if err != nil {
 		a.statusPanel.SetError(verbComment + ": " + err.Error())
-		a.detailView.ResumeComment(msg.ParentID, msg.Anchor, msg.Text)
+		a.askForComment(key, target, text)
 		return a, nil
 	}
 	cmd, err := a.buildTempFileEditorCmd(path)
 	if err != nil {
 		_ = os.Remove(path)
 		a.statusPanel.SetError(err.Error())
-		a.detailView.ResumeComment(msg.ParentID, msg.Anchor, msg.Text)
+		a.askForComment(key, target, text)
 		return a, nil
 	}
 
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return a, tea.ExecProcess(cmd, func(execErr error) tea.Msg {
-		return commentEditedMsg{
-			key: msg.PullRequestKey, parentID: msg.ParentID, anchor: msg.Anchor,
-			path: path, err: execErr,
-		}
+		return commentEditedMsg{key: key, target: target, path: path, err: execErr}
 	})
 }
 
@@ -290,8 +318,7 @@ func (a *App) handleCommentEdited(msg commentEditedMsg) (tea.Model, tea.Cmd) {
 	}
 
 	post := a.postComment(commentWrite{
-		key: msg.key, parentID: msg.parentID, anchor: msg.anchor,
-		text: string(body), tmpPath: msg.path,
+		key: msg.key, target: msg.target, text: string(body), tmpPath: msg.path,
 	})
 	if post != nil {
 		cmds = append(cmds, post)
@@ -299,7 +326,7 @@ func (a *App) handleCommentEdited(msg commentEditedMsg) (tea.Model, tea.Cmd) {
 	return a, tea.Batch(cmds...)
 }
 
-// writeCommentTempFile puts a reply somewhere an editor can open it. The name
+// writeCommentTempFile puts a comment somewhere an editor can open it. The name
 // carries the repository and the id, so a file left behind by a failed post
 // says what it was.
 func writeCommentTempFile(slug string, id int, body string) (string, error) {
@@ -324,4 +351,14 @@ func (a *App) discardCommentTempFile(path string) {
 		return
 	}
 	_ = os.Remove(path)
+}
+
+// commentHelpBarItems is the popup's own help strip: the title editor's two
+// keys, plus the editor hand-off this popup adds.
+func commentHelpBarItems() []components.HelpItem {
+	return []components.HelpItem{
+		{Key: "enter", Description: "send"},
+		{Key: "ctrl+e", Description: "editor"},
+		{Key: "esc", Description: "cancel"},
+	}
 }
