@@ -173,3 +173,102 @@ func TestServer_CreateCommentOnAnUnknownPullRequest(t *testing.T) {
 
 	testkit.AssertEqual(t, "status", got.Status, http.StatusNotFound)
 }
+
+// inlineCommentDocument is a request body anchoring a comment to a file, and to
+// a line of it when line is not zero.
+func inlineCommentDocument(raw, path string, line int, oldSide bool) json.RawMessage {
+	body := `{"content":{"raw":` + mustQuote(raw) + `},"inline":{"path":` + mustQuote(path)
+	switch {
+	case line == 0:
+	case oldSide:
+		body += `,"from":` + itoa64(int64(line))
+	default:
+		body += `,"to":` + itoa64(int64(line))
+	}
+	return json.RawMessage(body + "}}")
+}
+
+func TestServer_CreateCommentAnchorsToALine(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+
+	got := postJSON(t, server.URL+commentsPath(repoAPIGateway, 103),
+		inlineCommentDocument("is this still needed?", "internal/upstream/retry.go", 42, false), nil)
+
+	testkit.AssertEqual(t, "status", got.Status, http.StatusCreated)
+	created := decodeJSON[bitbucket.Comment](t, got.Body)
+	if created.Inline == nil {
+		t.Fatal("the created comment should carry its anchor")
+	}
+	testkit.AssertEqual(t, "path", created.Inline.Path, "internal/upstream/retry.go")
+	line, newSide, ok := created.Inline.Line()
+	testkit.AssertEqual(t, "anchored", ok, true)
+	testkit.AssertEqual(t, "line", line, 42)
+	testkit.AssertEqual(t, "new side", newSide, true)
+	// links.code is the diff anchor, and only an inline comment has one.
+	if created.Links.Code.Href == "" {
+		t.Error("an inline comment should carry its diff link")
+	}
+
+	// And it is in the list, anchored, so a client that refetches sees the same.
+	page := decodeJSON[listPage[bitbucket.Comment]](t, getOK(t, server, commentsPath(repoAPIGateway, 103)))
+	for _, comment := range page.Values {
+		if comment.ID == created.ID && comment.Inline == nil {
+			t.Error("the stored comment lost its anchor")
+		}
+	}
+}
+
+func TestServer_CreateCommentAnchorsToTheOldSideAndToAWholeFile(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+
+	removed := decodeJSON[bitbucket.Comment](t, postJSON(t,
+		server.URL+commentsPath(repoAPIGateway, 103),
+		inlineCommentDocument("why did this go?", "internal/upstream/retry.go", 17, true), nil).Body)
+	line, newSide, ok := removed.Inline.Line()
+	testkit.AssertEqual(t, "anchored", ok, true)
+	testkit.AssertEqual(t, "line", line, 17)
+	testkit.AssertEqual(t, "old side", newSide, false)
+
+	whole := decodeJSON[bitbucket.Comment](t, postJSON(t,
+		server.URL+commentsPath(repoAPIGateway, 103),
+		inlineCommentDocument("this file wants a test", "internal/upstream/retry.go", 0, false), nil).Body)
+	if whole.Inline == nil {
+		t.Fatal("a file-level comment is still an inline comment")
+	}
+	if _, _, anchored := whole.Inline.Line(); anchored {
+		t.Error("a file-level comment should carry no line")
+	}
+}
+
+func TestServer_CreateCommentRefusesAnAnchorItCannotHonour(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	existing := decodeJSON[listPage[bitbucket.Comment]](t,
+		getOK(t, server, commentsPath(repoAPIGateway, 103)))
+
+	t.Run("no path", func(t *testing.T) {
+		t.Parallel()
+		got := postJSON(t, server.URL+commentsPath(repoAPIGateway, 103),
+			json.RawMessage(`{"content":{"raw":"here"},"inline":{"to":3}}`), nil)
+
+		testkit.AssertEqual(t, "status", got.Status, http.StatusBadRequest)
+		envelope := decodeJSON[errorBody](t, got.Body)
+		if messages := envelope.Error.Fields[fieldPath]; len(messages) == 0 {
+			t.Errorf("the refusal should name the path field: %s", got.Body)
+		}
+	})
+
+	t.Run("an anchored reply", func(t *testing.T) {
+		t.Parallel()
+		body := `{"content":{"raw":"here"},"parent":{"id":` +
+			itoa64(existing.Values[0].ID) + `},"inline":{"path":"a.go","to":3}}`
+		got := postJSON(t, server.URL+commentsPath(repoAPIGateway, 103), json.RawMessage(body), nil)
+
+		testkit.AssertEqual(t, "status", got.Status, http.StatusBadRequest)
+	})
+}

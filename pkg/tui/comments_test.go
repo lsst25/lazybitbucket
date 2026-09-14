@@ -430,3 +430,206 @@ func TestComment_ACustomCommandDoesNotFireFromInsideTheComposer(t *testing.T) {
 		t.Error("the composer should still be open")
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Inline comments
+// -----------------------------------------------------------------------------
+
+// diffCommentApp is an app inside one file's diff, threads loaded, with the
+// line cursor on row.
+func diffCommentApp(t *testing.T, fake *bitbuckettest.FakeClient, row int) *App {
+	t.Helper()
+	stubDiff(fake)
+	stubComments(fake)
+	stubDiffStat(fake)
+	app := reviewApp(t, fake)
+	runAll(t, app, app.jumpToTab(views.TabFiles))
+	_ = app.detailView.View()
+	runAll(t, app, app.openFileDiff(testFileGo))
+	_ = app.detailView.View()
+	for range row {
+		app.Update(runeKey('j'))
+	}
+	return app
+}
+
+func TestComment_InlineCommentCarriesTheLineUnderTheCursor(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	stubCreateComment(fake)
+	// Row 5 is the second added line, new-side 13 — the line the fixture thread
+	// is anchored to as well, so this is also a second conversation on it.
+	app := diffCommentApp(t, fake, 5)
+
+	_, cmd := app.Update(runeKey(commentKey))
+	runAll(t, app, cmd)
+	if !app.detailView.Composing() {
+		t.Fatal("C should open the composer inside a file diff")
+	}
+	typeComment(t, app, "off by one?")
+
+	if len(fake.CreateCommentCalls) != 1 {
+		t.Fatalf("CreateComment calls = %d, want 1", len(fake.CreateCommentCalls))
+	}
+	create := fake.CreateCommentCalls[0].Create
+	if create.Anchor == nil {
+		t.Fatal("an inline comment should carry an anchor")
+	}
+	testkit.AssertEqual(t, "path", create.Anchor.Path, testFileGo)
+	testkit.AssertEqual(t, "line", create.Anchor.Line, 13)
+	testkit.AssertEqual(t, "old side", create.Anchor.OldSide, false)
+	// A second conversation on the line, not a reply to the one already there.
+	testkit.AssertEqual(t, "parent", create.ParentID, int64(0))
+}
+
+func TestComment_InlineCommentLeavesTheReaderInTheDiff(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.CreateCommentFunc = func(_ context.Context, _, _ string, _ int,
+		create bitbucket.CommentCreate,
+	) (*bitbucket.Comment, error) {
+		comment := writtenComment(9600, 0, create.Raw)
+		line := create.Anchor.Line
+		comment.Inline = &bitbucket.CommentInline{Path: create.Anchor.Path, To: &line}
+		return comment, nil
+	}
+	// Row 4 is the first added line, new-side 12, which carries no thread yet.
+	app := diffCommentApp(t, fake, 4)
+	lineBefore, _ := app.detailView.SelectedDiffLine()
+
+	_, cmd := app.Update(runeKey(commentKey))
+	runAll(t, app, cmd)
+	typeComment(t, app, "this reads better as a guard clause")
+
+	testkit.AssertEqual(t, "mode", app.detailView.Mode(), views.ModeFileDiff)
+	testkit.AssertEqual(t, "file", app.detailView.FileDiffPath(), testFileGo)
+	lineAfter, _ := app.detailView.SelectedDiffLine()
+	testkit.AssertEqual(t, "the cursor has not moved", lineAfter.NewNo, lineBefore.NewNo)
+	// The marker on that line lights up from the thread the comment created.
+	if got := app.commentMarkers(testPRKey, testFileGo)[12]; got != 1 {
+		t.Errorf("markers for line 12 = %d, want 1", got)
+	}
+	if !strings.Contains(plain(app.detailView.View()), "●") {
+		t.Error("the new comment should be marked in the diff")
+	}
+	if got := plain(app.helpBar.View()); !strings.Contains(got, testFileGo+":12") {
+		t.Errorf("help bar = %q, want it to name where the comment landed", got)
+	}
+}
+
+func TestComment_ARemovedLineAnchorsToTheOldSide(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	stubCreateComment(fake)
+	// Row 3 is the removed line, old-side 12.
+	app := diffCommentApp(t, fake, 3)
+
+	_, cmd := app.Update(runeKey(commentKey))
+	runAll(t, app, cmd)
+	typeComment(t, app, "why did this go?")
+
+	create := fake.CreateCommentCalls[0].Create
+	testkit.AssertEqual(t, "line", create.Anchor.Line, 12)
+	testkit.AssertEqual(t, "old side", create.Anchor.OldSide, true)
+}
+
+func TestComment_AHunkHeaderAnchorsToTheFile(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	stubCreateComment(fake)
+	app := diffCommentApp(t, fake, 0)
+
+	_, cmd := app.Update(runeKey(commentKey))
+	runAll(t, app, cmd)
+	typeComment(t, app, "this whole hunk wants a test")
+
+	create := fake.CreateCommentCalls[0].Create
+	testkit.AssertEqual(t, "path", create.Anchor.Path, testFileGo)
+	testkit.AssertEqual(t, "line", create.Anchor.Line, 0)
+}
+
+func TestComment_TheFilesTabCommentsOnTheSelectedFile(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	stubCreateComment(fake)
+	stubDiffStat(fake)
+	stubComments(fake)
+	app := reviewApp(t, fake)
+	runAll(t, app, app.jumpToTab(views.TabFiles))
+	_ = app.detailView.View()
+
+	_, cmd := app.Update(runeKey(commentKey))
+	runAll(t, app, cmd)
+	typeComment(t, app, "worth splitting this file")
+
+	create := fake.CreateCommentCalls[0].Create
+	testkit.AssertEqual(t, "path", create.Anchor.Path, testFileGo)
+	testkit.AssertEqual(t, "line", create.Anchor.Line, 0)
+	// And the Files tab is still what is on screen.
+	testkit.AssertEqual(t, "tab", app.detailView.ActiveTab(), views.TabFiles)
+}
+
+func TestComment_AFailedInlinePostKeepsTheAnchor(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	fake.CreateCommentFunc = func(context.Context, string, string, int,
+		bitbucket.CommentCreate,
+	) (*bitbucket.Comment, error) {
+		return nil, errors.New("that line is no longer part of the diff")
+	}
+	app := diffCommentApp(t, fake, 4)
+
+	_, cmd := app.Update(runeKey(commentKey))
+	runAll(t, app, cmd)
+	typeComment(t, app, "worth keeping")
+
+	if !app.detailView.Composing() {
+		t.Fatal("a failed post should reopen the composer")
+	}
+	anchor := app.detailView.ComposerAnchor()
+	if anchor == nil {
+		t.Fatal("the reopened composer should still know where the comment goes")
+	}
+	testkit.AssertEqual(t, "line", anchor.Line, 12)
+	testkit.AssertEqual(t, "text", app.detailView.ComposerText(), "worth keeping")
+}
+
+func TestDemo_InlineCommentIsWrittenAndMarksTheLine(t *testing.T) {
+	t.Parallel()
+	app := demoReviewApp(t, demoPRKey103)
+	runAll(t, app, app.jumpToTab(views.TabFiles))
+	_ = app.detailView.View()
+	file := app.detailView.DiffStat()[0].Path()
+	runAll(t, app, app.openFileDiff(file))
+	_ = app.detailView.View()
+
+	// Walk to the first row that is a line of the file rather than a header.
+	app.Update(runeKey('j'))
+	line, ok := app.detailView.SelectedDiffLine()
+	if !ok {
+		t.Fatal("the diff should have a line under the cursor")
+	}
+
+	_, cmd := app.Update(runeKey(commentKey))
+	runAll(t, app, cmd)
+	typeComment(t, app, "is this still needed?")
+
+	// Through the real routes: the server anchored it, and the thread it built
+	// hangs off the file the reader is looking at.
+	found := false
+	for _, thread := range app.detailView.Threads() {
+		if thread.Root.Content.Raw == "is this still needed?" {
+			found = true
+			testkit.AssertEqual(t, "path", thread.Path(), file)
+			anchored, _, hasLine := thread.Root.Inline.Line()
+			if !hasLine {
+				t.Fatal("the written comment should be anchored to a line")
+			}
+			testkit.AssertEqual(t, "line", anchored, max(line.NewNo, line.OldNo))
+		}
+	}
+	if !found {
+		t.Fatal("the written comment is not in the thread list")
+	}
+	testkit.AssertEqual(t, "mode", app.detailView.Mode(), views.ModeFileDiff)
+}

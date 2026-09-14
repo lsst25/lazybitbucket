@@ -168,3 +168,101 @@ func TestCreateComment_ReportsTheServersRefusal(t *testing.T) {
 	testkit.AssertEqual(t, "status", apiErr.Status, http.StatusNotFound)
 	testkit.AssertEqual(t, "message", apiErr.UserMessage(), "No such comment on this pull request.")
 }
+
+func TestCreateComment_AnchorsToALineOfAFile(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		anchor  CommentAnchor
+		wantTo  bool
+		wantOld bool
+		line    float64
+	}{
+		{
+			name:   "a new-side line travels as to",
+			anchor: CommentAnchor{Path: testDiffFilePath, Line: 42, OldSide: false},
+			wantTo: true, line: 42,
+		},
+		{
+			name:    "an old-side line travels as from",
+			anchor:  CommentAnchor{Path: testDiffFilePath, Line: 17, OldSide: true},
+			wantOld: true, line: 17,
+		},
+		{
+			name:   "a file-level anchor carries no line at all",
+			anchor: CommentAnchor{Path: testDiffFilePath, Line: 0, OldSide: false},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			client, rec := writeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(t, w, http.StatusCreated, createdCommentFixture)
+			})
+
+			anchor := tc.anchor
+			if _, err := client.CreateComment(t.Context(), testWorkspace, testRepoSlug, testPRID,
+				CommentCreate{Raw: "this line", ParentID: 0, Anchor: &anchor}); err != nil {
+				t.Fatalf("CreateComment() error = %v", err)
+			}
+
+			var sent map[string]any
+			if err := json.Unmarshal(rec.snapshot()[0].Body, &sent); err != nil {
+				t.Fatalf("request body is not JSON: %v", err)
+			}
+			inline, ok := sent["inline"].(map[string]any)
+			if !ok {
+				t.Fatalf("no inline member in %s", rec.snapshot()[0].Body)
+			}
+			testkit.AssertEqual(t, "inline.path", inline["path"], testDiffFilePath)
+
+			to, hasTo := inline["to"].(float64)
+			from, hasFrom := inline["from"].(float64)
+			testkit.AssertEqual(t, "carries to", hasTo, tc.wantTo)
+			testkit.AssertEqual(t, "carries from", hasFrom, tc.wantOld)
+			switch {
+			case tc.wantTo:
+				testkit.AssertEqual(t, "to", to, tc.line)
+			case tc.wantOld:
+				testkit.AssertEqual(t, "from", from, tc.line)
+			}
+		})
+	}
+}
+
+func TestCreateComment_RefusesAnAnchorItCannotSend(t *testing.T) {
+	t.Parallel()
+
+	opts := bearerOpts()
+	opts.BaseURL = testkit.NoRequestServer(t).URL
+	client := NewClient(opts)
+
+	for _, tc := range []struct {
+		name   string
+		create CommentCreate
+	}{
+		{
+			name:   "an anchor with no file",
+			create: CommentCreate{Raw: "here", ParentID: 0, Anchor: &CommentAnchor{Path: "", Line: 3}},
+		},
+		{
+			// A reply hangs where its parent hangs; Bitbucket offers no way to
+			// say otherwise, so an anchor on one is a mistake, not a request.
+			name: "an anchor on a reply",
+			create: CommentCreate{
+				Raw: "here", ParentID: 9001,
+				Anchor: &CommentAnchor{Path: testDiffFilePath, Line: 3},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := client.CreateComment(t.Context(), testWorkspace, testRepoSlug, testPRID, tc.create)
+			if !errors.Is(err, ErrCommentAnchor) {
+				t.Errorf("CreateComment() error = %v, want ErrCommentAnchor", err)
+			}
+		})
+	}
+}

@@ -93,13 +93,13 @@ func (a *App) pipelineBackBinding() (Binding, bool) {
 func (a *App) reviewTabBindings() []Binding {
 	switch a.detailView.ActiveTab() {
 	case views.TabFiles:
-		return []Binding{
+		return append([]Binding{
 			a.bind(ActOpen, "open this file's diff"),
 			a.bind(ActNextFile, "next changed file"),
 			a.bind(ActPrevFile, "previous changed file"),
 			a.bind(ActOpenEditor, "open this file in the editor"),
 			a.bind(ActBrowser, "open in browser"),
-		}
+		}, a.commentBindings("comment on this file")...)
 	case views.TabCommits:
 		return []Binding{
 			a.bind(ActOpen, "expand the commit message"),
@@ -228,6 +228,7 @@ func (a *App) ContextBindings() []Binding {
 				a.bind(ActBrowser, "open the diff in a browser"),
 				a.bind(ActCopyURL, "copy the diff URL"),
 			)
+			bindings = append(bindings, a.commentBindings("comment on this line")...)
 			bindings = append(bindings, a.tabJumpBindings()...)
 		case views.ModeThread:
 			bindings = append(bindings,
@@ -378,8 +379,9 @@ func (a *App) helpBarItems() []components.HelpItem {
 			head = append(head,
 				components.HelpItem{Key: km.Keys(ActNextFile) + "/" + km.Keys(ActPrevFile), Description: "file"},
 				components.HelpItem{Key: km.Keys(ActOpenEditor), Description: "editor"},
-				components.HelpItem{Key: km.Keys(ActBack), Description: "back"},
 			)
+			head = append(head, a.commentHelpItems("comment")...)
+			head = append(head, components.HelpItem{Key: km.Keys(ActBack), Description: "back"})
 		case views.ModeThread:
 			head = append(head, a.commentHelpItems("reply")...)
 			head = append(head,
@@ -449,11 +451,11 @@ func (a *App) reviewTabHelpItems() []components.HelpItem {
 	km := a.keymap
 	switch a.detailView.ActiveTab() {
 	case views.TabFiles:
-		return []components.HelpItem{
+		return append([]components.HelpItem{
 			{Key: km.Keys(ActOpen), Description: "diff"},
 			{Key: km.Keys(ActNextFile) + "/" + km.Keys(ActPrevFile), Description: "file"},
 			{Key: km.Keys(ActOpenEditor), Description: "editor"},
-		}
+		}, a.commentHelpItems("comment")...)
 	case views.TabCommits:
 		return []components.HelpItem{
 			{Key: km.Keys(ActOpen), Description: "expand"},

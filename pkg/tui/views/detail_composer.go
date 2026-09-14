@@ -1,11 +1,14 @@
 package views
 
 import (
+	"path"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/lsst25/lazybitbucket/pkg/bitbucket"
 	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 	"github.com/lsst25/lazybitbucket/pkg/tui/theme"
 )
@@ -22,27 +25,33 @@ import (
 // write key.
 
 // CommentSubmittedMsg asks the app to post what the composer holds. ParentID is
-// the comment being replied to, 0 for a new comment on the pull request.
+// the comment being replied to and Anchor the place in the diff a new
+// conversation hangs off; a comment on the pull request itself carries neither.
 type CommentSubmittedMsg struct {
 	PullRequestKey string
 	ParentID       int64
+	Anchor         *bitbucket.CommentAnchor
 	Text           string
 }
 
 // ComposeCommentInEditorMsg asks the app to reopen the composer's text in the
 // configured editor, which is the way out of a one-line input for a reply that
-// needs more room. The text travels with it so nothing typed is lost on the way.
+// needs more room. The text and the target travel with it so nothing typed is
+// lost on the way, and the comment still lands where it was started.
 type ComposeCommentInEditorMsg struct {
 	PullRequestKey string
 	ParentID       int64
+	Anchor         *bitbucket.CommentAnchor
 	Text           string
 }
 
-// composerState is the docked reply box. parentID names what is being answered;
-// zero is a new comment on the pull request itself.
+// composerState is the docked reply box. parentID names what is being answered
+// and anchor where a new conversation hangs; both empty is a comment on the
+// pull request itself.
 type composerState struct {
 	active   bool
 	parentID int64
+	anchor   *bitbucket.CommentAnchor
 	input    components.TextInput
 }
 
@@ -67,6 +76,15 @@ func (d *DetailView) ComposerParent() int64 {
 	return d.composer.parentID
 }
 
+// ComposerAnchor is where the open composer's comment will hang, nil for a
+// reply and for a comment on the pull request itself.
+func (d *DetailView) ComposerAnchor() *bitbucket.CommentAnchor {
+	if !d.composer.active {
+		return nil
+	}
+	return d.composer.anchor
+}
+
 // ComposerText is what has been typed so far.
 func (d *DetailView) ComposerText() string {
 	if !d.composer.active {
@@ -81,38 +99,41 @@ func (d *DetailView) ComposerText() string {
 // nothing in it yet. It reports false where there is nothing to comment on, so
 // the caller can say why rather than open an empty box.
 func (d *DetailView) BeginComment() bool {
-	parentID, ok := d.commentParent()
+	parentID, anchor, ok := d.commentTargetHere()
 	if !ok {
 		return false
 	}
-	d.openComposer(parentID, "")
+	d.openComposer(parentID, anchor, "")
 	return true
 }
 
 // ResumeComment reopens the composer on text that was already written — what a
 // failed post hands back, so a refusal costs the wording and not the reply.
-func (d *DetailView) ResumeComment(parentID int64, text string) {
-	d.openComposer(parentID, text)
+func (d *DetailView) ResumeComment(parentID int64, anchor *bitbucket.CommentAnchor, text string) {
+	d.openComposer(parentID, anchor, text)
 }
 
 // CancelComment closes the composer and forgets what was in it.
 func (d *DetailView) CancelComment() {
-	d.composer = composerState{active: false, parentID: 0, input: components.NewTextInput()}
+	d.composer = composerState{
+		active: false, parentID: 0, anchor: nil, input: components.NewTextInput(),
+	}
 }
 
 // openComposer is the shared open: a fresh input carrying text, with the cursor
 // at the end of it.
-func (d *DetailView) openComposer(parentID int64, text string) {
+func (d *DetailView) openComposer(parentID int64, anchor *bitbucket.CommentAnchor, text string) {
 	input := components.NewTextInput()
 	input.SetValue(text)
-	d.composer = composerState{active: true, parentID: parentID, input: input}
+	d.composer = composerState{active: true, parentID: parentID, anchor: anchor, input: input}
 }
 
-// commentParent resolves what a comment written here would answer, and whether
-// this is a place to write one at all.
-func (d *DetailView) commentParent() (int64, bool) {
+// commentTargetHere resolves what a comment written from where the panel
+// currently is would hang off — the comment it answers, or the place in the
+// diff it anchors to — and whether this is a place to write one at all.
+func (d *DetailView) commentTargetHere() (int64, *bitbucket.CommentAnchor, bool) {
 	if d.pr == nil {
-		return 0, false
+		return 0, nil, false
 	}
 	switch d.mode {
 	case ModeThread:
@@ -120,30 +141,64 @@ func (d *DetailView) commentParent() (int64, bool) {
 		// which case there is nothing left to reply to.
 		thread := d.OpenedThread()
 		if thread == nil {
-			return 0, false
+			return 0, nil, false
 		}
-		return thread.Root.ID, true
+		return thread.Root.ID, nil, true
+	case ModeFileDiff:
+		return d.diffCommentAnchor()
 	case ModePullRequest:
-		switch d.activeTab {
-		case TabComments:
-			if thread := d.SelectedThread(); thread != nil {
-				return thread.Root.ID, true
-			}
-			// An empty Comments tab: the first comment of a pull request is a
-			// comment on the pull request.
-			return 0, true
-		case TabOverview:
-			return 0, true
-		case TabFiles, TabCommits:
-			return 0, false
-		default:
-			return 0, false
-		}
-	case ModePipeline, ModeStepLog, ModeRepo, ModeSplash, ModeFileDiff:
-		return 0, false
+		return d.tabCommentTarget()
+	case ModePipeline, ModeStepLog, ModeRepo, ModeSplash:
+		return 0, nil, false
 	default:
-		return 0, false
+		return 0, nil, false
 	}
+}
+
+// tabCommentTarget is commentTargetHere for the four pull request tabs.
+func (d *DetailView) tabCommentTarget() (int64, *bitbucket.CommentAnchor, bool) {
+	switch d.activeTab {
+	case TabComments:
+		// A thread under the cursor is answered; a marked line's second
+		// conversation is started from the diff, not from here.
+		if thread := d.SelectedThread(); thread != nil {
+			return thread.Root.ID, nil, true
+		}
+		// An empty Comments tab: the first comment of a pull request is a
+		// comment on the pull request.
+		return 0, nil, true
+	case TabOverview:
+		return 0, nil, true
+	case TabFiles:
+		// A file with no line: what Bitbucket shows above the first hunk.
+		file := d.SelectedFile()
+		if file == nil {
+			return 0, nil, false
+		}
+		return 0, &bitbucket.CommentAnchor{Path: file.Path(), Line: 0, OldSide: false}, true
+	case TabCommits:
+		return 0, nil, false
+	default:
+		return 0, nil, false
+	}
+}
+
+// diffCommentAnchor is where a comment written in the file diff hangs: the line
+// under the cursor, on the side that line lives on. A row with no line of its
+// own — a hunk header, the "\ No newline" marker — anchors to the file, which
+// is the other shape Bitbucket takes and the one the reader is looking at
+// anyway.
+func (d *DetailView) diffCommentAnchor() (int64, *bitbucket.CommentAnchor, bool) {
+	if d.fileDiff.path == "" {
+		return 0, nil, false
+	}
+	anchor := &bitbucket.CommentAnchor{Path: d.fileDiff.path, Line: 0, OldSide: false}
+	if row, ok := d.SelectedDiffLine(); ok {
+		if line, newSide, anchored := diffRowAnchor(row); anchored {
+			anchor.Line, anchor.OldSide = line, !newSide
+		}
+	}
+	return 0, anchor, true
 }
 
 // composerKey is the composer's whole keyboard. It owns every key while it is
@@ -169,13 +224,16 @@ func (d *DetailView) composerKey(msg tea.KeyMsg) tea.Cmd {
 // not a comment, so Enter on it simply closes: the reader changed their mind,
 // and saying so with an error would be noise.
 func (d *DetailView) submitComment() tea.Cmd {
-	text, parentID, key := d.composer.input.Value(), d.composer.parentID, d.PullRequestKey()
+	text, parentID, anchor := d.composer.input.Value(), d.composer.parentID, d.composer.anchor
+	key := d.PullRequestKey()
 	d.CancelComment()
 	if strings.TrimSpace(text) == "" || key == "" {
 		return nil
 	}
 	return func() tea.Msg {
-		return CommentSubmittedMsg{PullRequestKey: key, ParentID: parentID, Text: text}
+		return CommentSubmittedMsg{
+			PullRequestKey: key, ParentID: parentID, Anchor: anchor, Text: text,
+		}
 	}
 }
 
@@ -183,23 +241,23 @@ func (d *DetailView) submitComment() tea.Cmd {
 // editor takes the whole terminal — and the app reopens it if the editor could
 // not be started.
 func (d *DetailView) composeInEditor() tea.Cmd {
-	text, parentID, key := d.composer.input.Value(), d.composer.parentID, d.PullRequestKey()
+	text, parentID, anchor := d.composer.input.Value(), d.composer.parentID, d.composer.anchor
+	key := d.PullRequestKey()
 	if key == "" {
 		return nil
 	}
 	d.CancelComment()
 	return func() tea.Msg {
-		return ComposeCommentInEditorMsg{PullRequestKey: key, ParentID: parentID, Text: text}
+		return ComposeCommentInEditorMsg{
+			PullRequestKey: key, ParentID: parentID, Anchor: anchor, Text: text,
+		}
 	}
 }
 
 // composerLines is the docked box: the labelled input and the key hint under
 // it. width is the panel's content width.
 func (d *DetailView) composerLines(width int) []string {
-	label := "Reply"
-	if d.composer.parentID == 0 {
-		label = "Comment"
-	}
+	label := d.composerLabel()
 
 	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
 	// The label, its spaces and the cursor block the input always draws.
@@ -208,5 +266,22 @@ func (d *DetailView) composerLines(width int) []string {
 	return []string{
 		" " + theme.AuthorRender(label) + " " + d.composer.input.View(),
 		" " + gray.Render(components.TruncateEnd(composerHint, max(width-1, 8))),
+	}
+}
+
+// composerLabel names what is being written, in the room a prompt has: "Reply"
+// for an answer, the file and line for an inline comment — by base name, since
+// the panel title already carries the path and a prompt taking half the width
+// would leave nowhere to type — and "Comment" for one on the pull request.
+func (d *DetailView) composerLabel() string {
+	switch {
+	case d.composer.parentID != 0:
+		return "Reply"
+	case d.composer.anchor == nil:
+		return "Comment"
+	case d.composer.anchor.Line > 0:
+		return path.Base(d.composer.anchor.Path) + ":" + strconv.Itoa(d.composer.anchor.Line)
+	default:
+		return path.Base(d.composer.anchor.Path)
 	}
 }

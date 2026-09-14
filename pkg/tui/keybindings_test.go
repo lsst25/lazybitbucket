@@ -509,8 +509,8 @@ func TestHelpBarItems_FollowTheOpenOverlay(t *testing.T) {
 func TestContextBindings_TheCommentKeyFollowsWhereItWorks(t *testing.T) {
 	t.Parallel()
 
-	// C is listed where there is something to answer, and nowhere else: the
-	// Files and Commits tabs have no comment under their cursor.
+	// C is listed where there is something to comment on: a conversation, the
+	// pull request, or a changed file. The Commits tab has none of the three.
 	for _, tc := range []struct {
 		name   string
 		tab    views.DetailTab
@@ -518,7 +518,7 @@ func TestContextBindings_TheCommentKeyFollowsWhereItWorks(t *testing.T) {
 	}{
 		{name: "comments", tab: views.TabComments, listed: true},
 		{name: "overview", tab: views.TabOverview, listed: true},
-		{name: "files", tab: views.TabFiles, listed: false},
+		{name: "files", tab: views.TabFiles, listed: true},
 		{name: "commits", tab: views.TabCommits, listed: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

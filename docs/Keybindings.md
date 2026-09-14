@@ -73,7 +73,7 @@ From any left panel except Status, these scroll the detail panel without moving 
 | `V` | Reviewers… | `pullRequests.reviewers` |
 | `D` | Toggle draft… | `pullRequests.toggleDraft` |
 | `A` | Approve, or remove your approval… | `pullRequests.approve` |
-| `C` | Comment on the pull request — opens the composer in the detail panel | `pullRequests.comment` |
+| `C` | Comment — on the pull request, a thread, a file or a diff line, depending on where you are | `pullRequests.comment` |
 
 ## Pull request actions
 
@@ -200,7 +200,7 @@ The pull request is read back afterwards rather than patched from the answer: th
  enter send · ctrl+e editor · esc cancel
 ```
 
-What the comment answers depends on where you press it:
+What the comment answers, or hangs off, depends on where you press it:
 
 | Where | What `C` writes |
 |-------|-----------------|
@@ -208,7 +208,30 @@ What the comment answers depends on where you press it:
 | Comments tab, on a thread | A reply to the thread under the cursor |
 | Comments tab with no comments yet | The first comment on the pull request |
 | Overview tab | A new comment on the pull request |
-| Files or Commits tab | Nothing — there is no conversation under the cursor, and the hint bar says so |
+| [File diff](#file-diff), on a line | An inline comment on that line — see below |
+| File diff, on a hunk header | A comment on the file, which is where Bitbucket shows it: above the first hunk |
+| Files tab | A comment on the file under the cursor, without opening its diff |
+| Commits tab | Nothing — there is no conversation and no file under the cursor, and the hint bar says so |
+
+### Inline comments
+
+`C` inside a file's diff anchors the comment to the line the cursor is on, and the box says which:
+
+```
+    13 +  ctx, cancel := context.WithTimeout(ctx, budget)
+ ●  14    defer cancel()
+    15 +  return do(ctx, req)
+ retry.go:13 █
+ enter send · ctrl+e editor · esc cancel
+```
+
+The side comes from the line itself: an added or a context line anchors to the new side of the diff, a removed line to the old side — the same line the `●` marker would appear on. The prompt shows the file's base name and the line; the panel title already carries the path.
+
+Sending leaves you exactly where you were, cursor on the same line, with the `●` on it lit up (a digit once a line carries more than one conversation) and the hint bar naming where the comment landed — `comment posted on internal/upstream/retry.go:13`. Reviewing a file is a pass down it, and being thrown into a thread after every remark would break that pass.
+
+`C` on a line that already carries a comment starts a *second* conversation there, which is what Bitbucket's own line threads do. To join the conversation that is already on the line, press `enter` on it — that jumps to the thread — and `C` there replies to it.
+
+A line the diff has moved past is refused by Bitbucket, not by lazybitbucket: the failure is its own message in the hint bar, and your text comes back into the box. Ranges spanning several lines are not implemented — a comment anchors to one line.
 
 While the composer is open it owns the keyboard: every key is text, bindings and custom commands included, so a reply may say `q` without quitting. The three keys that are not text are the ones under the box —
 
@@ -222,7 +245,7 @@ A sent comment is folded straight into the conversation from Bitbucket's answer 
 
 Nothing typed is lost to a failure. A reply typed in the box goes back into the box, with the error in the hint bar; one composed in the editor stays in its file and the hint bar names the path.
 
-Editing a comment, deleting one, resolving a thread and anchoring a new comment to a diff line are not implemented — those still want the browser (`o`).
+Editing a comment, deleting one and resolving a thread are not implemented — those still want the browser (`o`).
 
 ## Builds `[3]`
 
@@ -401,7 +424,7 @@ Focusing the detail panel fetches the Files, Commits and Comments tabs together,
 | Tab | `enter` | Other keys |
 |-----|---------|------------|
 | Overview | — | `C` comments on the pull request, `o` opens the pull request, `u` the URL picker, `y` copies its URL |
-| Files | Open the selected file's diff | `n` / `p` move to the next / previous file, `e` opens the file in your editor, `o` opens the pull request |
+| Files | Open the selected file's diff | `n` / `p` move to the next / previous file, `e` opens the file in your editor, `C` comments on the file, `o` opens the pull request |
 | Commits | Expand the full commit message | `o` opens the commit in a browser, `y` copies its URL |
 | Comments | Open the thread in the panel | `C` replies to the thread under the cursor, `o` opens the thread in a browser, `y` copies its URL |
 
@@ -416,6 +439,7 @@ The Files tab lists a status letter (`A` added, `M` modified, `D` removed, `R` r
 | `j` / `k` | Move the line cursor | `navigation.down`, `navigation.up` |
 | `n` / `p` | Open the next / previous changed file; it stops at both ends rather than wrapping | `detail.nextFile`, `detail.prevFile` |
 | `e` | Open the file in your editor, at the cursor's line — in a new tmux window when running inside tmux | `detail.openEditor` |
+| `C` | Comment on the line under the cursor — see [`C` — comment or reply](#c--comment-or-reply) | `pullRequests.comment` |
 | `enter` | Jump to the review thread on this line, when the line is marked with `●` | `pullRequests.open` |
 | `o` | Open the pull request's diff in a browser | `pullRequests.browser` |
 | `y` | Copy that URL | `pullRequests.copyURL` |

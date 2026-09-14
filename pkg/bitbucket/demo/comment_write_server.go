@@ -14,8 +14,9 @@ import (
 // — and, like the real endpoint, it takes a comment on a pull request whatever
 // state it is in: a merged pull request is still worth discussing.
 
-// The request document. Both members are the same shape the client sends, and
-// a general comment carries no parent at all rather than a parent of id 0.
+// The request document. Every member is the same shape the client sends: a
+// general comment carries no parent at all rather than a parent of id 0, and no
+// inline rather than an empty one.
 type commentRequest struct {
 	Content struct {
 		Raw string `json:"raw"`
@@ -23,16 +24,26 @@ type commentRequest struct {
 	Parent *struct {
 		ID int64 `json:"id"`
 	} `json:"parent"`
+	Inline *struct {
+		Path string `json:"path"`
+		To   *int   `json:"to"`
+		From *int   `json:"from"`
+	} `json:"inline"`
 }
 
-// The messages the real endpoint answers these two faults with.
+// The messages the real endpoint answers these faults with.
 const (
 	msgContentRequired = "This field is required."
 	msgParentNotFound  = "No such comment on this pull request."
+	msgPathRequired    = "This field is required."
+	msgInlineOnReply   = "A reply cannot be anchored to a line."
 )
 
-// fieldContent is the request member an empty comment is reported against.
-const fieldContent = "content"
+// The request members a refusal is reported against.
+const (
+	fieldContent = "content"
+	fieldPath    = "inline.path"
+)
 
 // handleCreateComment appends a comment written by the demo user and answers
 // 201 with it, rendered html included — which is what lets a client show a new
@@ -68,11 +79,29 @@ func (s *Server) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var inline *bitbucket.CommentInline
+	if request.Inline != nil {
+		if request.Inline.Path == "" {
+			writeFieldsError(w, msgBadRequest, map[string][]string{fieldPath: {msgPathRequired}})
+			return
+		}
+		if parentID != 0 {
+			// A reply hangs where its parent hangs. The real endpoint has no
+			// way to say otherwise, so neither does this.
+			writeBadRequest(w, msgInlineOnReply)
+			return
+		}
+		inline = &bitbucket.CommentInline{
+			Path: request.Inline.Path, To: request.Inline.To, From: request.Inline.From,
+			StartFrom: nil, StartTo: nil,
+		}
+	}
+
 	created := newComment(commentSpec{
 		repo: slug, pullRequest: pullRequest.ID, id: s.nextCommentID(),
 		parent: parentID, user: s.Data.User, body: request.Content.Raw,
 		age: 0, edited: 0, deleted: false, pending: false,
-		inline: nil, resolvedBy: nil, resolvedAge: 0,
+		inline: inline, resolvedBy: nil, resolvedAge: 0,
 	})
 	// newComment timestamps against the dataset's own base time, which is what
 	// every fixture is written relative to. A comment written now is not a

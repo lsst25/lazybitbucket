@@ -19,6 +19,10 @@ import (
 // write in flight — with one deliberate difference: a comment is not refused on
 // a merged or declined pull request, because a conversation outlives the branch.
 //
+// Where the comment lands is the view's to decide and travels with the text: a
+// reply carries the comment it answers, an inline comment the file and line it
+// hangs off, a comment on the pull request neither.
+//
 // What comes back is applied optimistically. Bitbucket answers the POST with
 // the created comment, rendering included, so the thread it belongs to is
 // rebuilt from the cache the Comments tab is already showing rather than
@@ -38,16 +42,18 @@ const commentEditorHint = "enter to send · ctrl+e for the editor · esc to canc
 type commentPostedMsg struct {
 	key      string
 	parentID int64
+	anchor   *bitbucket.CommentAnchor
 	text     string
 	tmpPath  string
 	comment  *bitbucket.Comment
 	err      error
 }
 
-// commentEditedMsg is the editor exiting on a reply composed outside the app.
+// commentEditedMsg is the editor exiting on a comment composed outside the app.
 type commentEditedMsg struct {
 	key      string
 	parentID int64
+	anchor   *bitbucket.CommentAnchor
 	path     string
 	err      error
 }
@@ -67,7 +73,7 @@ func (a *App) handleActionComment() tea.Cmd {
 		cmd = a.focusDetail()
 	}
 	if !a.detailView.BeginComment() {
-		a.helpBar.SetStatusMsg("open the Overview or Comments tab to comment on #" + strconv.Itoa(pr.ID))
+		a.helpBar.SetStatusMsg("nothing to comment on here (#" + strconv.Itoa(pr.ID) + ")")
 		return cmd
 	}
 	a.helpBar.SetStatusMsg(commentEditorHint)
@@ -82,14 +88,29 @@ func (a *App) commentTarget() (*bitbucket.PullRequest, bool) {
 
 // handleCommentSubmitted posts what the composer sent.
 func (a *App) handleCommentSubmitted(msg views.CommentSubmittedMsg) (tea.Model, tea.Cmd) {
-	return a, a.postComment(msg.PullRequestKey, msg.ParentID, msg.Text, "")
+	return a, a.postComment(commentWrite{
+		key: msg.PullRequestKey, parentID: msg.ParentID, anchor: msg.Anchor,
+		text: msg.Text, tmpPath: "",
+	})
 }
 
-// postComment writes one comment. tmpPath is the file an editor-composed reply
-// was written in, kept until the post succeeds so a failure never costs the
-// text; it is empty for a reply typed in the composer, which is handed back to
-// the composer instead.
-func (a *App) postComment(key string, parentID int64, text, tmpPath string) tea.Cmd {
+// commentWrite is one comment on its way to Bitbucket: what to say, where it
+// belongs, and the editor file it is still recoverable from.
+type commentWrite struct {
+	key      string
+	parentID int64
+	anchor   *bitbucket.CommentAnchor
+	text     string
+	// tmpPath is the file an editor-composed comment was written in, kept until
+	// the post succeeds so a failure never costs the text. It is empty for one
+	// typed in the composer, which is handed back to the composer instead.
+	tmpPath string
+}
+
+// postComment writes one comment.
+func (a *App) postComment(write commentWrite) tea.Cmd {
+	key, parentID, anchor := write.key, write.parentID, write.anchor
+	text, tmpPath := write.text, write.tmpPath
 	pr := a.pullRequestByKey(key)
 	if pr == nil || strings.TrimSpace(text) == "" {
 		a.discardCommentTempFile(tmpPath)
@@ -107,7 +128,7 @@ func (a *App) postComment(key string, parentID int64, text, tmpPath string) tea.
 
 	ctx, client := a.context(), a.client
 	workspace, slug, id := pr.Workspace(), pr.RepoSlug(), pr.ID
-	create := bitbucket.CommentCreate{Raw: text, ParentID: parentID}
+	create := bitbucket.CommentCreate{Raw: text, ParentID: parentID, Anchor: anchor}
 
 	a.beginWrite(key, verbComment)
 	a.helpBar.SetStatusMsg("posting a comment on #" + strconv.Itoa(id) + "…")
@@ -115,7 +136,7 @@ func (a *App) postComment(key string, parentID int64, text, tmpPath string) tea.
 	return func() tea.Msg {
 		comment, err := client.CreateComment(ctx, workspace, slug, id, create)
 		return commentPostedMsg{
-			key: key, parentID: parentID, text: text, tmpPath: tmpPath,
+			key: key, parentID: parentID, anchor: anchor, text: text, tmpPath: tmpPath,
 			comment: comment, err: err,
 		}
 	}
@@ -141,7 +162,7 @@ func (a *App) handleCommentPosted(msg commentPostedMsg) (tea.Model, tea.Cmd) {
 		// Nothing to fold it into: the Comments tab has not been read on this
 		// pull request, so the comment is on the server and the next entry to
 		// the tab fetches it with everything else.
-		a.helpBar.SetStatusMsg(commentDoneText(msg.parentID))
+		a.helpBar.SetStatusMsg(commentDoneText(msg.parentID, msg.anchor))
 		return a, nil
 	}
 
@@ -152,22 +173,42 @@ func (a *App) handleCommentPosted(msg commentPostedMsg) (tea.Model, tea.Cmd) {
 	a.detailView.SetThreads(msg.key, threads)
 	a.applyFileDiffMarkers(msg.key)
 
-	// A new conversation is worth showing: the reader has just written the
-	// first word of it and nothing on screen names it yet. A reply lands in the
-	// thread that is already open, so the panel stays where it is.
-	if msg.parentID == 0 && a.detailView.PullRequestKey() == msg.key {
+	// A new conversation on the pull request is worth showing: the reader has
+	// just written the first word of it and nothing on screen names it yet. A
+	// reply lands in the thread that is already open, and an inline comment
+	// lights up the marker on the line the cursor is still sitting on — being
+	// thrown out of the diff halfway through reading it would be the opposite
+	// of helpful.
+	if msg.parentID == 0 && msg.anchor == nil && a.detailView.PullRequestKey() == msg.key {
 		a.detailView.FocusThread(msg.comment.ID)
 	}
-	a.helpBar.SetStatusMsg(commentDoneText(msg.parentID))
+	a.helpBar.SetStatusMsg(commentDoneText(msg.parentID, msg.anchor))
 	return a, nil
 }
 
-// commentDoneText is the line a written comment leaves behind.
-func commentDoneText(parentID int64) string {
-	if parentID == 0 {
-		return "comment posted"
+// commentDoneText is the line a written comment leaves behind. An inline one
+// names where it landed: the reader stays in the diff, where a new marker on
+// one line is easy to miss.
+func commentDoneText(parentID int64, anchor *bitbucket.CommentAnchor) string {
+	if parentID != 0 {
+		return "reply posted"
 	}
-	return "reply posted"
+	if where := commentAnchorText(anchor); where != "" {
+		return "comment posted on " + where
+	}
+	return "comment posted"
+}
+
+// commentAnchorText names an anchor for a message, "" when there is none.
+func commentAnchorText(anchor *bitbucket.CommentAnchor) string {
+	switch {
+	case anchor == nil:
+		return ""
+	case anchor.Line > 0:
+		return anchor.Path + ":" + strconv.Itoa(anchor.Line)
+	default:
+		return anchor.Path
+	}
 }
 
 // noteCommentFailure says what went wrong and gives the text back. A reply
@@ -186,7 +227,7 @@ func (a *App) noteCommentFailure(msg commentPostedMsg) tea.Cmd {
 	}
 	a.helpBar.SetStatusMsg(reason)
 	if a.detailView.PullRequestKey() == msg.key {
-		a.detailView.ResumeComment(msg.parentID, msg.text)
+		a.detailView.ResumeComment(msg.parentID, msg.anchor, msg.text)
 	}
 	return nil
 }
@@ -203,21 +244,22 @@ func (a *App) handleComposeCommentInEditor(msg views.ComposeCommentInEditorMsg) 
 	path, err := writeCommentTempFile(pr.RepoSlug(), pr.ID, msg.Text)
 	if err != nil {
 		a.statusPanel.SetError(verbComment + ": " + err.Error())
-		a.detailView.ResumeComment(msg.ParentID, msg.Text)
+		a.detailView.ResumeComment(msg.ParentID, msg.Anchor, msg.Text)
 		return a, nil
 	}
 	cmd, err := a.buildTempFileEditorCmd(path)
 	if err != nil {
 		_ = os.Remove(path)
 		a.statusPanel.SetError(err.Error())
-		a.detailView.ResumeComment(msg.ParentID, msg.Text)
+		a.detailView.ResumeComment(msg.ParentID, msg.Anchor, msg.Text)
 		return a, nil
 	}
 
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return a, tea.ExecProcess(cmd, func(execErr error) tea.Msg {
 		return commentEditedMsg{
-			key: msg.PullRequestKey, parentID: msg.ParentID, path: path, err: execErr,
+			key: msg.PullRequestKey, parentID: msg.ParentID, anchor: msg.Anchor,
+			path: path, err: execErr,
 		}
 	})
 }
@@ -247,7 +289,11 @@ func (a *App) handleCommentEdited(msg commentEditedMsg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 	}
 
-	if post := a.postComment(msg.key, msg.parentID, string(body), msg.path); post != nil {
+	post := a.postComment(commentWrite{
+		key: msg.key, parentID: msg.parentID, anchor: msg.anchor,
+		text: string(body), tmpPath: msg.path,
+	})
+	if post != nil {
 		cmds = append(cmds, post)
 	}
 	return a, tea.Batch(cmds...)
