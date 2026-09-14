@@ -14,6 +14,16 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Added
 
+- `C` writes a comment: a reply to the conversation on screen or the thread under the cursor on the
+  Comments tab, a new comment on the pull request from the Overview tab. The composer is a one-line
+  box docked under what you are reading rather than a dialog — it takes every key while it is open,
+  `enter` sends, `esc` drops it and `ctrl+e` continues in `$EDITOR` for a reply that wants
+  paragraphs. What Bitbucket answers with is folded straight into the thread, rendering and all, so
+  a new comment needs no refetch and its mentions read as names; a new conversation is opened as
+  soon as it exists. Nothing typed is lost to a failure — the text goes back into the box, or stays
+  in the editor's file with the hint bar naming it. Unlike the other writes it is not refused on a
+  merged or declined pull request, and like them it is refused, and unlisted, in read-only mode.
+  Editing, deleting and resolving are still the browser's job
 - `enter` on a review thread opens the conversation in the detail panel — the same drill-down a
   changed file's diff and a pipeline step's log get — instead of a read-only modal over the layout.
   The list still collapses a thread longer than eight lines; the section shows it whole and scrolls,

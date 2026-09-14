@@ -329,6 +329,10 @@ type PullRequestKeys struct {
 	// Approve approves the pull request, or withdraws the approval you have
 	// already given, after a confirmation. Default: A.
 	Approve string `yaml:"approve"`
+	// Comment opens the reply composer in the detail panel: a reply to the
+	// conversation in view on the Comments tab, a new comment on the pull
+	// request from the Overview tab. Default: C.
+	Comment string `yaml:"comment"`
 }
 
 // BuildsKeys are the two pipeline actions, active with a build selected in the

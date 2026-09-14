@@ -107,19 +107,29 @@ func (a *App) reviewTabBindings() []Binding {
 			a.bind(ActCopyURL, "copy the commit URL"),
 		}
 	case views.TabComments:
-		return []Binding{
+		return append([]Binding{
 			a.bind(ActOpen, "open the thread"),
 			a.bind(ActBrowser, "open the thread in a browser"),
 			a.bind(ActCopyURL, "copy the thread URL"),
-		}
+		}, a.commentBindings("reply to this thread")...)
 	case views.TabOverview:
-		return []Binding{
+		return append([]Binding{
 			a.bind(ActBrowser, "open in browser"),
 			a.bind(ActURLPicker, "open URL picker"),
 			a.bind(ActCopyURL, "copy the pull request URL"),
-		}
+		}, a.commentBindings("comment on the pull request")...)
 	}
 	return nil
+}
+
+// commentBindings is the composer key, described for where it is pressed. Like
+// the other writes it is omitted in read-only mode, and it is listed on the two
+// tabs and in the thread section — the places that have something to answer.
+func (a *App) commentBindings(description string) []Binding {
+	if a.readOnly {
+		return nil
+	}
+	return []Binding{a.bind(ActComment, description)}
 }
 
 // writeBindings are the six keys that change the pull request on Bitbucket.
@@ -225,6 +235,7 @@ func (a *App) ContextBindings() []Binding {
 				a.bind(ActBrowser, "open the comment in a browser"),
 				a.bind(ActCopyURL, "copy the comment URL"),
 			)
+			bindings = append(bindings, a.commentBindings("reply to this thread")...)
 			bindings = append(bindings, a.tabJumpBindings()...)
 		case views.ModePullRequest:
 			bindings = append(bindings, a.reviewTabBindings()...)
@@ -307,6 +318,12 @@ func (a *App) helpBarItems() []components.HelpItem {
 	km := a.keymap
 
 	switch {
+	case a.detailView.Composing():
+		return []components.HelpItem{
+			{Key: "enter", Description: "send"},
+			{Key: "ctrl+e", Description: "editor"},
+			{Key: "esc", Description: "cancel"},
+		}
 	case a.showHelp:
 		return []components.HelpItem{
 			{Key: "/", Description: "filter"},
@@ -364,6 +381,7 @@ func (a *App) helpBarItems() []components.HelpItem {
 				components.HelpItem{Key: km.Keys(ActBack), Description: "back"},
 			)
 		case views.ModeThread:
+			head = append(head, a.commentHelpItems("reply")...)
 			head = append(head,
 				components.HelpItem{Key: km.Keys(ActBrowser), Description: "browser"},
 				components.HelpItem{Key: km.Keys(ActBack), Description: "back"},
@@ -442,17 +460,26 @@ func (a *App) reviewTabHelpItems() []components.HelpItem {
 			{Key: km.Keys(ActBrowser), Description: "browser"},
 		}
 	case views.TabComments:
-		return []components.HelpItem{
+		return append([]components.HelpItem{
 			{Key: km.Keys(ActOpen), Description: "open"},
 			{Key: km.Keys(ActBrowser), Description: "browser"},
-		}
+		}, a.commentHelpItems("reply")...)
 	case views.TabOverview:
-		return []components.HelpItem{
+		return append([]components.HelpItem{
 			{Key: km.Keys(ActBrowser), Description: "browser"},
 			{Key: km.Keys(ActURLPicker), Description: "urls"},
-		}
+		}, a.commentHelpItems("comment")...)
 	}
 	return nil
+}
+
+// commentHelpItems is the composer key on a help strip, absent in read-only
+// mode like every other write.
+func (a *App) commentHelpItems(description string) []components.HelpItem {
+	if a.readOnly {
+		return nil
+	}
+	return []components.HelpItem{{Key: a.keymap.Keys(ActComment), Description: description}}
 }
 
 // panelHelpItems appends a panel's custom commands and the help key to its

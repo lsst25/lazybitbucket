@@ -350,3 +350,33 @@ func ThreadAt(threads []Thread, path string, line int, newSide bool) (Thread, bo
 	}
 	return covering, found
 }
+
+// AppendComment folds a newly written comment into threads that were already
+// built, so a reply appears in the conversation without refetching the whole
+// comment list. A comment whose id is already there is replaced rather than
+// duplicated, which is what makes applying the same answer twice harmless.
+//
+// It works by flattening the threads back to the comment list they were built
+// from and rebuilding: the ordering, the reply attachment and the deleted
+// placeholders are all BuildThreads' rules, and there is no second copy of them
+// here to drift.
+func AppendComment(threads []Thread, comment Comment) []Thread {
+	comments := make([]Comment, 0, CommentTotal(threads)+1)
+	for _, thread := range threads {
+		comments = append(comments, thread.Root)
+		comments = append(comments, thread.Replies...)
+	}
+
+	replaced := false
+	for i := range comments {
+		if comments[i].ID == comment.ID {
+			comments[i] = comment
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		comments = append(comments, comment)
+	}
+	return BuildThreads(comments)
+}

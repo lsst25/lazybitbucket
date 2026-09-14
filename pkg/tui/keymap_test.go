@@ -76,21 +76,21 @@ func TestKeymapFromConfig_RemapsTheDetailKeys(t *testing.T) {
 
 	var keybindingConfig config.KeybindingConfig
 	// Keys nothing else claims, so Match cannot answer with another action.
-	// D, M and E are the write keys now and P and X the pipeline ones, so the
-	// detail keys move off all five.
+	// D, M and E are the write keys now, P and X the pipeline ones and C the
+	// comment key, so the detail keys move off all six.
 	keybindingConfig.Detail.OverviewTab = "I"
 	keybindingConfig.Detail.FilesTab = "F"
 	keybindingConfig.Detail.CommitsTab = "W"
 	keybindingConfig.Detail.CommentsTab = "T"
 	keybindingConfig.Detail.NextFile = "N"
 	keybindingConfig.Detail.PrevFile = "B"
-	keybindingConfig.Detail.OpenEditor = "C"
+	keybindingConfig.Detail.OpenEditor = "Y"
 
 	keymap := KeymapFromConfig(keybindingConfig)
 
 	for key, want := range map[string]Action{
 		"I": ActDetailOverview, "F": ActDetailFiles, "W": ActDetailCommits,
-		"T": ActDetailComments, "N": ActNextFile, "B": ActPrevFile, "C": ActOpenEditor,
+		"T": ActDetailComments, "N": ActNextFile, "B": ActPrevFile, "Y": ActOpenEditor,
 	} {
 		testkit.AssertEqual(t, "remapped "+key, keymap.Match(key), want)
 	}
@@ -134,12 +134,14 @@ func TestKeymapFromConfig_RemapsThePipelineKeys(t *testing.T) {
 
 	var keybindingConfig config.KeybindingConfig
 	keybindingConfig.Builds.Rerun = "B"
-	keybindingConfig.Builds.Stop = "C"
+	// Not "C": that is the comment key's default, and a remap onto a key another
+	// action still holds is a collision, not a remap.
+	keybindingConfig.Builds.Stop = "Z"
 
 	km = KeymapFromConfig(keybindingConfig)
 
 	testkit.AssertEqual(t, "remapped rerun", km.Match("B"), ActRerunPipeline)
-	testkit.AssertEqual(t, "remapped stop", km.Match("C"), ActStopPipeline)
+	testkit.AssertEqual(t, "remapped stop", km.Match("Z"), ActStopPipeline)
 	// The defaults they replaced are free again, and nothing else claimed them.
 	testkit.AssertEqual(t, "old rerun key released", km.Match("P"), Action(""))
 	testkit.AssertEqual(t, "old stop key released", km.Match("X"), Action(""))

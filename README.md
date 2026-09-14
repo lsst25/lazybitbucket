@@ -41,8 +41,9 @@ make build-demo
 - **Edit** — `E` changes the title inline, or opens the description in `$EDITOR` and sends back what you saved
 - **Reviewers and draft** — `V` is a checklist over the current reviewers, the repository's default reviewers and the workspace members; `D` flips the PR between draft and ready for review
 - **Approve** — `A` approves the PR, and `A` again withdraws the approval you gave; the dialog always names the direction, and your own PRs are refused the way Bitbucket refuses them
+- **Comment and reply** — `C` opens a one-line composer docked under the conversation: a reply to the thread you are reading or the one under the cursor, a new comment on the PR from the Overview tab. `ctrl+e` continues in `$EDITOR` when a reply wants paragraphs, and what you send appears in the thread straight away, rendered by Bitbucket. A merged PR still takes comments
 - **Rerun and stop pipelines** — `P` starts a finished pipeline run again with the same commit and selector, `X` signals a running one to stop; both work on the Builds panel and inside the pipeline and step-log views, behind a confirmation that names the run
-- **Read-only mode** — `--read-only` (or `bitbucket.readOnly: true`) makes the whole thing browse-only: the client refuses every non-GET request before it is sent, and the action keys disappear. Nothing else is ever written either — lazybitbucket cannot request changes, decline or comment
+- **Read-only mode** — `--read-only` (or `bitbucket.readOnly: true`) makes the whole thing browse-only: the client refuses every non-GET request before it is sent, and the action keys disappear. Nothing else is ever written either — lazybitbucket cannot request changes, decline, edit or delete a comment, or resolve a thread
 - **Git integration** — check out the source branch of the selected PR; started inside a checkout, lazybitbucket scopes the list to that repository and puts the cursor on the PR for the branch you are on, whichever tab it is in
 - **Custom commands** — bind shell commands to keys with template access to the focused PR, repo, build, or the changed file and line under the cursor
 - **Themes** — default ANSI palette, all four Catppuccin flavors (Latte, Frappé, Macchiato, Mocha) and the three Kanagawa variants (Wave, Dragon, Lotus), with light/dark selection that follows your terminal
@@ -146,7 +147,7 @@ The actions that change something need a write scope, one each:
 
 | Scope | Needed for |
 |-------|------------|
-| `write:pullrequest:bitbucket` | the six [pull request actions](docs/Keybindings.md#pull-request-actions): editing the title or description, setting reviewers, toggling draft, approving, and merging |
+| `write:pullrequest:bitbucket` | the seven [pull request actions](docs/Keybindings.md#pull-request-actions): editing the title or description, setting reviewers, toggling draft, approving, merging, and commenting |
 | `write:pipeline:bitbucket` | [rerunning and stopping pipeline runs](docs/Keybindings.md#rerun-and-stop-a-pipeline) from the Builds panel or the [pipelines view](docs/Keybindings.md#pipelines-view) (`P` / `X`) |
 
 The two are independent: the pull request actions do not need the pipeline scope, and `P` / `X` do not need the pull request one. Leave them off and every read still works while a write comes back `403` — no harm done, just a message in the hint bar. If you would rather not have the possibility at all, use [read-only mode](docs/Config.md#read-only-mode), which needs neither and refuses writes before they are sent. Sync needs no scope of its own: it is local git, so what it needs is push permission on the remote. On a repository, project or workspace access token the same permission is spelled `pullrequest:write`.

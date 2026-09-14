@@ -175,6 +175,15 @@ type UnapprovePullRequestCall struct {
 	ID        int
 }
 
+// CreateCommentCall records one CreateComment call.
+type CreateCommentCall struct {
+	Ctx       context.Context
+	Workspace string
+	RepoSlug  string
+	ID        int
+	Create    bitbucket.CommentCreate
+}
+
 // RunPipelineCall records one RunPipeline call.
 type RunPipelineCall struct {
 	Ctx       context.Context
@@ -244,6 +253,7 @@ type FakeClient struct {
 	UpdatePullRequestFunc             func(ctx context.Context, workspace, repoSlug string, id int, update bitbucket.PullRequestUpdate) (*bitbucket.PullRequest, error)
 	ApprovePullRequestFunc            func(ctx context.Context, workspace, repoSlug string, id int) (*bitbucket.Participant, error)
 	UnapprovePullRequestFunc          func(ctx context.Context, workspace, repoSlug string, id int) error
+	CreateCommentFunc                 func(ctx context.Context, workspace, repoSlug string, id int, create bitbucket.CommentCreate) (*bitbucket.Comment, error)
 	RunPipelineFunc                   func(ctx context.Context, workspace, repoSlug string, target bitbucket.PipelineTarget) (*bitbucket.Pipeline, error)
 	StopPipelineFunc                  func(ctx context.Context, workspace, repoSlug, pipelineUUID string) error
 	ListEffectiveDefaultReviewersFunc func(ctx context.Context, workspace, repoSlug string) ([]bitbucket.Account, error)
@@ -274,6 +284,7 @@ type FakeClient struct {
 	UpdatePullRequestCalls             []UpdatePullRequestCall
 	ApprovePullRequestCalls            []ApprovePullRequestCall
 	UnapprovePullRequestCalls          []UnapprovePullRequestCall
+	CreateCommentCalls                 []CreateCommentCall
 	RunPipelineCalls                   []RunPipelineCall
 	StopPipelineCalls                  []StopPipelineCall
 	ListEffectiveDefaultReviewersCalls []ListEffectiveDefaultReviewersCall
@@ -341,6 +352,8 @@ func (f *FakeClient) CallCount(method string) int {
 		return len(f.ApprovePullRequestCalls)
 	case "UnapprovePullRequest":
 		return len(f.UnapprovePullRequestCalls)
+	case "CreateComment":
+		return len(f.CreateCommentCalls)
 	case "RunPipeline":
 		return len(f.RunPipelineCalls)
 	case "StopPipeline":
@@ -653,6 +666,23 @@ func (f *FakeClient) UnapprovePullRequest(ctx context.Context, workspace, repoSl
 		return nil
 	}
 	return fn(ctx, workspace, repoSlug, id)
+}
+
+// CreateComment records the call and dispatches CreateCommentFunc.
+func (f *FakeClient) CreateComment(ctx context.Context, workspace, repoSlug string, id int,
+	create bitbucket.CommentCreate,
+) (*bitbucket.Comment, error) {
+	f.mu.Lock()
+	f.CreateCommentCalls = append(f.CreateCommentCalls,
+		CreateCommentCall{Ctx: ctx, Workspace: workspace, RepoSlug: repoSlug, ID: id, Create: create})
+	fn := f.CreateCommentFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("CreateComment")
+		return nil, nil
+	}
+	return fn(ctx, workspace, repoSlug, id, create)
 }
 
 // RunPipeline records the call and dispatches RunPipelineFunc.

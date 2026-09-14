@@ -625,6 +625,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleFileSelected(msg)
 	case views.ThreadSelectedMsg:
 		return a.handleThreadSelected(msg)
+	case views.CommentSubmittedMsg:
+		return a.handleCommentSubmitted(msg)
+	case views.ComposeCommentInEditorMsg:
+		return a.handleComposeCommentInEditor(msg)
 
 	case components.ModalSelectedMsg:
 		return a.handleModalSelected(msg)
@@ -655,6 +659,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handlePipelineWritten(msg)
 	case descriptionEditedMsg:
 		return a.handleDescriptionEdited(msg)
+	case commentPostedMsg:
+		return a.handleCommentPosted(msg)
+	case commentEditedMsg:
+		return a.handleCommentEdited(msg)
 	case syncDoneMsg:
 		return a.handleSyncDone(msg)
 

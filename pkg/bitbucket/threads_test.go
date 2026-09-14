@@ -512,3 +512,78 @@ func TestThreadAt_EmptyThreadList(t *testing.T) {
 		t.Error("ThreadAt found a thread in an empty list")
 	}
 }
+
+func TestAppendComment_AttachesAReplyToItsThread(t *testing.T) {
+	t.Parallel()
+
+	threads := BuildThreads([]Comment{
+		makeComment(commentOpts{id: 1, minutes: 0, body: "is one token enough?", path: "a.go", line: 3}),
+		makeComment(commentOpts{id: 2, parent: 1, minutes: 5, body: "we rotate weekly"}),
+		makeComment(commentOpts{id: 7, minutes: 2, body: "general"}),
+	})
+
+	updated := AppendComment(threads, makeComment(commentOpts{
+		id: 9, parent: 1, minutes: 9, body: "a window is still a window",
+	}))
+
+	if len(updated) != 2 {
+		t.Fatalf("threads = %d, want the same 2", len(updated))
+	}
+	testkit.AssertEqual(t, "root", updated[0].Root.ID, int64(1))
+	if len(updated[0].Replies) != 2 {
+		t.Fatalf("replies = %d, want 2", len(updated[0].Replies))
+	}
+	// The reply lands in written order, which is BuildThreads' rule rather than
+	// a second one here.
+	testkit.AssertEqual(t, "last reply", updated[0].Replies[1].ID, int64(9))
+	testkit.AssertEqual(t, "the other thread is untouched", updated[1].Root.ID, int64(7))
+}
+
+func TestAppendComment_StartsAThreadForANewRoot(t *testing.T) {
+	t.Parallel()
+
+	threads := BuildThreads([]Comment{
+		makeComment(commentOpts{id: 1, minutes: 0, body: "first", path: "a.go", line: 3}),
+	})
+
+	updated := AppendComment(threads, makeComment(commentOpts{id: 5, minutes: 4, body: "a general remark"}))
+
+	if len(updated) != 2 {
+		t.Fatalf("threads = %d, want 2", len(updated))
+	}
+	// An inline thread still sorts ahead of a general one, whenever it arrived.
+	testkit.AssertEqual(t, "inline first", updated[0].Root.ID, int64(1))
+	testkit.AssertEqual(t, "the new general thread", updated[1].Root.ID, int64(5))
+}
+
+func TestAppendComment_ReplacesACommentItAlreadyHolds(t *testing.T) {
+	t.Parallel()
+
+	threads := BuildThreads([]Comment{
+		makeComment(commentOpts{id: 1, minutes: 0, body: "first"}),
+		makeComment(commentOpts{id: 2, parent: 1, minutes: 1, body: "draft text"}),
+	})
+
+	edited := makeComment(commentOpts{id: 2, parent: 1, minutes: 1, body: "final text"})
+	updated := AppendComment(AppendComment(threads, edited), edited)
+
+	if len(updated) != 1 {
+		t.Fatalf("threads = %d, want 1", len(updated))
+	}
+	if len(updated[0].Replies) != 1 {
+		t.Fatalf("replies = %d, want 1 — applying the same answer twice must not duplicate it",
+			len(updated[0].Replies))
+	}
+	testkit.AssertEqual(t, "body", updated[0].Replies[0].Content.Raw, "final text")
+}
+
+func TestAppendComment_BuildsAThreadOutOfNothing(t *testing.T) {
+	t.Parallel()
+
+	updated := AppendComment(nil, makeComment(commentOpts{id: 3, minutes: 0, body: "the first word"}))
+
+	if len(updated) != 1 {
+		t.Fatalf("threads = %d, want 1", len(updated))
+	}
+	testkit.AssertEqual(t, "root", updated[0].Root.ID, int64(3))
+}

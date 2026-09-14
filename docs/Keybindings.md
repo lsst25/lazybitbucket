@@ -73,17 +73,18 @@ From any left panel except Status, these scroll the detail panel without moving 
 | `V` | Reviewers… | `pullRequests.reviewers` |
 | `D` | Toggle draft… | `pullRequests.toggleDraft` |
 | `A` | Approve, or remove your approval… | `pullRequests.approve` |
+| `C` | Comment on the pull request — opens the composer in the detail panel | `pullRequests.comment` |
 
 ## Pull request actions
 
-The six keys above are the only ones that change a pull request — `P` and `X` write too, but to a pipeline run rather than the pull request (see [Rerun and stop a pipeline](#rerun-and-stop-a-pipeline)). They work from the pull request list and from the detail panel alike — whatever has focus, they act on the pull request the list cursor is on — and each one opens a dialog first. Nothing is sent until you confirm; `esc` closes a dialog without a request.
+The seven keys above are the only ones that change a pull request — `P` and `X` write too, but to a pipeline run rather than the pull request (see [Rerun and stop a pipeline](#rerun-and-stop-a-pipeline)). They work from the pull request list and from the detail panel alike — whatever has focus, they act on the pull request the list cursor is on — and each one asks before it writes. Six open a dialog: nothing is sent until you confirm, and `esc` closes a dialog without a request. `C` is the seventh and asks differently — it opens the [comment composer](#c--comment-or-reply) in the detail panel, and what you send there is the confirmation.
 
 A refusal is a one-line message in the hint bar and no dialog:
 
 | Message | Reason |
 |---------|--------|
-| `read-only mode: cannot merge` | [Read-only mode](Config.md#read-only-mode) is on. It refuses all six, sync included |
-| `cannot merge: pull request is MERGED` | The pull request is not `OPEN` any more |
+| `read-only mode: cannot merge` | [Read-only mode](Config.md#read-only-mode) is on. It refuses all seven, sync and commenting included |
+| `cannot merge: pull request is MERGED` | The pull request is not `OPEN` any more. `C` is the exception: a merged or declined pull request still takes comments |
 | `merge already in progress` | The previous write on this pull request has not answered yet |
 | `cannot approve your own pull request` | `A` on a pull request you opened. Bitbucket refuses it, so lazybitbucket does not ask |
 
@@ -187,6 +188,42 @@ If your approval is already on the pull request the question is `Remove your app
 
 The pull request is read back afterwards rather than patched from the answer: the approve endpoint replies with a single participant and the withdrawal with nothing at all, while the approvals column in the list and the reviewer line in the detail pane are drawn from the whole participant set. So after `approved #101` (or `approval removed #101`) both of them move. Should that read-back fail after the approval landed, the help bar still says `approved #101`, followed by `refresh failed: …` — the approval is on the server, and `r` reloads the pull request.
 
+### `C` — comment or reply
+
+`C` opens a one-line composer docked at the bottom of the detail panel. There is no dialog and no modal: the box sits under whatever you are reading, and the panel keeps scrolling behind it.
+
+```
+ ↳ Ken Thompson · 1h ago
+
+   Never mind — the RFC says it. Resolving.
+ Reply █
+ enter send · ctrl+e editor · esc cancel
+```
+
+What the comment answers depends on where you press it:
+
+| Where | What `C` writes |
+|-------|-----------------|
+| Inside a [thread](#thread) | A reply to that conversation |
+| Comments tab, on a thread | A reply to the thread under the cursor |
+| Comments tab with no comments yet | The first comment on the pull request |
+| Overview tab | A new comment on the pull request |
+| Files or Commits tab | Nothing — there is no conversation under the cursor, and the hint bar says so |
+
+While the composer is open it owns the keyboard: every key is text, bindings and custom commands included, so a reply may say `q` without quitting. The three keys that are not text are the ones under the box —
+
+| Key | Action |
+|-----|--------|
+| `enter` | Send. An empty box just closes |
+| `ctrl+e` | Continue in `editor` — the text so far is written to a temp `.md`, opened the way `E` opens a description, and posted when the editor exits. An empty file discards the comment |
+| `esc` | Close and drop what was typed |
+
+A sent comment is folded straight into the conversation from Bitbucket's answer — no refetch, and mentions in it read as names because the answer carries the server's own rendering. A new comment on the pull request opens its thread, so the conversation you just started is what you are looking at.
+
+Nothing typed is lost to a failure. A reply typed in the box goes back into the box, with the error in the hint bar; one composed in the editor stays in its file and the hint bar names the path.
+
+Editing a comment, deleting one, resolving a thread and anchoring a new comment to a diff line are not implemented — those still want the browser (`o`).
+
 ## Builds `[3]`
 
 The Builds panel lists the commit statuses of the selected pull request.
@@ -242,7 +279,7 @@ While the write is in flight the hint bar says `rerunning pipeline #414…` or `
 
 A rejected write is reported in Bitbucket's own words — `stop pipeline failed: The specified pipeline has already completed.` when a run ends between the read-back and your `enter`.
 
-Both keys need the `write:pipeline:bitbucket` scope. It is neither one of the five read scopes nor the `write:pullrequest:bitbucket` the six pull request actions use, and the two write scopes are independent, so a token can carry either without the other — see [the scopes in the README](../README.md#get-a-token). Unlike those six actions these two do not care what state the pull request is in: the pipelines of a merged pull request can still be rerun.
+Both keys need the `write:pipeline:bitbucket` scope. It is neither one of the five read scopes nor the `write:pullrequest:bitbucket` the seven pull request actions use, and the two write scopes are independent, so a token can carry either without the other — see [the scopes in the README](../README.md#get-a-token). Unlike the six that dialog these two do not care what state the pull request is in: the pipelines of a merged pull request can still be rerun.
 
 ## Pipelines view
 
@@ -363,10 +400,10 @@ Focusing the detail panel fetches the Files, Commits and Comments tabs together,
 
 | Tab | `enter` | Other keys |
 |-----|---------|------------|
-| Overview | — | `o` opens the pull request, `u` the URL picker, `y` copies its URL |
+| Overview | — | `C` comments on the pull request, `o` opens the pull request, `u` the URL picker, `y` copies its URL |
 | Files | Open the selected file's diff | `n` / `p` move to the next / previous file, `e` opens the file in your editor, `o` opens the pull request |
 | Commits | Expand the full commit message | `o` opens the commit in a browser, `y` copies its URL |
-| Comments | Open the thread in the panel | `o` opens the thread in a browser, `y` copies its URL |
+| Comments | Open the thread in the panel | `C` replies to the thread under the cursor, `o` opens the thread in a browser, `y` copies its URL |
 
 The Files tab lists a status letter (`A` added, `M` modified, `D` removed, `R` renamed, plus a gray `B` for a binary file) and the `+added −removed` counts. The Comments tab shows each thread as `path:line` (or `General`), whether it is resolved and its replies; a thread longer than eight lines is collapsed behind an ellipsis in the list and `enter` opens it whole — see [Thread](#thread). A comment body — like the Overview's description — shows an `@`-mention by display name, `@Grace Hopper` in the theme's blue for the `@{account_id}` the Markdown stores; a mention Bitbucket itself left unresolved, a departed colleague or one written inside a code span, stays as the id, which is what the web UI shows too.
 
@@ -395,6 +432,7 @@ A `●` in the marker column means the line carries at least one inline comment 
 | Key | Action | Config key |
 |-----|--------|------------|
 | `j` / `k` | Scroll the conversation | `navigation.down`, `navigation.up` |
+| `C` | Reply to this conversation — see [`C` — comment or reply](#c--comment-or-reply) | `pullRequests.comment` |
 | `o` | Open the comment in a browser | `pullRequests.browser` |
 | `y` | Copy the comment URL | `pullRequests.copyURL` |
 | `backspace` | Back to the Comments tab, with the cursor on the thread you were reading | `detail.back` |

@@ -28,7 +28,10 @@ What exists:
   with six values and `Label()`, `MergeResult.Queued()` for the 202) and `GetMergeTaskStatus`,
   `UpdatePullRequest` (`PullRequestUpdate`: title, description, draft, reviewers),
   `ApprovePullRequest` (POST with no body, answers a `Participant`) and `UnapprovePullRequest`
-  (DELETE, answers 204), plus `ListEffectiveDefaultReviewers` and `ListWorkspaceMembers`, and the two
+  (DELETE, answers 204), `CreateComment` (POST `…/comments` with `CommentCreate` — a raw body and an
+  optional `ParentID`; the 201 carries the created comment with the html Bitbucket rendered, which is
+  what lets a written comment be read back without a refetch, and `ErrEmptyComment` refuses an empty
+  one before any request), plus `ListEffectiveDefaultReviewers` and `ListWorkspaceMembers`, and the two
   pipeline writes `RunPipeline` (POST `/pipelines` with the target of an existing run — the rerun,
   answered 201 with the new run) and `StopPipeline` (POST `…/stopPipeline`, 204), guarded by
   `ErrPipelineTarget`, which refuses a target that cannot be turned into a request body before any
@@ -65,7 +68,7 @@ What exists:
   `pullrequests`/`builds`/`repos`/`detail`/`diff` (plus the per-command `changedFiles: true`, the one
   scope a command opts into rather than inheriting from its context, because it costs a diffstat
   request — it fills `{{.Files}}` with the whole changed-file list), `keybinding.pullRequests` with
-  `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`/`approve`, and `keybinding.builds` with
+  `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`/`approve`/`comment`, and `keybinding.builds` with
   `rerun`/`stop` — the only group besides `pullRequests` that carries write actions. Also
   `gui.startView` (`pullRequests` | `pipelines`, validated like `gui.screenMode`),
   `gui.prefetchDetailTabs` (`*bool`, nil means true, resolved by `PrefetchesDetailTabs()` the way
@@ -103,9 +106,17 @@ What exists:
   `ModeThread` (`detail_threads.go`): `enter` opens one conversation in the panel as scrolling text
   — no modal — keyed by the root comment id and looked up in the thread list on every render, so a
   refetch changes what is read rather than leaving a stale copy and a thread that is gone says so.
-  `backspace` returns to the tab with the cursor on it.
-  The six write flows live in `actions.go` on `M` merge, `S` sync, `E` edit, `V` reviewers, `D` draft,
-  `A` approve — they work from the list and the detail panel alike, always open a dialog first, are
+  `backspace` returns to the tab with the cursor on it. `C` writes a comment there and on the
+  Comments and Overview tabs (`comments.go`, `views/detail_composer.go`): a one-line composer docked
+  under the body rather than a dialog — it owns the keyboard while it is open, `enter` sends, `esc`
+  drops it, `ctrl+e` hands the text to `config.ResolveEditor()` through a temp `.md` the way the
+  description editor does. The parent is resolved from the mode and the tab (the open thread, the
+  thread under the cursor, or none for a comment on the pull request); the 201 is folded into
+  `threadsCache` with `bitbucket.AppendComment` and pushed to the view, so nothing is refetched; a
+  failed post hands the text back to the box, or leaves it in the editor's file and names it. It is
+  the one write `writeTargetInState` does not require an `OPEN` pull request for.
+  The six dialog write flows live in `actions.go` on `M` merge, `S` sync, `E` edit, `V` reviewers,
+  `D` draft, `A` approve — they work from the list and the detail panel alike, always open a dialog first, are
   refused for a non-`OPEN` PR, while another write on that PR is in flight, and in read-only mode. The
   merge, sync, draft and approve dialogs are `components.FormModal` (choice / toggle / text / note rows);
   reviewers reuse `Modal.ShowChecklist` and the title editor `InputModal`; the description goes through
@@ -132,16 +143,17 @@ Hard constraints that still hold:
 - **Every write goes through `writeJSON`/`do` and is refused under `ClientOpts.ReadOnly`** with
   `ErrReadOnly`, before a request is built. `writeJSON` sends no body and no `Content-Type` for a nil
   payload, which is what the approve endpoints take. Read-only is browse-only: the TUI blocks sync too,
-  because it pushes. Requesting changes, declining, commenting, review tasks and running an arbitrary
-  custom pipeline definition still have no methods at all.
+  because it pushes. Requesting changes, declining, editing or deleting a comment, resolving a thread,
+  anchoring a new comment to a diff line, review tasks and running an arbitrary custom pipeline
+  definition still have no methods at all.
 - **No test may reach the real API.** Unit tests use `bitbuckettest.FakeClient` or `httptest`;
   integration tests use `pkg/bitbucket/demo`; **every `bitbucket.NewClient` in a test passes a local
   `BaseURL`** — never the default, which is the real host.
 - `pkg/bitbucket` and `pkg/bitbucket/demo` import nothing from `pkg/tui` or `pkg/config`.
 
 Not built yet (ROADMAP step 4+): the richer search / saved filters and PR creation of step 4, and
-everything left under "Later / maybe" — requesting changes, declining, posting or resolving comments,
-review tasks, triggering a custom pipeline definition, a CLI mode. In the pipelines view specifically:
+everything left under "Later / maybe" — requesting changes, declining, editing or resolving comments,
+commenting on a diff line, review tasks, triggering a custom pipeline definition, a CLI mode. In the pipelines view specifically:
 filter tabs over the run list, custom commands, and auto-refresh on the background tick. Also not built: the activity feed,
 side-by-side diffs, whole-file views and conflict display (deliberate step-2 non-goals), and
 side-by-side conflict resolution for a failed sync — a conflict aborts and is handed back to the user.
@@ -210,9 +222,9 @@ Everything user-visible is `lazybitbucket`:
 Auth: Atlassian removed app passwords on 2026-07-28. There is no app-password mode. Two credential
 shapes: a token alone (API token or access token) sent as `Authorization: Bearer`, or an Atlassian
 account email plus an API token sent as HTTP Basic — the Basic username must be the **account email**,
-not a Bitbucket username, or the server answers 401. The five read scopes cover browsing; the six PR write
-actions additionally want `write:pullrequest:bitbucket` (merging and approving included) and the two
-pipeline ones `write:pipeline:bitbucket`, both of which read-only mode makes unnecessary.
+not a Bitbucket username, or the server answers 401. The five read scopes cover browsing; the seven PR write
+actions additionally want `write:pullrequest:bitbucket` (merging, approving and commenting included)
+and the two pipeline ones `write:pipeline:bitbucket`, both of which read-only mode makes unnecessary.
 
 ## Conventions
 

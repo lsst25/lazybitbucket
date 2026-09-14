@@ -79,6 +79,11 @@ const (
 	ActToggleDraft Action = "toggleDraft"
 	ActApprove     Action = "approve"
 
+	// ActComment is the seventh write and the only one with no dialog: it opens
+	// the composer in the detail panel instead, and what the composer sends is
+	// the confirmation. It is read-only-refused and hidden like the rest.
+	ActComment Action = "comment"
+
 	// The two pipeline writes. They act on the run behind a build rather than
 	// on the pull request, so they are live in the Builds panel and in the
 	// detail panel's pipeline and step-log views and nowhere else — but they
@@ -160,6 +165,7 @@ func DefaultKeymap() Keymap {
 		ActReviewers:   {"V"},
 		ActToggleDraft: {"D"},
 		ActApprove:     {"A"},
+		ActComment:     {"C"},
 
 		ActRerunPipeline: {"P"},
 		ActStopPipeline:  {"X"},
@@ -211,6 +217,7 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	set(ActReviewers, kcfg.PullRequests.Reviewers)
 	set(ActToggleDraft, kcfg.PullRequests.ToggleDraft)
 	set(ActApprove, kcfg.PullRequests.Approve)
+	set(ActComment, kcfg.PullRequests.Comment)
 
 	// The Builds group carries the two pipeline writes and nothing else: every
 	// other key that works on a build row is the pull request group's.

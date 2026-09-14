@@ -18,6 +18,15 @@ func (a *App) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleHelpKeys(msg)
 	}
 
+	// The comment composer takes every key while it is open, before custom
+	// commands and before any binding is matched: what is typed into a reply is
+	// text, not a command. See comments.go.
+	if a.detailView.Composing() {
+		updated, cmd := a.detailView.Update(msg)
+		a.detailView = updated
+		return a, cmd
+	}
+
 	// Custom commands take precedence over built-in bindings so a user can
 	// override any action.
 	if m, cmd, ok := a.handleCustomCommand(msg.String()); ok {
@@ -480,6 +489,11 @@ func (a *App) handlePullRequestAction(action Action) (tea.Model, tea.Cmd, bool) 
 
 	case ActApprove:
 		return a, a.handleActionApprove(), true
+
+	// The seventh write: it opens the composer in the detail panel rather than
+	// a dialog, and posts nothing on its own; see comments.go.
+	case ActComment:
+		return a, a.handleActionComment(), true
 
 	// The two pipeline writes. They act on the run behind a build rather than
 	// on the pull request, and answer with a hint where there is no run to act

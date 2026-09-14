@@ -171,6 +171,12 @@ func (s *stubClient) UnapprovePullRequest(context.Context, string, string, int) 
 	return nil
 }
 
+func (s *stubClient) CreateComment(
+	context.Context, string, string, int, CommentCreate,
+) (*Comment, error) {
+	return nil, nil
+}
+
 func (s *stubClient) RunPipeline(context.Context, string, string, PipelineTarget) (*Pipeline, error) {
 	return nil, nil
 }

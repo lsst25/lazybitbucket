@@ -505,3 +505,50 @@ func TestHelpBarItems_FollowTheOpenOverlay(t *testing.T) {
 		})
 	}
 }
+
+func TestContextBindings_TheCommentKeyFollowsWhereItWorks(t *testing.T) {
+	t.Parallel()
+
+	// C is listed where there is something to answer, and nowhere else: the
+	// Files and Commits tabs have no comment under their cursor.
+	for _, tc := range []struct {
+		name   string
+		tab    views.DetailTab
+		listed bool
+	}{
+		{name: "comments", tab: views.TabComments, listed: true},
+		{name: "overview", tab: views.TabOverview, listed: true},
+		{name: "files", tab: views.TabFiles, listed: false},
+		{name: "commits", tab: views.TabCommits, listed: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			app := appForKeybindings(t)
+			pr := newPR(testRepo, 101, testTitle)
+			app.detailView.SetPullRequest(&pr)
+			app.detailView.SetActiveTab(tc.tab)
+			app.side = sideRight
+
+			if got := hasBindingKey(app.ContextBindings(), "C"); got != tc.listed {
+				t.Errorf("comment key listed = %v, want %v", got, tc.listed)
+			}
+		})
+	}
+}
+
+func TestContextBindings_TheCommentKeyIsHiddenInReadOnlyMode(t *testing.T) {
+	t.Parallel()
+	app := appForKeybindings(t)
+	app.readOnly = true
+	pr := newPR(testRepo, 101, testTitle)
+	app.detailView.SetPullRequest(&pr)
+	app.detailView.SetActiveTab(views.TabComments)
+	app.side = sideRight
+
+	if hasBindingKey(app.ContextBindings(), "C") {
+		t.Error("read-only mode must not advertise the comment key")
+	}
+	if hasHelpKey(app.helpBarItems(), "C") {
+		t.Error("read-only mode must not advertise the comment key on the help bar")
+	}
+}

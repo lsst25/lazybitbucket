@@ -224,6 +224,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /repositories/{ws}/{slug}/pullrequests/{id}/merge", s.handleMergePullRequest)
 	mux.HandleFunc("POST /repositories/{ws}/{slug}/pullrequests/{id}/approve", s.handleApprovePullRequest)
 	mux.HandleFunc("DELETE /repositories/{ws}/{slug}/pullrequests/{id}/approve", s.handleUnapprovePullRequest)
+	mux.HandleFunc("POST /repositories/{ws}/{slug}/pullrequests/{id}/comments", s.handleCreateComment)
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}/merge/task-status/{task}",
 		s.handleMergeTaskStatus)
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/effective-default-reviewers",

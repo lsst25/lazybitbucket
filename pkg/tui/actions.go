@@ -133,6 +133,14 @@ func (a *App) overlayArmed() bool {
 // refusals — nothing selected, read-only mode, a pull request that is no longer
 // open, another dialog, another write still running — are written once.
 func (a *App) writeTarget(verb string) (*bitbucket.PullRequest, bool) {
+	return a.writeTargetInState(verb, true)
+}
+
+// writeTargetInState is writeTarget with the state rule spelled out. Every
+// write but one changes the pull request and is refused once it is merged or
+// declined; commenting is the exception, because a conversation outlives the
+// branch it was about.
+func (a *App) writeTargetInState(verb string, requireOpen bool) (*bitbucket.PullRequest, bool) {
 	if a.view == viewPipelines {
 		// The pull request the other view has under its cursor survives a view
 		// switch, and acting on it from here would be a write against something
@@ -148,7 +156,7 @@ func (a *App) writeTarget(verb string) (*bitbucket.PullRequest, bool) {
 		a.helpBar.SetStatusMsg("read-only mode: cannot " + verb)
 		return nil, false
 	}
-	if pr.State != bitbucket.PullRequestOpen {
+	if requireOpen && pr.State != bitbucket.PullRequestOpen {
 		a.helpBar.SetStatusMsg("cannot " + verb + ": pull request is " + string(pr.State))
 		return nil, false
 	}
