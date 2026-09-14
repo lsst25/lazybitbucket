@@ -271,7 +271,7 @@ func (a *App) editorTarget() (path string, line int, ok bool) {
 		if entry := a.detailView.SelectedFile(); entry != nil {
 			return entry.Path(), 1, true
 		}
-	case views.ModePipeline, views.ModeStepLog, views.ModeRepo, views.ModeSplash:
+	case views.ModePipeline, views.ModeStepLog, views.ModeThread, views.ModeRepo, views.ModeSplash:
 		// No file is on screen in these modes.
 	}
 	return "", 0, false

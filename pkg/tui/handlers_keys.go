@@ -368,11 +368,13 @@ func (a *App) handleReviewAction(action Action) (tea.Model, tea.Cmd, bool) {
 }
 
 // jumpToTab puts one detail tab on screen and warms it. SetActiveTab leaves
-// ModeFileDiff on the way, so a tab key pressed inside a diff lands on the tab
-// rather than on a diff wearing another tab's title.
+// ModeFileDiff and ModeThread on the way, so a tab key pressed inside a diff or
+// a conversation lands on the tab rather than on a body wearing another tab's
+// title.
 func (a *App) jumpToTab(tab views.DetailTab) tea.Cmd {
-	mode := a.detailView.Mode()
-	if mode != views.ModePullRequest && mode != views.ModeFileDiff {
+	switch a.detailView.Mode() {
+	case views.ModePullRequest, views.ModeFileDiff, views.ModeThread:
+	case views.ModePipeline, views.ModeStepLog, views.ModeRepo, views.ModeSplash:
 		return nil
 	}
 	a.detailView.SetActiveTab(tab)
@@ -550,6 +552,12 @@ func (a *App) detailBrowserURL() string {
 			if url := pr.HTMLURL(); url != "" {
 				return url + "/diff"
 			}
+		}
+	case views.ModeThread:
+		// The conversation on screen is the target, not whichever thread the
+		// Comments tab cursor was left on.
+		if thread := a.detailView.OpenedThread(); thread != nil {
+			return thread.Root.HTMLURL()
 		}
 	case views.ModePullRequest:
 		return a.reviewTabURL()

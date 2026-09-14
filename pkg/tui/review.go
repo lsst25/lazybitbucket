@@ -484,6 +484,8 @@ func (a *App) reviewTabOnScreen(key string, tab views.DetailTab) bool {
 		return a.detailView.ActiveTab() == tab
 	case views.ModeFileDiff:
 		return tab == views.TabFiles || tab == views.TabComments
+	case views.ModeThread:
+		return tab == views.TabComments
 	default:
 		return false
 	}

@@ -45,11 +45,11 @@ func detailText(t *testing.T, app *App) string {
 	return out.String()
 }
 
-// expandThread walks the Comments tab down to the first thread match accepts
-// and opens it in the read-only modal. The list collapses a block at
-// maxBlockLines, so the modal is the only place a long thread can be read whole
-// — and the only place a mention near its end can be asserted on.
-func expandThread(t *testing.T, app *App, match func(bitbucket.Thread) bool) {
+// openThread walks the Comments tab down to the first thread match accepts and
+// opens it in the detail panel. The list collapses a block at maxBlockLines, so
+// the thread section is the only place a long conversation can be read whole —
+// and the only place a mention near its end can be asserted on.
+func openThread(t *testing.T, app *App, match func(bitbucket.Thread) bool) {
 	t.Helper()
 	for range 20 {
 		_ = app.detailView.View()
@@ -59,12 +59,9 @@ func expandThread(t *testing.T, app *App, match func(bitbucket.Thread) bool) {
 		}
 		if match(*thread) {
 			_, cmd := app.detailView.Update(tea.KeyMsg{Type: tea.KeyEnter})
-			if cmd == nil {
-				t.Fatal("Enter on a thread should expand it")
-			}
 			runAll(t, app, cmd)
-			if !app.modal.IsVisible() {
-				t.Fatal("the expanded thread should open in a modal")
+			if app.detailView.Mode() != views.ModeThread {
+				t.Fatal("Enter on a thread should open it in the panel")
 			}
 			return
 		}
@@ -99,11 +96,11 @@ func TestDemo_CommentsResolveWhatBitbucketRenderedAndKeepWhatItDidNot(t *testing
 	runAll(t, app, app.jumpToTab(views.TabComments))
 	// The demo's checklist thread: a general root naming the colleague who has
 	// left, and a reply naming two people, one of them twice.
-	expandThread(t, app, func(thread bitbucket.Thread) bool {
+	openThread(t, app, func(thread bitbucket.Thread) bool {
 		return !thread.IsInline() && strings.Contains(thread.Root.Content.Raw, "Before this merges")
 	})
 
-	rendered := plain(app.modal.View())
+	rendered := detailText(t, app)
 	// Two people named in one line, one of them twice: every occurrence the
 	// rendering resolved reads as a name.
 	want := mentionDemoUser + " " + mentionKen + " - " + mentionKen + " owns"

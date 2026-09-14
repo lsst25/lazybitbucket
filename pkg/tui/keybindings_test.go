@@ -287,7 +287,7 @@ func TestContextBindings_FollowTheDetailTabAndMode(t *testing.T) {
 		{
 			name:  "comments tab",
 			setup: func(app *App, _ *bitbucket.PullRequest) { app.detailView.SetActiveTab(views.TabComments) },
-			want:  []string{"expand the thread", "open the thread in a browser"},
+			want:  []string{"open the thread", "open the thread in a browser"},
 		},
 		{
 			name: "file diff",
@@ -295,6 +295,18 @@ func TestContextBindings_FollowTheDetailTabAndMode(t *testing.T) {
 				app.detailView.SetFileDiffLoading(pr.Key(), testFileGo)
 			},
 			want: []string{"back to the changed files", "open this line in the editor", "next changed file"},
+		},
+		{
+			name: "thread",
+			setup: func(app *App, pr *bitbucket.PullRequest) {
+				app.detailView.SetThreads(pr.Key(), testThreads())
+				app.detailView.SetActiveTab(views.TabComments)
+				// Enter reads the block list, which the first render fills in.
+				app.detailView.SetSize(80, 40)
+				app.detailView.View()
+				app.detailView.Activate()
+			},
+			want: []string{"back to the comments", "open the comment in a browser", "copy the comment URL"},
 		},
 	}
 

@@ -37,7 +37,7 @@ func (d *DetailView) renderThreadBlocks(width int) [][]string {
 
 	blocks := make([][]string, 0, len(d.threads.items))
 	for i := range d.threads.items {
-		blocks = append(blocks, d.renderThread(d.threads.items[i], width))
+		blocks = append(blocks, d.renderThread(d.threads.items[i], width, ""))
 	}
 	return blocks
 }
@@ -60,10 +60,12 @@ func (d *DetailView) threadsPlaceholder() (string, bool) {
 	}
 }
 
-// renderThread lays out one thread's lines.
-func (d *DetailView) renderThread(thread bitbucket.Thread, width int) []string {
+// renderThread lays out one thread's lines. headerIndent is what the anchor
+// line sits behind: nothing in the list, where the cursor bar owns that column,
+// and one space in the thread section, where the bylines already carry one.
+func (d *DetailView) renderThread(thread bitbucket.Thread, width int, headerIndent string) []string {
 	lines := make([]string, 0, 4+2*len(thread.Replies))
-	lines = append(lines, d.threadHeader(thread, width))
+	lines = append(lines, headerIndent+d.threadHeader(thread, width))
 	lines = append(lines, d.renderComment(thread.Root, "", width)...)
 	for _, reply := range thread.Replies {
 		lines = append(lines, d.renderComment(reply, "↳ ", width)...)
@@ -144,17 +146,88 @@ func (d *DetailView) renderComment(comment bitbucket.Comment, glyph string, widt
 	return lines
 }
 
-// activateThread hands the app the whole thread to open in a modal. The block
-// already holds every line unclamped — only its display is collapsed — so the
-// expansion is the block itself.
+// activateThread opens the thread under the cursor in the panel itself, the way
+// Enter on a changed file opens its diff and Enter on a pipeline step opens its
+// log. The list collapses a long conversation behind an ellipsis; the section
+// shows it whole and scrolls, and it is where replying to a comment will live.
 func (d *DetailView) activateThread() tea.Cmd {
 	thread := d.SelectedThread()
-	if thread == nil || d.listCursor >= len(d.blocks) {
+	if thread == nil {
 		return nil
 	}
-	title := "Thread " + threadAnchor(*thread)
-	lines := d.blocks[d.listCursor]
-	return func() tea.Msg {
-		return ExpandBlockMsg{Title: title, Lines: lines}
+	d.openThread(thread.Root.ID)
+	return nil
+}
+
+// openThread puts one conversation on screen, rewound to the top.
+func (d *DetailView) openThread(rootID int64) {
+	d.mode = ModeThread
+	d.threadRoot = rootID
+	d.scrollY = 0
+	d.listCursor = 0
+	d.invalidateBlocks()
+}
+
+// OpenedThread is the conversation ModeThread is showing, nil outside it and
+// when the thread it names is no longer in the list — a refetch can drop a
+// comment the reader had open.
+func (d *DetailView) OpenedThread() *bitbucket.Thread {
+	if d.mode != ModeThread {
+		return nil
 	}
+	i := d.threadIndex(d.threadRoot)
+	if i < 0 {
+		return nil
+	}
+	return &d.threads.items[i]
+}
+
+// threadIndex is the position of the thread rooted at rootID, -1 when the list
+// does not have it.
+func (d *DetailView) threadIndex(rootID int64) int {
+	for i := range d.threads.items {
+		if d.threads.items[i].Root.ID == rootID {
+			return i
+		}
+	}
+	return -1
+}
+
+// openThreadAnchor is the open conversation's anchor, for the panel title. A
+// thread that is no longer in the list still has a title to carry.
+func (d *DetailView) openThreadAnchor() string {
+	if thread := d.OpenedThread(); thread != nil {
+		return threadAnchor(*thread)
+	}
+	return generalThreadLabel
+}
+
+// threadBodyLines is the ModeThread body: the open conversation whole — header,
+// root and every reply, none of it collapsed. Rendering runs glamour once per
+// thread and width; a text body is rebuilt on every View, so the result is
+// memoised until something invalidates it.
+func (d *DetailView) threadBodyLines(width int) []string {
+	if d.threadBody.valid && d.threadBody.root == d.threadRoot && d.threadBody.width == width {
+		return d.threadBody.lines
+	}
+
+	var lines []string
+	if thread := d.OpenedThread(); thread != nil {
+		lines = d.renderThread(*thread, width, " ")
+	} else {
+		lines = []string{" " + lipgloss.NewStyle().Foreground(theme.ColorGray).
+			Render("This comment is no longer in the pull request.")}
+	}
+
+	d.threadBody = threadBodyCache{lines: lines, root: d.threadRoot, width: width, valid: true}
+	return lines
+}
+
+// threadBodyCache memoises one conversation's rendered lines. An entry is only
+// valid for the thread and width it was built at.
+type threadBodyCache struct {
+	lines []string
+	root  int64
+	width int
+	valid bool
 }

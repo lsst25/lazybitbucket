@@ -366,9 +366,9 @@ Focusing the detail panel fetches the Files, Commits and Comments tabs together,
 | Overview | — | `o` opens the pull request, `u` the URL picker, `y` copies its URL |
 | Files | Open the selected file's diff | `n` / `p` move to the next / previous file, `e` opens the file in your editor, `o` opens the pull request |
 | Commits | Expand the full commit message | `o` opens the commit in a browser, `y` copies its URL |
-| Comments | Expand the whole thread | `o` opens the thread in a browser, `y` copies its URL |
+| Comments | Open the thread in the panel | `o` opens the thread in a browser, `y` copies its URL |
 
-The Files tab lists a status letter (`A` added, `M` modified, `D` removed, `R` renamed, plus a gray `B` for a binary file) and the `+added −removed` counts. The Comments tab shows each thread as `path:line` (or `General`), whether it is resolved and its replies. A comment body — like the Overview's description — shows an `@`-mention by display name, `@Grace Hopper` in the theme's blue for the `@{account_id}` the Markdown stores; a mention Bitbucket itself left unresolved, a departed colleague or one written inside a code span, stays as the id, which is what the web UI shows too.
+The Files tab lists a status letter (`A` added, `M` modified, `D` removed, `R` renamed, plus a gray `B` for a binary file) and the `+added −removed` counts. The Comments tab shows each thread as `path:line` (or `General`), whether it is resolved and its replies; a thread longer than eight lines is collapsed behind an ellipsis in the list and `enter` opens it whole — see [Thread](#thread). A comment body — like the Overview's description — shows an `@`-mention by display name, `@Grace Hopper` in the theme's blue for the `@{account_id}` the Markdown stores; a mention Bitbucket itself left unresolved, a departed colleague or one written inside a code span, stays as the id, which is what the web UI shows too.
 
 ### File diff
 
@@ -387,6 +387,20 @@ The Files tab lists a status letter (`A` added, `M` modified, `D` removed, `R` r
 A `●` in the marker column means the line carries at least one inline comment (a digit when there are several). Comment markers need the review threads, which are fetched alongside the diff, so they may appear a moment after the diff itself.
 
 `e` opens the new side of the diff: on an added or context line its own line, on a removed line the next line that still exists, on a hunk header the hunk's first line. Files are resolved against the git repository lazybitbucket was started in, which is never checked against the pull request's repository — when the checkout is on another branch the hint bar says so and the file still opens. Inside tmux the editor gets a new window and the session stays on screen; elsewhere the terminal is handed over until the editor exits. See [Editor](Config.md#editor) for the editors that understand a line number and for `editorInTmux`.
+
+### Thread
+
+`enter` on the Comments tab opens that conversation in the panel, the way `enter` on the Files tab opens a diff and `enter` on a pipeline step opens its log. The list collapses a long thread; the section shows it whole — anchor line, root comment and every reply — and scrolls.
+
+| Key | Action | Config key |
+|-----|--------|------------|
+| `j` / `k` | Scroll the conversation | `navigation.down`, `navigation.up` |
+| `o` | Open the comment in a browser | `pullRequests.browser` |
+| `y` | Copy the comment URL | `pullRequests.copyURL` |
+| `backspace` | Back to the Comments tab, with the cursor on the thread you were reading | `detail.back` |
+| `h` / `left` / `esc` | Back to the Comments tab, then to the left panels | `detail.focusLeft` |
+
+The four tab keys (`i` / `f` / `m` / `t`) leave the conversation and land on their tab. A refresh that no longer carries the thread — it was deleted, or the comments were refetched after a push — leaves a line saying so rather than a stale copy of it.
 
 ### Pipeline run and step log
 

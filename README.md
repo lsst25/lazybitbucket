@@ -30,7 +30,7 @@ make build-demo
 - **Open in your editor** — `e` opens the file under the cursor at that line in `$EDITOR` (`nvim` by default), in your local checkout; inside tmux it gets a new tmux window and the session stays put
 - **Bring your own diff colours** — `diffRenderer: delta --color-only --paging=never` pipes each file's diff through delta (or anything that colours a diff line by line) instead of the built-in highlighting; the gutters, review markers and cursor stay lazybitbucket's
 - **Commits** — hash, author, age and subject per commit; `enter` expands the full message
-- **Review threads** — inline comments read as threads anchored to a file and line, with replies and resolved state, `@Grace Hopper`, in blue, where the comment stores an account id; commented lines are marked `●` in the diff and `enter` jumps to the thread
+- **Review threads** — inline comments read as threads anchored to a file and line, with replies and resolved state, `@Grace Hopper`, in blue, where the comment stores an account id; `enter` opens one conversation in the panel, whole and scrolling, and commented lines are marked `●` in the diff where `enter` jumps to the thread
 - **Builds** — the commit statuses of the selected PR, with drill-down into the pipeline run, its steps and each step's log
 - **Pipelines view** — `⇧tab` swaps the pull request list for the recent pipeline runs of every configured repository, newest first: branch builds, scheduled and manual runs, not just the ones a PR owns. Same drill-down into steps and logs, same `P` / `X`, and `L` jumps back to the PR a run ran for
 - **Repo filter** — narrow the list to a single repository from the Repos panel

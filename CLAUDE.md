@@ -99,7 +99,11 @@ What exists:
   anything that round-trips the text — the description editor and `{{.PR.Description}}` keep the raw form. Behind the
   Files tab is `ModeFileDiff`: a per-file unified diff with a line cursor, chroma syntax
   highlighting, `●` markers on commented lines, `n`/`p` to walk the files and `e` to open the file
-  at the cursor's line in `config.ResolveEditor()` (`editor.go`).
+  at the cursor's line in `config.ResolveEditor()` (`editor.go`). Behind the Comments tab is
+  `ModeThread` (`detail_threads.go`): `enter` opens one conversation in the panel as scrolling text
+  — no modal — keyed by the root comment id and looked up in the thread list on every render, so a
+  refetch changes what is read rather than leaving a stale copy and a thread that is gone says so.
+  `backspace` returns to the tab with the cursor on it.
   The six write flows live in `actions.go` on `M` merge, `S` sync, `E` edit, `V` reviewers, `D` draft,
   `A` approve — they work from the list and the detail panel alike, always open a dialog first, are
   refused for a non-`OPEN` PR, while another write on that PR is in flight, and in read-only mode. The

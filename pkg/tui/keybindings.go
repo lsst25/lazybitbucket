@@ -108,7 +108,7 @@ func (a *App) reviewTabBindings() []Binding {
 		}
 	case views.TabComments:
 		return []Binding{
-			a.bind(ActOpen, "expand the thread"),
+			a.bind(ActOpen, "open the thread"),
 			a.bind(ActBrowser, "open the thread in a browser"),
 			a.bind(ActCopyURL, "copy the thread URL"),
 		}
@@ -217,6 +217,13 @@ func (a *App) ContextBindings() []Binding {
 				a.bind(ActOpenEditor, "open this line in the editor"),
 				a.bind(ActBrowser, "open the diff in a browser"),
 				a.bind(ActCopyURL, "copy the diff URL"),
+			)
+			bindings = append(bindings, a.tabJumpBindings()...)
+		case views.ModeThread:
+			bindings = append(bindings,
+				a.bind(ActBack, "back to the comments"),
+				a.bind(ActBrowser, "open the comment in a browser"),
+				a.bind(ActCopyURL, "copy the comment URL"),
 			)
 			bindings = append(bindings, a.tabJumpBindings()...)
 		case views.ModePullRequest:
@@ -356,6 +363,11 @@ func (a *App) helpBarItems() []components.HelpItem {
 				components.HelpItem{Key: km.Keys(ActOpenEditor), Description: "editor"},
 				components.HelpItem{Key: km.Keys(ActBack), Description: "back"},
 			)
+		case views.ModeThread:
+			head = append(head,
+				components.HelpItem{Key: km.Keys(ActBrowser), Description: "browser"},
+				components.HelpItem{Key: km.Keys(ActBack), Description: "back"},
+			)
 		case views.ModePullRequest:
 			head = append(head, a.reviewTabHelpItems()...)
 		case views.ModeRepo, views.ModeSplash:
@@ -424,9 +436,14 @@ func (a *App) reviewTabHelpItems() []components.HelpItem {
 			{Key: km.Keys(ActNextFile) + "/" + km.Keys(ActPrevFile), Description: "file"},
 			{Key: km.Keys(ActOpenEditor), Description: "editor"},
 		}
-	case views.TabCommits, views.TabComments:
+	case views.TabCommits:
 		return []components.HelpItem{
 			{Key: km.Keys(ActOpen), Description: "expand"},
+			{Key: km.Keys(ActBrowser), Description: "browser"},
+		}
+	case views.TabComments:
+		return []components.HelpItem{
+			{Key: km.Keys(ActOpen), Description: "open"},
 			{Key: km.Keys(ActBrowser), Description: "browser"},
 		}
 	case views.TabOverview:

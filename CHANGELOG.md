@@ -14,6 +14,12 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Added
 
+- `enter` on a review thread opens the conversation in the detail panel — the same drill-down a
+  changed file's diff and a pipeline step's log get — instead of a read-only modal over the layout.
+  The list still collapses a thread longer than eight lines; the section shows it whole and scrolls,
+  `backspace` comes back to the Comments tab with the cursor on the thread just read, `o` and `y`
+  target that comment, and a tab key leaves for its tab. It is also where replying to a comment will
+  go, which a modal had nowhere to put
 - `@`-mentions in a description and in review comments read as the display name — `@Grace Hopper`,
   painted in the theme's `blue` — rather than the `@{account_id}` Bitbucket stores. The names come out of the rendered html served
   next to the raw Markdown, so nothing extra is fetched, and an occurrence Bitbucket itself left

@@ -141,7 +141,7 @@ func (a *App) activeContexts() []config.Context {
 				out = append(out, config.CtxDiff)
 			}
 			out = append(out, config.CtxDetail)
-		case views.ModePipeline, views.ModeStepLog:
+		case views.ModePipeline, views.ModeStepLog, views.ModeThread:
 			out = append(out, config.CtxDetail)
 		case views.ModeRepo:
 			out = append(out, config.CtxRepos)

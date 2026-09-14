@@ -43,6 +43,7 @@ const (
 	ModeRepo
 	ModeSplash
 	ModeFileDiff
+	ModeThread
 )
 
 // listKind is which block list the panel is drawing, resolved from the mode and
@@ -130,6 +131,15 @@ type DetailView struct {
 	commits  tabData[bitbucket.Commit]
 	threads  tabData[bitbucket.Thread]
 	fileDiff fileDiffState
+	// threadRoot is the ModeThread payload: the root comment id of the
+	// conversation on screen. The thread itself is looked up in threads.items
+	// on every render, so a refetch that changes the conversation changes what
+	// the reader is looking at rather than leaving a stale copy of it.
+	threadRoot int64
+	// threadBody memoises that conversation's rendered lines. A text body is
+	// re-rendered on every View, and running glamour over a long thread once
+	// per keystroke is exactly what blockCache exists to prevent.
+	threadBody threadBodyCache
 
 	repo   *RepoItem
 	splash SplashInfo
@@ -279,7 +289,7 @@ func (d *DetailView) listKind() listKind {
 		default:
 			return listNone
 		}
-	case ModeStepLog, ModeRepo, ModeSplash:
+	case ModeStepLog, ModeRepo, ModeSplash, ModeThread:
 		return listNone
 	default:
 		return listNone
@@ -289,7 +299,12 @@ func (d *DetailView) listKind() listKind {
 // invalidateBlocks drops the rendered-block cache. Every mutation that can
 // change what a block says must call it, or the panel keeps drawing the old
 // list.
-func (d *DetailView) invalidateBlocks() { d.blockCache.valid = false }
+func (d *DetailView) invalidateBlocks() {
+	d.blockCache.valid = false
+	// The open conversation is rendered from the same threads the Comments tab
+	// lists, so whatever invalidates one invalidates the other.
+	d.threadBody.valid = false
+}
 
 // invalidateBlocksFor drops the cache only when what it holds is one of kinds.
 // The cache keys on the list kind anyway, so another kind's entry is rebuilt
@@ -319,7 +334,7 @@ func (d *DetailView) PullRequestKey() string {
 			return ""
 		}
 		return d.pr.Key()
-	case ModePullRequest, ModeFileDiff:
+	case ModePullRequest, ModeFileDiff, ModeThread:
 		return d.pr.Key()
 	default:
 		return ""
@@ -353,7 +368,7 @@ func (d *DetailView) SetPullRequest(pr *bitbucket.PullRequest) {
 			d.mode = ModePullRequest
 			d.resetPullRequestView()
 		}
-	case ModePullRequest, ModeFileDiff:
+	case ModePullRequest, ModeFileDiff, ModeThread:
 	}
 }
 
@@ -374,7 +389,7 @@ func (d *DetailView) UpdatePullRequestData(pr *bitbucket.PullRequest) {
 		if !d.pipelineOwnerIsPR {
 			return
 		}
-	case ModePullRequest, ModeFileDiff, ModeRepo, ModeSplash:
+	case ModePullRequest, ModeFileDiff, ModeThread, ModeRepo, ModeSplash:
 	}
 	d.resetPullRequestView()
 }
@@ -402,6 +417,7 @@ func (d *DetailView) resetPullRequestView() {
 	d.commits.reset()
 	d.threads.reset()
 	d.clearFileDiff()
+	d.clearThread()
 	d.clearPipeline()
 	// The pull request in view owns any run drilled into from here, so the
 	// owner token follows it. That is what used to be the d.pr comparison the
@@ -435,6 +451,13 @@ func (d *DetailView) clearFileDiff() {
 		path: "", file: nil, markers: nil, loading: false, errMsg: "",
 		lines: nil, highlighter: nil, rendered: nil,
 	}
+	d.invalidateBlocks()
+}
+
+// clearThread forgets the open conversation, so a thread list that arrives
+// after the reader walked out of ModeThread cannot pull them back into it.
+func (d *DetailView) clearThread() {
+	d.threadRoot = 0
 	d.invalidateBlocks()
 }
 
@@ -662,6 +685,15 @@ func (d *DetailView) Back() bool {
 		d.listCursor = max(d.fileIndex(path), 0)
 		d.invalidateBlocks()
 		return true
+	case ModeThread:
+		root := d.threadRoot
+		d.clearThread()
+		d.mode = ModePullRequest
+		d.activeTab = TabComments
+		d.scrollY = 0
+		d.listCursor = max(d.threadIndex(root), 0)
+		d.invalidateBlocks()
+		return true
 	case ModeStepLog:
 		d.clearStepLog()
 		d.mode = ModePipeline
@@ -725,9 +757,14 @@ func (d *DetailView) ActiveTab() DetailTab { return d.activeTab }
 // first, so a tab key pressed inside a diff lands on the tab rather than on a
 // diff wearing another tab's title.
 func (d *DetailView) SetActiveTab(tab DetailTab) {
-	if d.mode == ModeFileDiff {
+	switch d.mode {
+	case ModeFileDiff:
 		d.clearFileDiff()
 		d.mode = ModePullRequest
+	case ModeThread:
+		d.clearThread()
+		d.mode = ModePullRequest
+	case ModePullRequest, ModePipeline, ModeStepLog, ModeRepo, ModeSplash:
 	}
 	d.activeTab = tab
 	d.scrollY = 0
@@ -1039,9 +1076,9 @@ func (d *DetailView) handleHalfPage(delta int) {
 }
 
 // handleActivation implements Enter for every list: the cursor's own action
-// first — open a step log, open a file diff, expand a commit message or a
-// thread, jump to the thread on a commented diff line — and a truncated block
-// expansion when the list has no action to offer.
+// first — open a step log, open a file diff, open a review thread, expand a
+// commit message, jump to the thread on a commented diff line — and a truncated
+// block expansion when the list has no action to offer.
 func (d *DetailView) handleActivation() (*DetailView, tea.Cmd) {
 	kind := d.listKind()
 	if kind == listNone || d.listCursor < 0 || d.listCursor >= len(d.blocks) {
@@ -1049,6 +1086,13 @@ func (d *DetailView) handleActivation() (*DetailView, tea.Cmd) {
 	}
 	if cmd := d.activateBlock(kind); cmd != nil {
 		return d, cmd
+	}
+	// A thread is opened in the panel by activateBlock itself and has no
+	// command to report for it, so there is nothing left to expand. The
+	// fallback below is for a list whose block has no drill-down of its own,
+	// and firing it here would put a modal over the section just opened.
+	if kind == listThreads {
+		return d, nil
 	}
 	block := d.blocks[d.listCursor]
 	if len(block) > maxBlockLines {
@@ -1119,7 +1163,7 @@ func (d *DetailView) View() string {
 			return components.RenderPanel(d.buildTitle(titleBudget(contentWidth)),
 				clampLine(placeholder, contentWidth), d.width, innerH, d.focused)
 		}
-	case ModePipeline, ModeStepLog, ModeFileDiff:
+	case ModePipeline, ModeStepLog, ModeFileDiff, ModeThread:
 	}
 
 	visible := d.VisibleRows()
@@ -1185,6 +1229,8 @@ func (d *DetailView) textBodyLines(contentWidth int) []string {
 	switch d.mode {
 	case ModeStepLog:
 		return d.renderStepLog(contentWidth)
+	case ModeThread:
+		return d.threadBodyLines(contentWidth)
 	case ModePullRequest, ModeRepo, ModeSplash:
 		return d.renderOverview(contentWidth)
 	default:
@@ -1206,6 +1252,8 @@ func (d *DetailView) titlePrefix() string {
 		return "[0] Pipeline #" + strconv.Itoa(d.pipelineBuild) + " · " + d.currentStepName()
 	case ModeFileDiff:
 		return "[0] " + d.fileDiff.path
+	case ModeThread:
+		return "[0] Thread " + d.openThreadAnchor()
 	case ModeRepo:
 		if d.repo == nil {
 			return "[0] Repo"

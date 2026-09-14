@@ -141,29 +141,108 @@ func TestDetailView_Threads_PlaceholderStates(t *testing.T) {
 	}
 }
 
-func TestDetailView_Threads_EnterExpandsTheWholeThread(t *testing.T) {
+func TestDetailView_Threads_EnterOpensTheThreadInThePanel(t *testing.T) {
 	t.Parallel()
 	view := threadsDetail(t)
 
+	// Enter opens the conversation in the panel itself, the way Enter on a
+	// changed file opens its diff — no modal, no message for the app to route.
 	_, cmd := view.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("Enter on a thread emitted nothing")
+	if cmd != nil {
+		t.Fatalf("opening a thread should need no command, got %T", cmd())
 	}
-	msg, ok := cmd().(ExpandBlockMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want ExpandBlockMsg", cmd())
-	}
-	testkit.AssertEqual(t, "title", msg.Title, "Thread "+testDiffPath+":12")
+	testkit.AssertEqual(t, "mode", view.Mode(), ModeThread)
+	testkit.AssertEqual(t, "open thread", view.OpenedThread().Root.ID, int64(testInlineRootID))
 
-	body := stripANSI(strings.Join(msg.Lines, "\n"))
+	out := stripANSI(view.View())
+	if !strings.Contains(out, "[0] Thread "+testDiffPath+":12") {
+		t.Errorf("the title should name the conversation:\n%s", out)
+	}
 	for _, want := range []string{"This needs a nil check.", "Fixed in the next commit."} {
-		if !strings.Contains(body, want) {
-			t.Errorf("expansion does not contain %q:\n%s", want, body)
+		if !strings.Contains(out, want) {
+			t.Errorf("the section does not contain %q:\n%s", want, out)
 		}
 	}
 }
 
-func TestDetailView_Threads_LongThreadCollapsesAndExpands(t *testing.T) {
+func TestDetailView_Threads_BackReturnsToTheCommentsTab(t *testing.T) {
+	t.Parallel()
+	view := threadsDetail(t)
+	view.ScrollBy(1)
+	second := view.SelectedThread().Root.ID
+
+	view.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	testkit.AssertEqual(t, "mode", view.Mode(), ModeThread)
+
+	testkit.AssertEqual(t, "Back()", view.Back(), true)
+	testkit.AssertEqual(t, "mode", view.Mode(), ModePullRequest)
+	testkit.AssertEqual(t, "tab", view.ActiveTab(), TabComments)
+	// The cursor comes back to the conversation just read, not to the top of
+	// the list.
+	testkit.AssertEqual(t, "cursor", view.SelectedThread().Root.ID, second)
+	if view.OpenedThread() != nil {
+		t.Error("walking out of a thread should forget it")
+	}
+}
+
+func TestDetailView_Threads_SectionScrollsInsteadOfCollapsing(t *testing.T) {
+	t.Parallel()
+	view := makeFocusedDetail()
+	view.SetPullRequest(detailPR())
+	root := inlineAnchor(threadComment(9001, testReviewer,
+		strings.Repeat("a wordy review remark. ", 40), time.Hour), 5)
+	view.SetThreads(testPRKey, bitbucket.BuildThreads([]bitbucket.Comment{root}))
+	view.SetActiveTab(TabComments)
+	view.SetSize(80, 12)
+	view.View()
+
+	view.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	testkit.AssertEqual(t, "mode", view.Mode(), ModeThread)
+
+	// The list collapses this thread behind an ellipsis; the section does not —
+	// it is a scrolling body, like a step log.
+	out := stripANSI(view.View())
+	if strings.Contains(out, "    ...") {
+		t.Errorf("the section should not collapse the conversation:\n%s", out)
+	}
+	view.ScrollBy(3)
+	if scrolled := stripANSI(view.View()); scrolled == out {
+		t.Error("the section should scroll")
+	}
+}
+
+func TestDetailView_Threads_SectionSaysWhenTheThreadIsGone(t *testing.T) {
+	t.Parallel()
+	view := threadsDetail(t)
+	view.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// A refetch that no longer carries the open conversation — it was deleted,
+	// or the pull request was pushed to — leaves the reader with a sentence
+	// rather than with a stale copy of it.
+	view.SetThreads(testPRKey, nil)
+	out := stripANSI(view.View())
+	if !strings.Contains(out, "no longer in the pull request") {
+		t.Errorf("the section should say the thread is gone:\n%s", out)
+	}
+	if view.OpenedThread() != nil {
+		t.Error("OpenedThread() should be nil once the thread is gone")
+	}
+}
+
+func TestDetailView_Threads_TabKeyLeavesTheSection(t *testing.T) {
+	t.Parallel()
+	view := threadsDetail(t)
+	view.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	view.SetActiveTab(TabFiles)
+	testkit.AssertEqual(t, "mode", view.Mode(), ModePullRequest)
+	testkit.AssertEqual(t, "tab", view.ActiveTab(), TabFiles)
+	if view.OpenedThread() != nil {
+		t.Error("a tab key should walk out of the conversation")
+	}
+}
+
+func TestDetailView_Threads_LongThreadCollapsesInTheListAndOpensWhole(t *testing.T) {
 	t.Parallel()
 	view := makeFocusedDetail()
 	view.SetPullRequest(detailPR())
@@ -177,16 +256,16 @@ func TestDetailView_Threads_LongThreadCollapsesAndExpands(t *testing.T) {
 		t.Errorf("a long thread should collapse behind the ellipsis line:\n%s", out)
 	}
 
+	// A collapsed block used to expand into a modal, and the fallback that did
+	// it must not fire behind the section: opening the thread is the whole of
+	// Enter here, command and all.
 	_, cmd := view.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("Enter on a collapsed thread emitted nothing")
+	if cmd != nil {
+		t.Fatalf("opening a collapsed thread should emit nothing, got %T", cmd())
 	}
-	msg, ok := cmd().(ExpandBlockMsg)
-	if !ok {
-		t.Fatalf("msg = %T, want ExpandBlockMsg", cmd())
-	}
-	if len(msg.Lines) <= maxBlockLines {
-		t.Errorf("len(Lines) = %d, want the unclamped thread", len(msg.Lines))
+	testkit.AssertEqual(t, "mode", view.Mode(), ModeThread)
+	if lines := view.threadBodyLines(78); len(lines) <= maxBlockLines {
+		t.Errorf("len(lines) = %d, want the unclamped conversation", len(lines))
 	}
 }
 

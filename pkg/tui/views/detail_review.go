@@ -162,6 +162,7 @@ func (d *DetailView) FocusThread(rootID int64) bool {
 			continue
 		}
 		d.clearFileDiff()
+		d.clearThread()
 		d.mode = ModePullRequest
 		d.SetActiveTab(TabComments)
 		d.listCursor = i
