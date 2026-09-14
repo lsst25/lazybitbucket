@@ -25,12 +25,12 @@ make build-demo
 
 - **One list, many repositories** — open pull requests across all configured repos, with repo, id, title, author, approval state, build result and last-update time as columns
 - **Tabs** — Open / Mine / Reviewing out of the box, configurable per state and filter
-- **Detail pane** — four tabs per PR: Overview (branches, author, reviewers with approval state, Markdown description), Files, Commits and Comments. A tab is fetched the first time you open it, so a PR you only skim costs one request
+- **Detail pane** — four tabs per PR: Overview (branches, author, reviewers with approval state, Markdown description), Files, Commits and Comments. A tab is fetched the first time you open it, so a PR you only skim costs one request. `@`-mentions read as the display name Bitbucket resolved them to, in the theme's blue, not as the account id the Markdown stores
 - **Diff pane** — the changed files with status and `+/−` counts, and a syntax-highlighted per-file unified diff with a line cursor; `n` / `p` walk the files, `enter` opens one
 - **Open in your editor** — `e` opens the file under the cursor at that line in `$EDITOR` (`nvim` by default), in your local checkout; inside tmux it gets a new tmux window and the session stays put
 - **Bring your own diff colours** — `diffRenderer: delta --color-only --paging=never` pipes each file's diff through delta (or anything that colours a diff line by line) instead of the built-in highlighting; the gutters, review markers and cursor stay lazybitbucket's
 - **Commits** — hash, author, age and subject per commit; `enter` expands the full message
-- **Review threads** — inline comments read as threads anchored to a file and line, with replies and resolved state; commented lines are marked `●` in the diff and `enter` jumps to the thread
+- **Review threads** — inline comments read as threads anchored to a file and line, with replies and resolved state, `@Grace Hopper`, in blue, where the comment stores an account id; commented lines are marked `●` in the diff and `enter` jumps to the thread
 - **Builds** — the commit statuses of the selected PR, with drill-down into the pipeline run, its steps and each step's log
 - **Pipelines view** — `⇧tab` swaps the pull request list for the recent pipeline runs of every configured repository, newest first: branch builds, scheduled and manual runs, not just the ones a PR owns. Same drill-down into steps and logs, same `P` / `X`, and `L` jumps back to the PR a run ran for
 - **Repo filter** — narrow the list to a single repository from the Repos panel

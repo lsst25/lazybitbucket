@@ -368,7 +368,7 @@ A tab's data is fetched the first time you open it and cached per pull request, 
 | Commits | Expand the full commit message | `o` opens the commit in a browser, `y` copies its URL |
 | Comments | Expand the whole thread | `o` opens the thread in a browser, `y` copies its URL |
 
-The Files tab lists a status letter (`A` added, `M` modified, `D` removed, `R` renamed, plus a gray `B` for a binary file) and the `+added −removed` counts. The Comments tab shows each thread as `path:line` (or `General`), whether it is resolved and its replies.
+The Files tab lists a status letter (`A` added, `M` modified, `D` removed, `R` renamed, plus a gray `B` for a binary file) and the `+added −removed` counts. The Comments tab shows each thread as `path:line` (or `General`), whether it is resolved and its replies. A comment body — like the Overview's description — shows an `@`-mention by display name, `@Grace Hopper` in the theme's blue for the `@{account_id}` the Markdown stores; a mention Bitbucket itself left unresolved, a departed colleague or one written inside a code span, stays as the id, which is what the web UI shows too.
 
 ### File diff
 

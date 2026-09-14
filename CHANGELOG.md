@@ -14,6 +14,12 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Added
 
+- `@`-mentions in a description and in review comments read as the display name — `@Grace Hopper`,
+  painted in the theme's `blue` — rather than the `@{account_id}` Bitbucket stores. The names come out of the rendered html served
+  next to the raw Markdown, so nothing extra is fetched, and an occurrence Bitbucket itself left
+  literal — a departed colleague, an id written inside a code span — stays an id, exactly as the web
+  UI shows it. Read side only: composing a mention is still out of scope, and everything that
+  round-trips the text (the description editor, `{{.PR.Description}}`) keeps the raw form
 - Started inside a checkout whose remote points at one of the listed repositories, the pull request
   list opens scoped to that repository, with the cursor on the pull request for the branch you have
   checked out — in whichever tab holds it, which it says (`selected #103 in Reviewing — the pull

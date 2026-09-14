@@ -64,6 +64,10 @@ type Theme struct {
 	PriorityHigh   lipgloss.Style
 	PriorityMedium lipgloss.Style
 	PriorityLow    lipgloss.Style
+	// Mention paints an @-mention inside a rendered Markdown body — a
+	// description or a review comment — in the palette's blue, so a name reads
+	// as a reference rather than as prose.
+	Mention lipgloss.Style
 
 	Colors        ColorPalette
 	AuthorPalette []lipgloss.Color
@@ -165,6 +169,9 @@ func buildTheme(p ColorPalette, authors []lipgloss.Color) *Theme {
 
 		PriorityLow: lipgloss.NewStyle().
 			Foreground(p.Green),
+
+		Mention: lipgloss.NewStyle().
+			Foreground(p.Blue),
 
 		Colors:        p,
 		AuthorPalette: authors,

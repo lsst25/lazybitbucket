@@ -2,6 +2,7 @@ package demo
 
 import (
 	"encoding/json"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -265,6 +266,103 @@ func TestDataset_UUIDsAreBraced(t *testing.T) {
 				assertBraced(t, "step "+step.Name, step.UUID)
 			}
 		}
+	}
+}
+
+// The two account id shapes Bitbucket serves: a 24-character hex id and a
+// "<digits>:<uuid>" one. Neither is documented as a grammar — the documented
+// charset is far wider — so these are the dataset's own shapes, not a rule
+// anything in pkg/bitbucket may rely on.
+var (
+	accountIDHex  = regexp.MustCompile(`^[0-9a-f]{24}$`)
+	accountIDUUID = regexp.MustCompile(`^[0-9]+:[0-9a-f-]{36}$`)
+)
+
+// TestDataset_AccountIDsAreRealistic guards the ids a mention is written with.
+// They are what @{account_id} names, so a nickname-shaped placeholder would
+// teach the mention resolver — and anyone reading the fixtures — the wrong
+// lesson. Bitbucket has two shapes in the wild and the dataset carries both.
+func TestDataset_AccountIDsAreRealistic(t *testing.T) {
+	t.Parallel()
+
+	data := NewDataset()
+
+	hex, uuidish := 0, 0
+	for label, account := range everyAccount(data) {
+		switch {
+		case accountIDHex.MatchString(account.AccountID):
+			hex++
+		case accountIDUUID.MatchString(account.AccountID):
+			uuidish++
+		default:
+			t.Errorf("%s account_id = %q, want 24 hex characters or <digits>:<uuid>",
+				label, account.AccountID)
+		}
+	}
+	if hex == 0 || uuidish == 0 {
+		t.Errorf("account id shapes = %d hex and %d uuid, want at least one of each", hex, uuidish)
+	}
+
+	// The departed colleague #103 mentions is nobody in the workspace, which is
+	// what keeps that mention literal in the rendering.
+	if !accountIDUUID.MatchString(AccountIDGone) {
+		t.Errorf("AccountIDGone = %q, want <digits>:<uuid>", AccountIDGone)
+	}
+	for _, member := range data.Members {
+		if member.AccountID == AccountIDGone {
+			t.Fatalf("%s carries the departed colleague's account id", member.Nickname)
+		}
+	}
+}
+
+// everyAccount is every account the dataset names, labelled by where it came
+// from, so a failure says which fixture built it.
+func everyAccount(data *Dataset) map[string]bitbucket.Account {
+	accounts := map[string]bitbucket.Account{"user": data.User}
+	for _, member := range data.Members {
+		accounts["member "+member.Nickname] = member
+	}
+	for slug, reviewers := range data.DefaultReviewers {
+		for _, reviewer := range reviewers {
+			accounts["default reviewer "+slug+"/"+reviewer.Nickname] = reviewer
+		}
+	}
+	for _, pullRequests := range data.PullRequests {
+		for _, pullRequest := range pullRequests {
+			collectPullRequestAccounts(accounts, pullRequest)
+		}
+	}
+	for key, comments := range data.Comments {
+		for _, comment := range comments {
+			accounts["comment "+key+" "+comment.User.Nickname] = comment.User
+			if comment.Resolution.Resolved() {
+				accounts["resolver "+key] = *comment.Resolution.User
+			}
+		}
+	}
+	for key, commits := range data.Commits {
+		for _, commit := range commits {
+			// One commit is authored by a bot with no Bitbucket account at all.
+			if commit.Author.User != nil {
+				accounts["commit "+key+" "+commit.Hash] = *commit.Author.User
+			}
+		}
+	}
+	return accounts
+}
+
+// collectPullRequestAccounts adds everyone one pull request names.
+func collectPullRequestAccounts(accounts map[string]bitbucket.Account, pullRequest bitbucket.PullRequest) {
+	key := pullRequest.Key()
+	accounts["author "+key] = pullRequest.Author
+	if pullRequest.ClosedBy != nil {
+		accounts["closed_by "+key] = *pullRequest.ClosedBy
+	}
+	for _, reviewer := range pullRequest.Reviewers {
+		accounts["reviewer "+key+"/"+reviewer.Nickname] = reviewer
+	}
+	for _, participant := range pullRequest.Participants {
+		accounts["participant "+key+"/"+participant.User.Nickname] = participant.User
 	}
 }
 

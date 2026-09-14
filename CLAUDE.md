@@ -38,12 +38,22 @@ What exists:
   (predicate `IsReadOnly`) when `ClientOpts.ReadOnly` is set. `ErrEmptyUpdate` and
   `ErrReviewersUnknown` guard the update body — `Reviewers` is the complete set and is always sent,
   because Bitbucket clears what a PUT omits. `APIError` carries `Fields` (`error.fields`) and
-  `UserMessage()` appends the first field message, which is what the TUI shows. Also
+  `UserMessage()` appends the first field message, which is what the TUI shows. `mentions.go` makes
+  the `@{account_id}` a mention is stored as readable: `MentionNames` reads the display names out of
+  the html Bitbucket serves next to the raw Markdown, and `ResolveMentions` rewrites the raw with
+  them — the html is the oracle for the names *and* for which occurrences were rendered at all, so an
+  id left literal (a departed colleague, a mention inside a code span) stays literal. A name is
+  escaped as numeric HTML entities, which glamour decodes everywhere while honouring only a fixed set
+  of backslash escapes; the result is therefore for a Markdown renderer, never for a text round trip.
+  `ResolveMentionsFunc` is the same with a hook on each mention's text, which is what the detail pane
+  calls; `RenderedContent.Readable` and `PullRequest.ReadableDescription` are the plain form. Also
   `pkg/bitbucket/bitbuckettest` (strict fake client) and `pkg/bitbucket/demo` (deterministic dataset +
   fake REST server, an ordinary untagged package used by `--demo` and by integration tests; its write
   routes mirror production validation, with `api-gateway` #103 the queued-202 fixture, `web-app` #41
   the 409 and the author of the own-approval 400, `api-gateway` #102 the reviewer-not-yet-acted
-  approval fixture and `web-app` #40 the one the demo user has already approved).
+  approval fixture and `web-app` #40 the one the demo user has already approved; its accounts carry
+  the two real account-id shapes and every description and comment fixture carries the html
+  `renderHTML` produced for it, mentions included).
 - `pkg/diff` — a lenient unified-diff parser (files, hunks, per-side line numbers, renames, binary
   files, `\ No newline at end of file`, quoted paths). Pure, stdlib only.
 - `pkg/git` — branch checkout, plus the sync helpers in `sync.go`: `IsClean`, `RemoteFor` (the remote
@@ -74,7 +84,14 @@ What exists:
   source-branch checkout, custom commands, themes, and a `refreshInterval` auto-refresh of the active
   tab. The detail pane has four PR tabs — Overview (Markdown description via glamour), Files, Commits,
   Comments — each fetched on first tab entry (`review.go`) and cached per PR key, stamped with the
-  source commit so a push invalidates it. Behind the Files tab is `ModeFileDiff`: a per-file unified
+  source commit so a push invalidates it. Overview and Comments render the readable body, resolving
+  `@{account_id}` through the `summary.html` / `content.html` that came with it, and paint each
+  mention in `theme.Mention` (the palette's blue): `views/mentions.go` wraps a mention in U+FFF9 /
+  U+FFFB — zero-width for glamour and lipgloss alike — before the Markdown pass and `paintMentions`
+  swaps the markers for the style afterwards, re-asserting the colour after glamour's own SGR codes
+  and replaying them once the mention closes. Commit messages are not resolved, and neither is
+  anything that round-trips the text — the description editor and `{{.PR.Description}}` keep the raw
+  form. Behind the Files tab is `ModeFileDiff`: a per-file unified
   diff with a line cursor, chroma syntax highlighting, `●` markers on commented lines, `n`/`p` to walk
   the files and `e` to open the file at the cursor's line in `config.ResolveEditor()` (`editor.go`).
   The six write flows live in `actions.go` on `M` merge, `S` sync, `E` edit, `V` reviewers, `D` draft,

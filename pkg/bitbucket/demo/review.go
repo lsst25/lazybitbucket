@@ -292,7 +292,7 @@ func newComment(spec commentSpec) bitbucket.Comment {
 			Type:   typeRendered,
 			Raw:    spec.body,
 			Markup: "markdown",
-			HTML:   "",
+			HTML:   renderHTML(spec.body, workspaceMembers()),
 		},
 		User:       spec.user,
 		Deleted:    spec.deleted,
@@ -388,7 +388,7 @@ func commentSpecsInline103() []commentSpec {
 			inline: &bitbucket.CommentInline{Path: pathRetryGo, From: nil, To: ptr(16), StartFrom: nil, StartTo: nil},
 			body: markdown(
 				"Only on the error path — the success path returns before the deferred",
-				"cancel. I'll add a test for the streaming case.",
+				"cancel. I'll add a test for the streaming case, @{"+demoUser().AccountID+"}.",
 			),
 		},
 		// A multi-line thread on context lines, resolved by the reviewer who
@@ -423,7 +423,10 @@ func commentSpecsInline103() []commentSpec {
 func commentSpecsGeneral103() []commentSpec {
 	return []commentSpec{
 		// A general thread: root plus two replies, the second one a reply to the
-		// first, which BuildThreads flattens into the same thread.
+		// first, which BuildThreads flattens into the same thread. It is also
+		// where the two mention shapes live — the root names a colleague who
+		// has left, whose id Bitbucket cannot resolve and therefore renders as
+		// literal text, and the reply names two people, one of them twice.
 		{
 			repo: repoAPIGateway, pullRequest: 103, id: commentIDBase + 4,
 			user: grace(), age: 30 * hour,
@@ -434,13 +437,20 @@ func commentSpecsGeneral103() []commentSpec {
 				"- [x] regression test",
 				"",
 				"The backport is the risky half — the 2.3 branch has no budget context.",
+				"",
+				"@{"+AccountIDGone+"} wrote the 2.3 budget code but has since left.",
 			),
 		},
 		{
 			repo: repoAPIGateway, pullRequest: 103, id: commentIDBase + 5,
 			parent: commentIDBase + 4,
 			user:   linus(), age: 29 * hour,
-			body: markdown("Backport is drafted, waiting for this one to land first."),
+			body: markdown(
+				"Backport is drafted, waiting for this one to land first.",
+				"",
+				"@{"+demoUser().AccountID+"} @{"+ken().AccountID+"} - @{"+ken().AccountID+"} owns",
+				"the 2.3 branch, so the second review is his.",
+			),
 		},
 		{
 			repo: repoAPIGateway, pullRequest: 103, id: commentIDBase + 6,

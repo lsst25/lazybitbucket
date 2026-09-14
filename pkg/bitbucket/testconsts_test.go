@@ -95,3 +95,17 @@ const authorizationHeader = "Authorization"
 
 // testDiffFilePath is the file the inline comment and diff fixtures anchor to.
 const testDiffFilePath = "pkg/tui/app.go"
+
+// Mention fixtures. The two ids follow the two account id shapes seen on the
+// wire — a 24-hex Atlassian id and "<digits>:<uuid>" — without being anyone's
+// real id, and are examples of the documented charset, not the whole of it.
+// testMentionGoneID is the departed colleague no rendering ever names, the id
+// Bitbucket itself leaves literal.
+const (
+	testMentionID     = "5f3a9c1e7b2d4a6f8e0c1b3d"
+	testMentionUUID   = "557058:1f7c3a9e-2b4d-4c6e-8a0f-3d5b7e9c1a2f"
+	testMentionGoneID = "712020:9b1d3f5a-7c2e-4a8b-b0d6-4e6f8a1c2d3e"
+
+	testMentionName       = "Margaret Hamilton"
+	testMentionSecondName = "Grace Hopper"
+)

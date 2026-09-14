@@ -70,9 +70,12 @@ func TestServer_UpdatePullRequestTitleAndDescription(t *testing.T) {
 	updated := decodeJSON[bitbucket.PullRequest](t, got.Body)
 	testkit.AssertEqual(t, "title", updated.Title, updatedTitle)
 	testkit.AssertEqual(t, "description", updated.Description, "Now with a token bucket.\n")
-	// The overview pane reads the rendered summary, not the raw description, so
-	// the two have to move together.
+	// The overview pane reads the raw description, but it resolves the mentions
+	// in it through the rendered summary, so an edit has to move all three
+	// members — as it does in production, where Bitbucket re-renders.
 	testkit.AssertEqual(t, "summary.raw", updated.Summary.Raw, "Now with a token bucket.\n")
+	testkit.AssertEqual(t, "summary.html", updated.Summary.HTML,
+		"<p>Now with a token bucket.\n</p>")
 	testkit.AssertEqual(t, "state is untouched", string(updated.State), string(bitbucket.PullRequestOpen))
 	testkit.AssertSliceEqual(t, "reviewers survive", uuidsOf(updated.Reviewers),
 		[]string{uuidAda, uuidGrace})
@@ -87,6 +90,37 @@ func TestServer_UpdatePullRequestTitleAndDescription(t *testing.T) {
 	fetched := decodeJSON[bitbucket.PullRequest](t, getOK(t, server, pullRequestPath(repoAPIGateway, 101)))
 	testkit.AssertEqual(t, "title after GET", fetched.Title, updatedTitle)
 	testkit.AssertEqual(t, "description after GET", fetched.Description, "Now with a token bucket.\n")
+}
+
+// TestServer_UpdatePullRequestRendersMentions is what makes an edited
+// description behave like a fetched one: the server renders the new body the
+// way Bitbucket would, so the mention the user just typed reads as a name the
+// moment the overview redraws, rather than as an account id until the next
+// refresh.
+func TestServer_UpdatePullRequestRendersMentions(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	edited := "Rebased onto main. @{" + linus().AccountID + "} please take another look.\n"
+
+	got := putJSON(t, server.URL+pullRequestPath(repoAPIGateway, 101), pullRequestUpdate{
+		Title:       nil,
+		Description: ptr(edited),
+		Draft:       nil,
+		Reviewers:   currentReviewers(t, server, repoAPIGateway, 101),
+	}, nil)
+	testkit.AssertEqual(t, "status", got.Status, http.StatusOK)
+
+	updated := decodeJSON[bitbucket.PullRequest](t, got.Body)
+	if !strings.Contains(updated.Summary.HTML, `data-atlassian-id="`+linus().AccountID+`">@Linus Torvalds`) {
+		t.Fatalf("summary.html does not carry the mention span:\n%s", updated.Summary.HTML)
+	}
+	testkit.AssertEqual(t, "the description reads as a name",
+		updated.ReadableDescription(), "Rebased onto main. @Linus Torvalds please take another look.\n")
+
+	// And the rendering is in the dataset, not only in the response.
+	fetched := decodeJSON[bitbucket.PullRequest](t, getOK(t, server, pullRequestPath(repoAPIGateway, 101)))
+	testkit.AssertEqual(t, "summary.html after GET", fetched.Summary.HTML, updated.Summary.HTML)
 }
 
 func TestServer_UpdatePullRequestTogglesDraft(t *testing.T) {

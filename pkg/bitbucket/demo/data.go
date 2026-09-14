@@ -56,6 +56,26 @@ const (
 	uuidBarbara = "{00000000-0000-0000-0000-000000000006}"
 )
 
+// Account ids, which are what a mention is written with: Bitbucket stores one
+// as @{account_id}, never as a UUID or a nickname. They are opaque, and two
+// shapes are in the wild — a 24-character hex id and "<digits>:<uuid>" — so the
+// dataset carries three of each and nothing downstream may assume a shape. They
+// bear no relation to the UUIDs above, exactly as on the wire.
+const (
+	accountIDDemo    = "5d4a1c7e2b9f3a0001c8e6d2"
+	accountIDAda     = "557058:8f2c1a4e-3b7d-4c9e-a1f0-2d6b8e4c7a19"
+	accountIDGrace   = "712020:3c9e5b1a-7d2f-4e8a-b6c4-1f0a9d3e5b7c"
+	accountIDLinus   = "6a1f3c9e2d4b7a0001e5c8f4"
+	accountIDKen     = "557058:a4e7c2d9-1b3f-4a6e-9c8d-5e2f7b0a3c61"
+	accountIDBarbara = "5e7c3a1d9b2f4e0001a6c8d3"
+
+	// AccountIDGone belongs to nobody in the workspace: the colleague who wrote
+	// the 2.3 budget code and has since left. Bitbucket cannot resolve a
+	// departed account, so a mention of this id comes back as literal "@{id}"
+	// text in the rendering — which is what #103's general thread carries.
+	AccountIDGone = "712020:9b1d3f5a-7c2e-4a8b-b0d6-4e6f8a1c2d3e"
+)
+
 // Pipeline and step state/result words, spelled as they appear in state.name.
 const (
 	stateCompleted  = "COMPLETED"
@@ -305,11 +325,11 @@ func shiftTime(value *time.Time, delta time.Duration) {
 // Accounts
 // -----------------------------------------------------------------------------
 
-func newAccount(uuid, displayName, nickname string) bitbucket.Account {
+func newAccount(uuid, accountID, displayName, nickname string) bitbucket.Account {
 	account := bitbucket.Account{
 		Type:        "user",
 		UUID:        uuid,
-		AccountID:   "712020:" + nickname,
+		AccountID:   accountID,
 		DisplayName: displayName,
 		Nickname:    nickname,
 	}
@@ -320,12 +340,16 @@ func newAccount(uuid, displayName, nickname string) bitbucket.Account {
 	return account
 }
 
-func demoUser() bitbucket.Account { return newAccount(uuidDemo, "Demo User", "demo") }
-func ada() bitbucket.Account      { return newAccount(uuidAda, "Ada Lovelace", "ada") }
-func grace() bitbucket.Account    { return newAccount(uuidGrace, "Grace Hopper", "grace") }
-func linus() bitbucket.Account    { return newAccount(uuidLinus, "Linus Torvalds", "linus") }
-func ken() bitbucket.Account      { return newAccount(uuidKen, "Ken Thompson", "ken") }
-func barbara() bitbucket.Account  { return newAccount(uuidBarbara, "Barbara Liskov", "barbara") }
+func demoUser() bitbucket.Account { return newAccount(uuidDemo, accountIDDemo, "Demo User", "demo") }
+func ada() bitbucket.Account      { return newAccount(uuidAda, accountIDAda, "Ada Lovelace", "ada") }
+func grace() bitbucket.Account    { return newAccount(uuidGrace, accountIDGrace, "Grace Hopper", "grace") }
+func linus() bitbucket.Account {
+	return newAccount(uuidLinus, accountIDLinus, "Linus Torvalds", "linus")
+}
+func ken() bitbucket.Account { return newAccount(uuidKen, accountIDKen, "Ken Thompson", "ken") }
+func barbara() bitbucket.Account {
+	return newAccount(uuidBarbara, accountIDBarbara, "Barbara Liskov", "barbara")
+}
 
 // workspaceMembers is every account in the demo workspace, in the order
 // GET /workspaces/{ws}/members serves them: the demo user first, then the five
@@ -646,7 +670,7 @@ func newPullRequest(spec prSpec) bitbucket.PullRequest {
 			Type:   "rendered",
 			Raw:    spec.description,
 			Markup: "markdown",
-			HTML:   "",
+			HTML:   renderHTML(spec.description, workspaceMembers()),
 		},
 		Reviewers:    spec.reviewers,
 		Participants: spec.participants,
@@ -949,6 +973,9 @@ func descriptionPR103() string {
 		"attemptCtx, cancel := context.WithTimeout(budgetCtx, perAttempt)",
 		"defer cancel()",
 		"```",
+		"",
+		"@{"+demoUser().AccountID+"} the budget maths in retry.go is the part I want a second pair",
+		"of eyes on.",
 		"",
 		"### Follow-up",
 		"",

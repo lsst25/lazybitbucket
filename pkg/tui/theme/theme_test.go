@@ -424,3 +424,10 @@ func TestPresetsReturnsCopy(t *testing.T) {
 		t.Errorf("Presets backing slice was mutated: got %q, want %q", again[0].Name, original)
 	}
 }
+
+func TestBuildTheme_MentionUsesTheBlueRole(t *testing.T) {
+	built := buildTheme(defaultPalette(), defaultAuthorPalette())
+	if got := built.Mention.GetForeground(); got != built.Colors.Blue {
+		t.Errorf("Mention foreground = %v, want the palette's blue %v", got, built.Colors.Blue)
+	}
+}

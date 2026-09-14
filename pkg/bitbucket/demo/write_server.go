@@ -343,9 +343,12 @@ func (s *Server) handleUpdatePullRequest(w http.ResponseWriter, r *http.Request)
 	}
 	if update.Description != nil {
 		pullRequest.Description = *update.Description
-		// The description is served twice — raw and as the rendered summary the
-		// overview pane reads — so both have to move together.
+		// The description is served three times — raw, as the summary's raw and
+		// as the rendering the mention resolver reads the display names out of
+		// — so all three have to move together, exactly as they do in
+		// production when Bitbucket re-renders an edited description.
 		pullRequest.Summary.Raw = *update.Description
+		pullRequest.Summary.HTML = renderHTML(*update.Description, s.Data.Members)
 	}
 	if update.Draft != nil {
 		pullRequest.Draft = *update.Draft

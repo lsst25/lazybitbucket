@@ -293,7 +293,7 @@ Supported keys:
 |-------------|-------------------------------------------------------|
 | `accent`    | Chrome — panel titles, the focused border, the active tab, key hints, dialog frames. Same as `green` in every preset except Kanagawa, which uses its blue |
 | `green`     | Success — approvals, passing builds, merged state, added lines (and the accent, outside Kanagawa) |
-| `blue`      | Secondary accent, open pull requests                  |
+| `blue`      | Secondary accent, open pull requests, `@`-mentions in descriptions and comments |
 | `red`       | Errors, failed builds, changes requested              |
 | `yellow`    | Warnings, in-progress builds                          |
 | `cyan`      | Search mode indicators                                |
@@ -703,7 +703,7 @@ All five are contexts of the pull requests view. Nothing matches while the [pipe
 |----------|-------------|
 | `{{.PR.ID}}` | Pull request id, unique per repository |
 | `{{.PR.Title}}` | Title |
-| `{{.PR.Description}}` | Raw Markdown description |
+| `{{.PR.Description}}` | Raw Markdown description, exactly as Bitbucket stores it: a mention is `@{account_id}`, not the display name the detail pane shows |
 | `{{.PR.State}}` | `OPEN`, `MERGED`, `DECLINED` or `SUPERSEDED` |
 | `{{.PR.Draft}}` | `true` for a draft pull request |
 | `{{.PR.Author}}` | Author display name |

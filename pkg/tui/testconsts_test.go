@@ -61,4 +61,22 @@ const (
 
 	// testStepLog is the body the stubbed step-log fetch answers with.
 	testStepLog = "+ go build ./..."
+
+	// testEditor is the editor a description edit suspends into: /usr/bin/true
+	// exits straight away and leaves the temp file alone, so the test writes
+	// the "edited" body itself.
+	testEditor = "true"
+
+	// testMentionID is an account id in the 24-hex shape and testMentionRaw is
+	// the mention Bitbucket stores against it, which is what a body still shows
+	// when no rendering came with it.
+	testMentionID  = "5d4a1c7e2b9f3a0001c8e6d2"
+	testMentionRaw = "@{" + testMentionID + "}"
+
+	// The two demo accounts the mention fixtures name, as a reader sees them.
+	// The colleague who has left is demo.AccountIDGone: it belongs to no
+	// account, so Bitbucket renders it as literal text and so does the detail
+	// panel.
+	mentionDemoUser = "@Demo User"
+	mentionKen      = "@Ken Thompson"
 )

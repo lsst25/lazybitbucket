@@ -1399,11 +1399,16 @@ func (d *DetailView) buildsLines(width int) []string {
 	return lines
 }
 
+// renderDescription is the Overview tab's body: the pull request description
+// as Markdown. A mention Bitbucket resolved reads as "@Grace Hopper", in the
+// theme's mention colour, rather than as the account id the raw stores; the
+// presence test stays on the raw description, which is what a pull request
+// without one has empty.
 func (d *DetailView) renderDescription(width int) []string {
 	if d.pr.Description == "" {
 		return []string{" " + lipgloss.NewStyle().Foreground(theme.ColorGray).Render("(no description)")}
 	}
-	rendered := d.renderer.Render(d.pr.Description, width-1)
+	rendered := d.renderBody(d.pr.Description, d.pr.Summary.HTML, width-1)
 	if len(rendered) == 0 {
 		return []string{" " + lipgloss.NewStyle().Foreground(theme.ColorGray).Render("(no description)")}
 	}

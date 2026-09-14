@@ -816,7 +816,7 @@ func TestEditDescription_RoundTripsThroughATempFile(t *testing.T) {
 		return &updated, nil
 	}
 	app := writeApp(t, fake)
-	app.cfg.Editor = "true"
+	app.cfg.Editor = testEditor
 
 	if cmd := app.editDescription(testPRKey); cmd == nil {
 		t.Fatal("editing a description should suspend into the editor")
@@ -852,7 +852,7 @@ func TestEditDescription_UnchangedTextSendsNothing(t *testing.T) {
 	t.Parallel()
 	fake := &bitbuckettest.FakeClient{T: t}
 	app := writeApp(t, fake)
-	app.cfg.Editor = "true"
+	app.cfg.Editor = testEditor
 
 	if cmd := app.editDescription(testPRKey); cmd == nil {
 		t.Fatal("editing a description should suspend into the editor")
@@ -871,6 +871,68 @@ func TestEditDescription_UnchangedTextSendsNothing(t *testing.T) {
 	testkit.AssertEqual(t, "update calls", fake.CallCount("UpdatePullRequest"), 0)
 	if got := plain(app.helpBar.View()); !strings.Contains(got, "description unchanged") {
 		t.Errorf("help bar = %q, want the unchanged note", got)
+	}
+}
+
+func TestEditDescription_KeepsTheServersDocumentWhole(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	const readable = "Ping @Ada Lovelace on this."
+	updated := withAuthor(newPR(testRepo, 101, testTitle), testUserUUID)
+	updated.Description = "Ping " + testMentionRaw + " on this."
+	updated.Summary = bitbucket.RenderedContent{
+		Type:   "rendered",
+		Raw:    updated.Description,
+		Markup: "markdown",
+		HTML: `<p>Ping <span class="ap-mention" data-atlassian-id="` + testMentionID +
+			`">@Ada Lovelace</span> on this.</p>`,
+	}
+	fake.UpdatePullRequestFunc = func(
+		_ context.Context, _, _ string, _ int, _ bitbucket.PullRequestUpdate,
+	) (*bitbucket.PullRequest, error) {
+		return &updated, nil
+	}
+	app := writeApp(t, fake)
+	app.cfg.Editor = testEditor
+
+	if cmd := app.editDescription(testPRKey); cmd == nil {
+		t.Fatal("editing a description should suspend into the editor")
+	}
+	if err := os.WriteFile(app.descriptionEditPath, []byte(updated.Description+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, cmd := app.Update(descriptionEditedMsg{
+		key: testPRKey, path: app.descriptionEditPath, original: testDescription, err: nil,
+	})
+	// The write's own follow-ups (a status refetch, a review refresh) are left
+	// unrun: what is under test is the document the response left behind.
+	for _, msg := range collectMsgs(cmd) {
+		if written, ok := msg.(pullRequestWrittenMsg); ok {
+			_, _ = app.Update(written)
+		}
+	}
+
+	// The response is one document: the raw description and the rendering that
+	// resolves its mentions arrive together and are cached together, so nothing
+	// has to be fetched again to read the name.
+	cached := app.prCache[testPRKey]
+	if cached == nil {
+		t.Fatal("the written pull request should be cached")
+	}
+	testkit.AssertEqual(t, "cached description", cached.Description, updated.Description)
+	testkit.AssertEqual(t, "cached readable description", cached.ReadableDescription(), readable)
+
+	listed := false
+	for _, pr := range app.prList.CurrentPullRequests() {
+		if pr.Key() != testPRKey {
+			continue
+		}
+		listed = true
+		testkit.AssertEqual(t, "listed readable description", pr.ReadableDescription(), readable)
+	}
+	if !listed {
+		t.Error("the list should still hold the written pull request")
 	}
 }
 

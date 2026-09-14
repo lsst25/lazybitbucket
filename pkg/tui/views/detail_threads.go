@@ -111,7 +111,10 @@ func plural(n int, one, many string) string {
 
 // renderComment is one comment's author line plus its Markdown body. glyph
 // prefixes the author line and pushes the body in under it, so a reply reads as
-// subordinate to the root above it.
+// subordinate to the root above it. The body is the readable form of the raw
+// Markdown: a mention Bitbucket rendered reads as "@Grace Hopper", in the
+// theme's mention colour, rather than as the account id the raw stores it
+// under.
 func (d *DetailView) renderComment(comment bitbucket.Comment, glyph string, width int) []string {
 	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
 	yellow := lipgloss.NewStyle().Foreground(theme.ColorYellow)
@@ -132,7 +135,7 @@ func (d *DetailView) renderComment(comment bitbucket.Comment, glyph string, widt
 		byline += yellow.Render("  (pending)")
 	}
 
-	body := d.renderer.Render(comment.Content.Raw, max(width-len(indent)-3, 8))
+	body := d.renderBody(comment.Content.Raw, comment.Content.HTML, max(width-len(indent)-3, 8))
 	lines := make([]string, 0, 1+len(body))
 	lines = append(lines, byline)
 	for _, line := range body {
