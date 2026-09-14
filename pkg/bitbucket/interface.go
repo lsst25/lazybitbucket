@@ -44,9 +44,9 @@ type RequestLog struct {
 // method takes workspace and repoSlug explicitly: the client is not bound to a
 // workspace.
 //
-// Most of it is reads. The write methods are exactly seven — MergePullRequest,
-// UpdatePullRequest, ApprovePullRequest, UnapprovePullRequest, CreateComment,
-// RunPipeline and StopPipeline — and every one of them fails with ErrReadOnly,
+// Most of it is reads. The write methods are exactly eight — CreatePullRequest,
+// MergePullRequest, UpdatePullRequest, ApprovePullRequest, UnapprovePullRequest,
+// CreateComment, RunPipeline and StopPipeline — and every one of them fails with ErrReadOnly,
 // before a request is built, on a client constructed with ClientOpts.ReadOnly.
 // GetMergeTaskStatus (the poll a queued merge needs) and the two candidate
 // listings the reviewer picker feeds on are GETs that only a write flow ever
@@ -72,6 +72,9 @@ type ClientInterface interface {
 	GetPipeline(ctx context.Context, workspace, repoSlug, pipelineRef string) (*Pipeline, error)
 	ListPipelineSteps(ctx context.Context, workspace, repoSlug, pipelineRef string) ([]PipelineStep, error)
 	GetPipelineStepLog(ctx context.Context, workspace, repoSlug, pipelineRef, stepUUID string, opts StepLogOptions) (string, error)
+	// CreatePullRequest opens a pull request for a branch and returns it as the
+	// server created it. The source branch must exist on the remote.
+	CreatePullRequest(ctx context.Context, workspace, repoSlug string, create NewPullRequest) (*PullRequest, error)
 	// MergePullRequest merges the pull request. Bitbucket answers either with
 	// the merged pull request or, for a merge it queued, a task URL to poll.
 	MergePullRequest(ctx context.Context, workspace, repoSlug string, id int, opts MergeOptions) (MergeResult, error)

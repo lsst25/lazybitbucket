@@ -220,6 +220,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}/diffstat", s.handlePullRequestDiffStat)
 	mux.HandleFunc("GET /repositories/{ws}/{slug}/pullrequests/{id}/diff", s.handlePullRequestDiff)
 	// The write routes, plus the two listings the reviewer picker feeds on.
+	mux.HandleFunc("POST /repositories/{ws}/{slug}/pullrequests", s.handleCreatePullRequest)
 	mux.HandleFunc("PUT /repositories/{ws}/{slug}/pullrequests/{id}", s.handleUpdatePullRequest)
 	mux.HandleFunc("POST /repositories/{ws}/{slug}/pullrequests/{id}/merge", s.handleMergePullRequest)
 	mux.HandleFunc("POST /repositories/{ws}/{slug}/pullrequests/{id}/approve", s.handleApprovePullRequest)

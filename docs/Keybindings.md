@@ -74,16 +74,17 @@ From any left panel except Status, these scroll the detail panel without moving 
 | `D` | Toggle draft… | `pullRequests.toggleDraft` |
 | `A` | Approve, or remove your approval… | `pullRequests.approve` |
 | `C` | Comment… — on the pull request, a thread, a file or a diff line, depending on where you are | `pullRequests.comment` |
+| `N` | Open a pull request for the checked-out branch… | `pullRequests.create` |
 
 ## Pull request actions
 
-The seven keys above are the only ones that change a pull request — `P` and `X` write too, but to a pipeline run rather than the pull request (see [Rerun and stop a pipeline](#rerun-and-stop-a-pipeline)). They work from the pull request list and from the detail panel alike — whatever has focus, they act on the pull request the list cursor is on — and each one asks before it writes. Six open a dialog: nothing is sent until you confirm, and `esc` closes a dialog without a request. `C` is the seventh: it opens the [comment popup](#c--comment-or-reply) — the same input the title editor uses — and what you send there is the confirmation.
+The eight keys above are the only ones that write — `P` and `X` write too, but to a pipeline run rather than the pull request (see [Rerun and stop a pipeline](#rerun-and-stop-a-pipeline)). They work from the pull request list and from the detail panel alike — whatever has focus, they act on the pull request the list cursor is on — and each one asks before it writes. Six open a dialog: nothing is sent until you confirm, and `esc` closes a dialog without a request. `C` is the seventh: it opens the [comment popup](#c--comment-or-reply) — the same input the title editor uses — and what you send there is the confirmation.
 
 A refusal is a one-line message in the hint bar and no dialog:
 
 | Message | Reason |
 |---------|--------|
-| `read-only mode: cannot merge` | [Read-only mode](Config.md#read-only-mode) is on. It refuses all seven, sync and commenting included |
+| `read-only mode: cannot merge` | [Read-only mode](Config.md#read-only-mode) is on. It refuses all eight, sync, commenting and creating included |
 | `cannot merge: pull request is MERGED` | The pull request is not `OPEN` any more. `C` is the exception: a merged or declined pull request still takes comments |
 | `merge already in progress` | The previous write on this pull request has not answered yet |
 | `cannot approve your own pull request` | `A` on a pull request you opened. Bitbucket refuses it, so lazybitbucket does not ask |
@@ -246,6 +247,43 @@ A sent comment is folded straight into the conversation from Bitbucket's answer 
 Nothing typed is lost to a failure. A comment typed in the popup is asked again, prefilled with it and the error in the hint bar; one composed in the editor stays in its file and the hint bar names the path.
 
 Editing a comment, deleting one and resolving a thread are not implemented — those still want the browser (`o`).
+
+### `N` — open a pull request
+
+`N` opens a pull request for the branch the terminal is on. It works from anywhere in the pull request view, because it acts on the checkout rather than on whatever the cursor is pointing at.
+
+It reads first — the last commit's subject, the repository's default branch, its default reviewers, and whether the branch is on the remote at all — and asks the rest in one form:
+
+```
+ ╭────────────────────────────────────────────────────────────╮
+ │ New pull request in web-app                                │
+ │                                                            │
+ │ Title                  feat: keyboard navigation, second … │
+ │ Description            ‹ none ›                            │
+ │ Target                 develop                             │
+ │ Reviewers              ‹ default reviewers (2) ›           │
+ │ Draft                  [ ]                                 │
+ │ Push the branch first  [x]                                 │
+ │ from feature/keyboard-nav                                  │
+ │                                                            │
+ │ enter: Create   j/k: other rows   esc: cancel              │
+ ╰────────────────────────────────────────────────────────────╯
+```
+
+| Row | What it does |
+|-----|--------------|
+| Title | Prefilled with the subject of the last commit, or the branch name when there is no commit. `enter` edits it inline |
+| Description | `none`, or `write in $EDITOR` — the editor opens after you confirm, the way `E` edits a description, and what you save becomes the description |
+| Target | The repository's own default branch, editable. A pull request against its own source branch is refused before any request |
+| Reviewers | `default reviewers (n)` when the repository has some, `none`, or `pick…` — which opens the same checklist `V` opens, over the default reviewers and the workspace members, with the defaults checked |
+| Draft | Open it as a draft |
+| Push the branch first | Only shown when the branch is not on the remote yet, and on by default: Bitbucket cannot open a pull request for a branch its own repository does not have. The push is `git push <remote> HEAD`, and a push that fails stops the create with git's own message |
+
+Confirming runs whatever the form asked for — the push, then the editor, then the picker — and then opens the pull request. What was created goes to the top of the open lists, the cursor onto it and the detail panel into it, so the next keystroke acts on what you just opened.
+
+`N` is refused, with a line in the hint bar and no form, when lazybitbucket was not started inside a git checkout, when that checkout is not one of the configured repositories, when `HEAD` is detached, and in read-only mode. The pipelines view has no branch of its own, so it says so there too.
+
+Bitbucket's own refusals — a source branch it does not have, a pull request already open for the same pair of branches — arrive as its own message in the hint bar.
 
 ## Builds `[3]`
 

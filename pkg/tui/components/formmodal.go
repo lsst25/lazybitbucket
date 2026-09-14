@@ -90,6 +90,11 @@ func (f *FormModal) Show(id, title, confirmLabel string, fields []FormField) {
 }
 
 // Hide closes the form without emitting a message.
+// Fields is the form's rows as they stand, cloned so a caller cannot edit the
+// open form by holding on to them. It is what a confirmation carries, and what
+// a test answers a dialog with.
+func (f *FormModal) Fields() []FormField { return slices.Clone(f.fields) }
+
 func (f *FormModal) Hide() { f.visible = false }
 
 // IsVisible reports whether the form is open.

@@ -138,3 +138,27 @@ func TestTopLevel(t *testing.T) {
 		})
 	}
 }
+
+func TestLastCommitSubject(t *testing.T) {
+	t.Parallel()
+
+	// An unborn HEAD has no subject, and that is not a failure.
+	empty := t.TempDir()
+	gitRun(t, empty, "init", "-q", "-b", "main")
+	configureRepo(t, empty)
+	subject, err := LastCommitSubject(empty)
+	if err != nil {
+		t.Fatalf("LastCommitSubject() on an empty repository error = %v", err)
+	}
+	testkit.AssertEqual(t, "subject", subject, "")
+
+	dir := initRepo(t)
+	commitFile(t, dir, "a.txt", "hello\n", "feat: teach the parser about renames\n\nbody text")
+
+	subject, err = LastCommitSubject(dir)
+	if err != nil {
+		t.Fatalf("LastCommitSubject() error = %v", err)
+	}
+	// The subject alone: the body of the message is not a pull request title.
+	testkit.AssertEqual(t, "subject", subject, "feat: teach the parser about renames")
+}

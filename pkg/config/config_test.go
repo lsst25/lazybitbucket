@@ -925,6 +925,7 @@ func pullRequestKeysFixture() PullRequestKeys {
 		ToggleDraft: "D",
 		Approve:     "A",
 		Comment:     "C",
+		Create:      "N",
 	}
 }
 
@@ -932,7 +933,7 @@ func pullRequestKeysFixture() PullRequestKeys {
 // field, in declaration order.
 var pullRequestKeyYAMLNames = []string{
 	"select", "open", "focusRight", "browser", "urlPicker", "copyURL", "checkout",
-	"merge", "sync", "edit", "reviewers", "toggleDraft", "approve", "comment",
+	"merge", "sync", "edit", "reviewers", "toggleDraft", "approve", "comment", "create",
 }
 
 func TestLoad_ReadsPullRequestKeybindingsFromYAML(t *testing.T) {
@@ -1015,6 +1016,8 @@ func pullRequestKeyByYAMLName(t *testing.T, keys PullRequestKeys, name string) s
 		return keys.Approve
 	case "comment":
 		return keys.Comment
+	case "create":
+		return keys.Create
 	default:
 		t.Fatalf("pullRequestKeyByYAMLName: unknown yaml key %q", name)
 		return ""

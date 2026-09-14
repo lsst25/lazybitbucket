@@ -14,6 +14,14 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Added
 
+- `N` opens a pull request for the checked-out branch: one form for the title (prefilled from the
+  last commit's subject), the target (the repository's own default branch), the reviewers (its
+  default reviewers, nobody, or a checklist over them and the workspace members), a draft flag and a
+  description written in `$EDITOR`. A branch the remote does not have yet is offered a push first —
+  Bitbucket cannot open a pull request for a branch its own repository has never seen — and a push
+  that fails stops the create with git's own message. What is created goes to the top of the open
+  lists with the cursor on it and the detail panel in it. It is refused outside a checkout, in a
+  checkout of a repository the configuration does not name, on a detached HEAD and in read-only mode
 - `C` on a line of a file's diff writes an inline comment anchored to it, on the side that line lives
   on — the new side for an added or context line, the old side for a removed one. The popup is headed
   with the line it is anchored to, sending leaves the cursor exactly where it was with the line's `●`
@@ -182,6 +190,9 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Changed
 
+- A keybinding set in the config now takes its key from whatever default held it, instead of leaving
+  two actions on one key for `Keymap.Match` to pick between by map order. An action left with no key
+  at all is simply unbound, and an action's other keys are untouched
 - `c` fetches the source branch from the remote that points at the pull request's repository before
   checking it out, fast-forwards a local branch the remote has moved past, and reports a diverged one
   instead of touching it

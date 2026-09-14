@@ -13,7 +13,8 @@ integration, release packaging. What it does not have is any concept of a pull r
 
 ## Current status
 
-ROADMAP steps 0, 1, 2 and 3 are **implemented**. The domain layer is Bitbucket, `pkg/jira` is gone, the
+ROADMAP steps 0, 1, 2 and 3 are **implemented**, and step 4 has begun: a pull request can be opened
+from the checked-out branch. The domain layer is Bitbucket, `pkg/jira` is gone, the
 binary, config dir and packaging are renamed, the review surface — diff pane, editor hand-off, commits
 and review threads — is in, and the tool now acts on a PR as well as reading it: merge, sync, edit
 title/description, reviewers, draft, approve — and on the pipeline behind a build: rerun and stop —
@@ -24,7 +25,11 @@ What exists:
 - `pkg/bitbucket` — Bitbucket Cloud REST client (auth, pagination, `APIError` + predicates, concurrent
   multi-repo PR fetch, and the same fan-out for pipeline runs — `FetchPipelines` answering one
   `RepoPipelines` per repository in input order, each failure isolated, and `MergePipelines`
-  flattening those into `PipelineEntry` values newest run first) plus a small write surface: `MergePullRequest` (`MergeOptions`, `MergeStrategy`
+  flattening those into `PipelineEntry` values newest run first) plus a write surface: `CreatePullRequest` (POST `/pullrequests` with `NewPullRequest` — title,
+  description, source and destination branch, reviewer UUIDs, draft, close-source-branch; the
+  destination and an empty reviewer set are omitted rather than sent so the server picks its own
+  default branch, and `ErrEmptyTitle`/`ErrNoSourceBranch` refuse a create before any request),
+  `MergePullRequest` (`MergeOptions`, `MergeStrategy`
   with six values and `Label()`, `MergeResult.Queued()` for the 202) and `GetMergeTaskStatus`,
   `UpdatePullRequest` (`PullRequestUpdate`: title, description, draft, reviewers),
   `ApprovePullRequest` (POST with no body, answers a `Participant`) and `UnapprovePullRequest`
@@ -70,7 +75,7 @@ What exists:
   `pullrequests`/`builds`/`repos`/`detail`/`diff` (plus the per-command `changedFiles: true`, the one
   scope a command opts into rather than inheriting from its context, because it costs a diffstat
   request — it fills `{{.Files}}` with the whole changed-file list), `keybinding.pullRequests` with
-  `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`/`approve`/`comment`, and `keybinding.builds` with
+  `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`/`approve`/`comment`/`create`, and `keybinding.builds` with
   `rerun`/`stop` — the only group besides `pullRequests` that carries write actions. Also
   `gui.startView` (`pullRequests` | `pipelines`, validated like `gui.screenMode`),
   `gui.prefetchDetailTabs` (`*bool`, nil means true, resolved by `PrefetchesDetailTabs()` the way
@@ -124,6 +129,14 @@ What exists:
   inline comment leaves the panel in the diff with its `●` marker lit up rather than opening the
   thread it made, because a review is a pass down a file. It is the one write `writeTargetInState`
   does not require an `OPEN` pull request for.
+  Opening one lives in `create.go` on `N`: it starts from the checkout rather than from a pull
+  request (the repository is the configured one this checkout's remotes name), reads its prefill in
+  one command — `git.LastCommitSubject` for the title, `GetRepository` for the default branch,
+  `ListEffectiveDefaultReviewers` for the reviewers, `git.IsRemoteBranch` for whether the branch is
+  published — and asks the rest in a `FormModal`. Confirming fills a `pendingCreate`, and
+  `advanceCreate` runs the steps the form asked for in order (push the branch, write the description
+  in `$EDITOR`, pick reviewers from the checklist) before the POST; the created pull request is put
+  at the top of every loaded open list, selected and previewed.
   The six dialog write flows live in `actions.go` on `M` merge, `S` sync, `E` edit, `V` reviewers,
   `D` draft, `A` approve — they work from the list and the detail panel alike, always open a dialog first, are
   refused for a non-`OPEN` PR, while another write on that PR is in flight, and in read-only mode. The
@@ -160,7 +173,7 @@ Hard constraints that still hold:
   `BaseURL`** — never the default, which is the real host.
 - `pkg/bitbucket` and `pkg/bitbucket/demo` import nothing from `pkg/tui` or `pkg/config`.
 
-Not built yet (ROADMAP step 4+): the richer search / saved filters and PR creation of step 4, and
+Not built yet (ROADMAP step 4+): the richer search and saved filters of step 4, and
 everything left under "Later / maybe" — requesting changes, declining, editing or resolving comments,
 multi-line comment ranges, review tasks, triggering a custom pipeline definition, a CLI mode. In the pipelines view specifically:
 filter tabs over the run list, custom commands, and auto-refresh on the background tick. Also not built: the activity feed,
@@ -231,8 +244,9 @@ Everything user-visible is `lazybitbucket`:
 Auth: Atlassian removed app passwords on 2026-07-28. There is no app-password mode. Two credential
 shapes: a token alone (API token or access token) sent as `Authorization: Bearer`, or an Atlassian
 account email plus an API token sent as HTTP Basic — the Basic username must be the **account email**,
-not a Bitbucket username, or the server answers 401. The five read scopes cover browsing; the seven PR write
-actions additionally want `write:pullrequest:bitbucket` (merging, approving and commenting included)
+not a Bitbucket username, or the server answers 401. The five read scopes cover browsing; the eight PR write
+actions additionally want `write:pullrequest:bitbucket` (creating, merging, approving and commenting
+included)
 and the two pipeline ones `write:pipeline:bitbucket`, both of which read-only mode makes unnecessary.
 
 ## Conventions

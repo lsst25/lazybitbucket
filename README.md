@@ -36,6 +36,7 @@ make build-demo
 - **Repo filter** — narrow the list to a single repository from the Repos panel
 - **Search** — `/` filters the focused list as you type
 - **Browser hand-off** — `o` opens what you are looking at (the PR, a commit, a thread, the diff), `y` copies that URL, `u` opens a picker of every URL the PR reaches (builds, links in the description, plus commits and threads once those tabs have been opened)
+- **Open a pull request** — `N` creates one for the branch you are on: the title prefilled from the last commit, the target from the repository's default branch, reviewers from its default reviewers or a checklist, a draft flag, and the description in `$EDITOR` if you want one. A branch that is not on the remote yet is offered a push first, because Bitbucket cannot open a PR for a branch it does not have
 - **Merge** — `M` opens a dialog: one of the six strategies Bitbucket accepts, close-source-branch, an optional commit message. The merge runs asynchronously on Bitbucket and is polled until it lands
 - **Sync with the target branch** — `S` merges or rebases the source branch onto its target and pushes, through git in your own checkout, because Bitbucket's "Sync now" has no API. Conflicts abort and are left to you
 - **Edit** — `E` changes the title inline, or opens the description in `$EDITOR` and sends back what you saved

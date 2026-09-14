@@ -110,6 +110,9 @@ type App struct {
 	// pendingComment is set while the comment popup is open: what the confirmed
 	// text will be posted as. See comments.go.
 	pendingComment *pendingComment
+	// pendingCreate is the pull request being opened, from the moment N reads
+	// the branch until the POST answers. See create.go.
+	pendingCreate *pendingCreate
 
 	// onFormID is the id of the dialog onForm was armed for. A form result
 	// carries the id of the form that produced it, so one that outlived its
@@ -669,6 +672,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleDescriptionEdited(msg)
 	case commentPostedMsg:
 		return a.handleCommentPosted(msg)
+	case createPrefillMsg:
+		return a.handleCreatePrefill(msg)
+	case createReviewersMsg:
+		return a.handleCreateReviewers(msg)
+	case branchPushedMsg:
+		return a.handleBranchPushed(msg)
+	case createDescriptionEditedMsg:
+		return a.handleCreateDescriptionEdited(msg)
+	case pullRequestCreatedMsg:
+		return a.handlePullRequestCreated(msg)
 	case commentEditedMsg:
 		return a.handleCommentEdited(msg)
 	case syncDoneMsg:

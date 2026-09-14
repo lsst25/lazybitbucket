@@ -104,22 +104,23 @@ func TestKeymapFromConfig_RemapsTheWriteKeys(t *testing.T) {
 	keybindingConfig.PullRequests.Sync = "W"
 	keybindingConfig.PullRequests.Edit = "Y"
 	keybindingConfig.PullRequests.Reviewers = "I"
-	keybindingConfig.PullRequests.ToggleDraft = "N"
+	keybindingConfig.PullRequests.ToggleDraft = "Q"
 	keybindingConfig.PullRequests.Approve = "Z"
+	keybindingConfig.PullRequests.Create = "B"
 
 	keymap := KeymapFromConfig(keybindingConfig)
 
 	for key, want := range map[string]Action{
-		"F": ActMerge, "W": ActSync, "Y": ActEdit, "I": ActReviewers, "N": ActToggleDraft,
-		"Z": ActApprove,
+		"F": ActMerge, "W": ActSync, "Y": ActEdit, "I": ActReviewers, "Q": ActToggleDraft,
+		"Z": ActApprove, "B": ActCreatePullRequest,
 	} {
 		testkit.AssertEqual(t, "remapped "+key, keymap.Match(key), want)
 	}
 	// The defaults they replaced are free again.
-	for _, key := range []string{"M", "S", "E", "V", "D", "A"} {
+	for _, key := range []string{"M", "S", "E", "V", "D", "A", "N"} {
 		if action := keymap.Match(key); action == ActMerge || action == ActSync ||
 			action == ActEdit || action == ActReviewers || action == ActToggleDraft ||
-			action == ActApprove {
+			action == ActApprove || action == ActCreatePullRequest {
 			t.Errorf("key %q still resolves to %q after the remap", key, action)
 		}
 	}
@@ -134,8 +135,6 @@ func TestKeymapFromConfig_RemapsThePipelineKeys(t *testing.T) {
 
 	var keybindingConfig config.KeybindingConfig
 	keybindingConfig.Builds.Rerun = "B"
-	// Not "C": that is the comment key's default, and a remap onto a key another
-	// action still holds is a collision, not a remap.
 	keybindingConfig.Builds.Stop = "Z"
 
 	km = KeymapFromConfig(keybindingConfig)
@@ -160,4 +159,37 @@ func TestKeymap_ScreenModeKeys(t *testing.T) {
 	testkit.AssertEqual(t, "remapped next", km.Match("="), ActNextScreenMode)
 	testkit.AssertEqual(t, "remapped prev", km.Match("-"), ActPrevScreenMode)
 	testkit.AssertEqual(t, "old key released", km.Match("+"), Action(""))
+}
+
+func TestKeymapFromConfig_ARemapTakesTheKeyFromTheDefaultThatHadIt(t *testing.T) {
+	t.Parallel()
+
+	testkit.AssertEqual(t, "C is the comment key", DefaultKeymap().Match("C"), ActComment)
+
+	var keybindingConfig config.KeybindingConfig
+	keybindingConfig.Builds.Stop = "C"
+
+	km := KeymapFromConfig(keybindingConfig)
+
+	// One key, one action: the configured binding wins, and Match cannot answer
+	// with whichever of the two a map walk reached first.
+	testkit.AssertEqual(t, "C after the remap", km.Match("C"), ActStopPipeline)
+	// The comment key is not silently gone: it keeps every other key it had,
+	// and here it had only that one, so it has none — which the help surfaces
+	// show as an unbound action rather than as a key that does something else.
+	testkit.AssertEqual(t, "the comment key", km.Keys(ActComment), "")
+}
+
+func TestKeymapFromConfig_ARemapLeavesAnActionsOtherKeysAlone(t *testing.T) {
+	t.Parallel()
+
+	var keybindingConfig config.KeybindingConfig
+	// down is j, down and ctrl+j by default; taking one must not cost the rest.
+	keybindingConfig.PullRequests.Checkout = "j"
+
+	km := KeymapFromConfig(keybindingConfig)
+
+	testkit.AssertEqual(t, "j after the remap", km.Match("j"), ActCheckout)
+	testkit.AssertEqual(t, "down still navigates", km.Match("down"), ActNavDown)
+	testkit.AssertEqual(t, "ctrl+j still navigates", km.Match("ctrl+j"), ActNavDown)
 }

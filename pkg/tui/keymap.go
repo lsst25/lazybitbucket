@@ -79,9 +79,14 @@ const (
 	ActToggleDraft Action = "toggleDraft"
 	ActApprove     Action = "approve"
 
-	// ActComment is the seventh write and the only one with no dialog: it opens
-	// the composer in the detail panel instead, and what the composer sends is
-	// the confirmation. It is read-only-refused and hidden like the rest.
+	// ActCreatePullRequest opens a pull request for the checked-out branch. It
+	// is the one write that does not start from a pull request, so it is live
+	// wherever the pull request view is.
+	ActCreatePullRequest Action = "createPullRequest"
+
+	// ActComment is the seventh write and the only one whose dialog is the
+	// title editor's input popup rather than a form. It is read-only-refused
+	// and hidden like the rest.
 	ActComment Action = "comment"
 
 	// The two pipeline writes. They act on the run behind a build rather than
@@ -103,6 +108,26 @@ const defaultNextViewKey = "shift+tab"
 
 // Keymap maps actions to key strings. Several keys may trigger one action.
 type Keymap map[Action][]string
+
+// release takes key away from every action but keeper, dropping an action that
+// is left with no key at all. It is what makes a configured binding win over
+// the default that held the same key.
+func (k Keymap) release(key string, keeper Action) {
+	for action, keys := range k {
+		if action == keeper {
+			continue
+		}
+		kept := slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return k == key })
+		if len(kept) == len(keys) {
+			continue
+		}
+		if len(kept) == 0 {
+			delete(k, action)
+			continue
+		}
+		k[action] = kept
+	}
+}
 
 // DefaultKeymap returns the default key bindings.
 func DefaultKeymap() Keymap {
@@ -159,13 +184,14 @@ func DefaultKeymap() Keymap {
 
 		// Uppercase on purpose: the lowercase review keys d, m and e stay where
 		// they are, and a write is worth a shifted key.
-		ActMerge:       {"M"},
-		ActSync:        {"S"},
-		ActEdit:        {"E"},
-		ActReviewers:   {"V"},
-		ActToggleDraft: {"D"},
-		ActApprove:     {"A"},
-		ActComment:     {"C"},
+		ActMerge:             {"M"},
+		ActSync:              {"S"},
+		ActEdit:              {"E"},
+		ActReviewers:         {"V"},
+		ActToggleDraft:       {"D"},
+		ActApprove:           {"A"},
+		ActComment:           {"C"},
+		ActCreatePullRequest: {"N"},
 
 		ActRerunPipeline: {"P"},
 		ActStopPipeline:  {"X"},
@@ -181,9 +207,16 @@ func DefaultKeymap() Keymap {
 func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	km := DefaultKeymap()
 	set := func(action Action, val string) {
-		if val != "" {
-			km[action] = []string{val}
+		if val == "" {
+			return
 		}
+		// A key belongs to one action. Binding it here takes it from whatever
+		// default held it, or Match — which walks a map — would answer with
+		// either of them depending on the iteration order, and a remap onto a
+		// key that is already spoken for is exactly what a user does when they
+		// want the other action out of the way.
+		km.release(val, action)
+		km[action] = []string{val}
 	}
 
 	set(ActQuit, kcfg.Universal.Quit)
@@ -218,6 +251,7 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	set(ActToggleDraft, kcfg.PullRequests.ToggleDraft)
 	set(ActApprove, kcfg.PullRequests.Approve)
 	set(ActComment, kcfg.PullRequests.Comment)
+	set(ActCreatePullRequest, kcfg.PullRequests.Create)
 
 	// The Builds group carries the two pipeline writes and nothing else: every
 	// other key that works on a build row is the pull request group's.

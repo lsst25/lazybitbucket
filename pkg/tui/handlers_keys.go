@@ -486,6 +486,11 @@ func (a *App) handlePullRequestAction(action Action) (tea.Model, tea.Cmd, bool) 
 	case ActComment:
 		return a, a.handleActionComment(), true
 
+	// The eighth, and the only one that starts from the branch rather than
+	// from a pull request; see create.go.
+	case ActCreatePullRequest:
+		return a, a.handleActionCreate(), true
+
 	// The two pipeline writes. They act on the run behind a build rather than
 	// on the pull request, and answer with a hint where there is no run to act
 	// on; see pipeline_actions.go.

@@ -171,6 +171,12 @@ func (s *stubClient) UnapprovePullRequest(context.Context, string, string, int) 
 	return nil
 }
 
+func (s *stubClient) CreatePullRequest(
+	context.Context, string, string, NewPullRequest,
+) (*PullRequest, error) {
+	return nil, nil
+}
+
 func (s *stubClient) CreateComment(
 	context.Context, string, string, int, CommentCreate,
 ) (*Comment, error) {

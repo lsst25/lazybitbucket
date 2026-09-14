@@ -132,14 +132,16 @@ func (a *App) commentBindings(description string) []Binding {
 	return []Binding{a.bind(ActComment, description)}
 }
 
-// writeBindings are the six keys that change the pull request on Bitbucket.
-// They are omitted entirely in read-only mode: a key that answers "read-only
-// mode" is not a keybinding worth listing.
+// writeBindings are the keys that change the pull request on Bitbucket, plus
+// the one that opens a new one from the checked-out branch. They are omitted
+// entirely in read-only mode: a key that answers "read-only mode" is not a
+// keybinding worth listing.
 func (a *App) writeBindings() []Binding {
 	if a.readOnly {
 		return nil
 	}
 	return []Binding{
+		a.bind(ActCreatePullRequest, "open a pull request for the checked-out branch"),
 		a.bind(ActMerge, "merge the pull request"),
 		a.bind(ActSync, "sync the source branch with the target"),
 		a.bind(ActEdit, "edit the title or description"),
@@ -156,6 +158,7 @@ func (a *App) writeHelpItems() []components.HelpItem {
 	}
 	km := a.keymap
 	return []components.HelpItem{
+		{Key: km.Keys(ActCreatePullRequest), Description: "new"},
 		{Key: km.Keys(ActMerge), Description: "merge"},
 		{Key: km.Keys(ActSync), Description: "sync"},
 		{Key: km.Keys(ActEdit), Description: "edit"},
