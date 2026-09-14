@@ -431,7 +431,7 @@ func TestServer_GetPipelineStepLog(t *testing.T) {
 
 	got := get(t, server.URL+path, nil)
 	testkit.AssertEqual(t, "status", got.Status, http.StatusOK)
-	testkit.AssertEqual(t, "Content-Type", got.Header.Get("Content-Type"), contentTypeText)
+	testkit.AssertEqual(t, "Content-Type", got.Header.Get("Content-Type"), contentTypeOctet)
 	if !strings.HasPrefix(string(got.Body), "+ go test ./...") {
 		t.Fatalf("log = %q, want it to start with the script command", got.Body)
 	}
@@ -460,6 +460,27 @@ func TestServer_GetPipelineStepLogHonoursRangeTail(t *testing.T) {
 	testkit.AssertEqual(t, "Content-Range", got.Header.Get("Content-Range"),
 		"bytes "+strconv.Itoa(len(full)-tail)+"-"+strconv.Itoa(len(full)-1)+
 			"/"+strconv.Itoa(len(full)))
+}
+
+func TestServer_GetPipelineStepLogRefusesATextOnlyAccept(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	steps := decodeJSON[listPage[bitbucket.PipelineStep]](t,
+		getOK(t, server, pipelinePath(repoAPIGateway, 412)+segmentSteps))
+	path := pipelinePath(repoAPIGateway, 412) + segmentSteps + "/" +
+		url.PathEscape(steps.Values[1].UUID) + "/log"
+
+	// The log is an octet stream, and the real API answers 406 for a client
+	// that offers only text — which is the bug this mirrors.
+	header := http.Header{}
+	header.Set("Accept", "text/plain")
+	got := get(t, server.URL+path, header)
+	testkit.AssertEqual(t, "status", got.Status, http.StatusNotAcceptable)
+
+	header.Set("Accept", "application/octet-stream, text/plain;q=0.9, */*;q=0.8")
+	testkit.AssertEqual(t, "status with an octet-stream Accept",
+		get(t, server.URL+path, header).Status, http.StatusOK)
 }
 
 func TestServer_GetPipelineStepLogMissingIsNotFound(t *testing.T) {

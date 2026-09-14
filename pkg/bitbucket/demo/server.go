@@ -32,8 +32,9 @@ const (
 	defaultPageLen = 10
 	maxPageLen     = 100
 
-	contentTypeJSON = "application/json"
-	contentTypeText = "text/plain; charset=utf-8"
+	contentTypeJSON  = "application/json"
+	contentTypeText  = "text/plain; charset=utf-8"
+	contentTypeOctet = "application/octet-stream"
 
 	// zeroTimestamp is how encoding/json renders a zero time.Time. Bitbucket
 	// omits such fields entirely (completed_on on a running pipeline,
@@ -455,6 +456,14 @@ func (s *Server) handleStepLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The real API serves the log as application/octet-stream and refuses an
+	// Accept that does not admit it — a bare "text/plain" is a 406 there, so it
+	// is one here too.
+	if !acceptsOctetStream(r.Header.Get("Accept")) {
+		writeErrorEnvelope(w, http.StatusNotAcceptable, "HTTP 406 Not Acceptable")
+		return
+	}
+
 	writeLog(w, r, log)
 }
 
@@ -673,7 +682,7 @@ func writeLog(w http.ResponseWriter, r *http.Request, log string) {
 	body := []byte(log)
 
 	start, ok := suffixRange(r.Header.Get("Range"), len(body))
-	w.Header().Set("Content-Type", contentTypeText)
+	w.Header().Set("Content-Type", contentTypeOctet)
 	if !ok {
 		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 		w.WriteHeader(http.StatusOK)
@@ -686,6 +695,23 @@ func writeLog(w http.ResponseWriter, r *http.Request, log string) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(tail)))
 	w.WriteHeader(http.StatusPartialContent)
 	_, _ = w.Write(tail)
+}
+
+// acceptsOctetStream reports whether an Accept header admits the octet stream
+// the log is served as. Only the media ranges matter, not their q values: the
+// client either offers a range that covers octet-stream or it does not.
+func acceptsOctetStream(accept string) bool {
+	if strings.TrimSpace(accept) == "" {
+		return true
+	}
+	for part := range strings.SplitSeq(accept, ",") {
+		media, _, _ := strings.Cut(part, ";")
+		switch strings.ToLower(strings.TrimSpace(media)) {
+		case contentTypeOctet, "application/*", "*/*":
+			return true
+		}
+	}
+	return false
 }
 
 // suffixRange parses "bytes=-N" and returns the offset the tail starts at. Any

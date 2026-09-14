@@ -20,11 +20,14 @@ const (
 	defaultTimeout   = 30 * time.Second
 )
 
-// Media types the client asks for. JSON everywhere except the pipeline step
-// log, which is a raw text blob.
+// Media types the client asks for. JSON everywhere except the two raw blobs: a
+// diff, which is served as text, and the pipeline step log, which Bitbucket
+// serves as application/octet-stream and answers 406 Not Acceptable when the
+// request asks only for text.
 const (
 	acceptJSON = "application/json"
 	acceptText = "text/plain"
+	acceptLog  = "application/octet-stream, text/plain;q=0.9, */*;q=0.8"
 )
 
 // rateLimitRemainingHeader carries how many requests are left in the current

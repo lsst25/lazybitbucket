@@ -343,7 +343,9 @@ func TestGetPipelineStepLog_TailRequestsARange(t *testing.T) {
 	testkit.AssertEqual(t, "log", log, logText)
 	testkit.AssertEqual(t, "path", recorded.Path,
 		testPipelinesPath+"/"+testPipelineUUID+"/steps/"+stepUUID+"/log")
-	testkit.AssertEqual(t, "Accept", recorded.Header.Get("Accept"), "text/plain")
+	// Not acceptText: the API serves the log as an octet stream and answers 406
+	// for a client that offers only text.
+	testkit.AssertEqual(t, "Accept", recorded.Header.Get("Accept"), acceptLog)
 	testkit.AssertEqual(t, "Range", recorded.Header.Get("Range"), "bytes=-65536")
 }
 

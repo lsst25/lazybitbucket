@@ -62,6 +62,10 @@ func (c *Client) ListPipelineSteps(
 // opts.TailBytes asks for a suffix with a Range header rather than the whole
 // file; the API documents and encourages Range on this endpoint.
 //
+// The log is served as application/octet-stream whatever its content, and the
+// API answers 406 Not Acceptable for an Accept that admits only text — hence
+// acceptLog rather than acceptText.
+//
 // Once a step finishes its log moves to long-term storage and the request is
 // redirected there. Go's default redirect policy drops the Authorization header
 // across hosts, which is what that presigned URL needs.
@@ -75,7 +79,7 @@ func (c *Client) GetPipelineStepLog(
 		headers = http.Header{"Range": []string{"bytes=-" + strconv.Itoa(opts.TailBytes)}}
 	}
 
-	body, _, err := c.getRaw(ctx, path, "", acceptText, headers)
+	body, _, err := c.getRaw(ctx, path, "", acceptLog, headers)
 	if err != nil {
 		return "", fmt.Errorf("get step log %s/%s %s %s: %w", workspace, repoSlug, pipelineRef, stepUUID, err)
 	}
