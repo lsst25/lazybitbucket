@@ -114,8 +114,10 @@ func TestDetailView_Files_TabLabelsCarryTheCount(t *testing.T) {
 	view := makeFocusedDetail()
 	view.SetPullRequest(detailPR())
 
+	// Files and Commits have no count until they load; Comments has one from
+	// the start, the pull request's own comment_count.
 	testkit.AssertEqual(t, "unknown", stripANSI(view.buildTitle(90)),
-		"[0] #101 "+testRepo+" - Overview - Files - Commits - Comments")
+		"[0] #101 "+testRepo+" - Overview - Files - Commits - Comments (7)")
 
 	view.SetDiffStatLoading(testPRKey)
 	if got := stripANSI(view.buildTitle(90)); !strings.Contains(got, "Files (…)") {
@@ -139,7 +141,7 @@ func TestDetailView_BuildTitle_DropsCountsThenSlugToFit(t *testing.T) {
 
 	full := stripANSI(view.buildTitle(90))
 	testkit.AssertEqual(t, "full title",
-		full, "[0] #101 "+testRepo+" - Overview - Files (5) - Commits (2) - Comments (4)")
+		full, "[0] #101 "+testRepo+" - Overview - Files (5) - Commits (2) - Comments (5)")
 
 	// At 60 columns the counts go first; the slug survives because the bar
 	// then fits.
@@ -254,9 +256,10 @@ func TestDetailView_Review_StaleKeysAreDropped(t *testing.T) {
 	if got := view.Threads(); got != nil {
 		t.Errorf("Threads() = %v, want nil", got)
 	}
-	if strings.Contains(stripANSI(view.buildTitle(90)), "(") {
-		t.Error("a dropped response must not put a count in the tab bar")
-	}
+	// The only count left in the bar is the pull request's own comment_count;
+	// nothing a dropped response carried reached a label.
+	testkit.AssertEqual(t, "tab bar", stripANSI(view.buildTitle(90)),
+		"[0] #101 "+testRepo+" - Overview - Files - Commits - Comments (7)")
 }
 
 func TestDetailView_Review_SelectingAnotherPullRequestResetsTheTabs(t *testing.T) {

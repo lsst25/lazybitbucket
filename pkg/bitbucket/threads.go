@@ -231,6 +231,25 @@ func threadSortLine(thread Thread) int {
 	return line
 }
 
+// CommentTotal is how many comments the threads hold — roots and replies
+// alike, the deleted placeholders BuildThreads keeps for the sake of their
+// replies not counted. It is the local answer to the pull request's
+// comment_count.
+func CommentTotal(threads []Thread) int {
+	total := 0
+	for _, thread := range threads {
+		if !thread.Root.Deleted {
+			total++
+		}
+		for _, reply := range thread.Replies {
+			if !reply.Deleted {
+				total++
+			}
+		}
+	}
+	return total
+}
+
 // CommentedLines maps each commented file to the lines that carry at least one
 // inline thread, and how many threads each line carries. It is what lets the
 // diff view mark commented lines.

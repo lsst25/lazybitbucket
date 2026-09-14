@@ -455,10 +455,9 @@ func (a *App) pipelineRerunStarted(msg pipelineWrittenMsg) (tea.Model, tea.Cmd) 
 		// first on purpose: it bumps the epoch the step fetch has to carry.
 		a.runKey = newRef.key()
 		a.detailView.SetRun(a.runKey, msg.pipeline, nil)
-		a.side = sideRight
-		a.updateFocusState()
+		focusCmd := a.focusDetail()
 		listCmd := a.fetchPipelines()
-		return a, tea.Batch(listCmd, a.fetchRunSteps(newRef))
+		return a, tea.Batch(focusCmd, listCmd, a.fetchRunSteps(newRef))
 	}
 
 	delete(a.statusCache, msg.prKey)
@@ -470,9 +469,9 @@ func (a *App) pipelineRerunStarted(msg pipelineWrittenMsg) (tea.Model, tea.Cmd) 
 		return a, nil
 	}
 	a.detailView.SetPipelineLoading(msg.prKey, build)
-	a.side = sideRight
-	a.updateFocusState()
+	focusCmd := a.focusDetail()
 	return a, tea.Batch(
+		focusCmd,
 		a.fetchPipeline(pr.Workspace(), pr.RepoSlug(), msg.prKey, build),
 		a.fetchStatuses(pr, a.previewEpoch),
 	)

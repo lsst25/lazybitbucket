@@ -156,7 +156,11 @@ func (a *App) showSelectedRun() tea.Cmd {
 	}
 
 	key := a.runKeyOf(entry)
-	settled := a.runKey == key && a.detailView.PipelineOwner() == key
+	// A run key and a pull request key share the ws/slug#N shape, so a run whose
+	// build number equals the previewed pull request's id would look settled on
+	// a panel that is in fact showing the pull request. The owner flag tells the
+	// two apart.
+	settled := a.runKey == key && a.detailView.PipelineOwner() == key && !a.detailView.PipelineOwnerIsPR()
 	a.runKey = key
 
 	// A reader inside this run's own step log stays there: the log is a

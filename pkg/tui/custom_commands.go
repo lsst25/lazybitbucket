@@ -323,7 +323,9 @@ func (a *App) awaitChangedFiles(rc config.ResolvedCustomCommand, ctx config.Cont
 	}
 	a.helpBar.SetStatusMsg(rc.Name + ": loading changed files…")
 	a.pendingCmd = &pendingCustomCommand{cmd: rc, ctx: ctx, key: pr.Key()}
-	return a.fetchDiffStat(pr), true
+	// ensureDiffStat rather than fetchDiffStat: a prefetch may already have the
+	// diffstat on its way, and that answer resumes the command just as well.
+	return a.ensureDiffStat(pr), true
 }
 
 // resumeCustomCommand runs the command that was waiting for key's diffstat.

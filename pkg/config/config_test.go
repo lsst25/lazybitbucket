@@ -740,6 +740,50 @@ func TestValidateRendererStyle(t *testing.T) {
 	}
 }
 
+func TestGUIConfig_PrefetchesDetailTabs(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		prefetch *bool
+		want     bool
+	}{
+		{"nil defaults to true", nil, true},
+		{"explicit true", pointerTo(true), true},
+		{"explicit false", pointerTo(false), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gui := GUIConfig{PrefetchDetailTabs: tc.prefetch}
+			testkit.AssertEqual(t, "PrefetchesDetailTabs", gui.PrefetchesDetailTabs(), tc.want)
+		})
+	}
+}
+
+func TestLoad_PrefetchDetailTabsFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, `gui:
+  prefetchDetailTabs: false
+`)
+
+	cfg := loadOrFatal(t)
+	testkit.AssertEqual(t, "PrefetchesDetailTabs", cfg.GUI.PrefetchesDetailTabs(), false)
+}
+
+func TestLoad_PrefetchDetailTabsDefaultsToOn(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, `gui:
+  theme: default
+`)
+
+	cfg := loadOrFatal(t)
+	testkit.AssertEqual(t, "PrefetchesDetailTabs", cfg.GUI.PrefetchesDetailTabs(), true)
+}
+
 func TestCustomCommandConfig_ShouldSuspend(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

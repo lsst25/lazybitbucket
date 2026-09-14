@@ -357,7 +357,7 @@ Common keys, whatever is on screen:
 | `m` | Commits tab | `detail.commitsTab` |
 | `t` | Comments tab — the review threads | `detail.commentsTab` |
 
-A tab's data is fetched the first time you open it and cached per pull request, so nothing is requested for a tab you never visit. The tab label carries the item count once it is known (`Files (3)`), an ellipsis while the fetch is in flight. The four jump keys only act while the detail panel is focused; from a left panel they fall through to that panel. Pressed inside a file diff, they leave the diff and land on the tab.
+Focusing the detail panel fetches the Files, Commits and Comments tabs together, so walking the tabs of the pull request in front of you costs no pause; `gui.prefetchDetailTabs: false` turns that off and goes back to fetching a tab the first time you open it, nothing at all for a tab you never visit. Either way the data is cached per pull request, and moving the cursor in the list — which only previews the pull request — fetches no tab. The tab label carries the item count once it is known (`Files (3)`), an ellipsis while the fetch is in flight; Comments is the exception, showing the pull request's own comment count from the start and the number of comments it loaded — replies included — once the threads are in. The four jump keys only act while the detail panel is focused; from a left panel they fall through to that panel. Pressed inside a file diff, they leave the diff and land on the tab.
 
 `enter` is the tab's own key, and does something different in each:
 

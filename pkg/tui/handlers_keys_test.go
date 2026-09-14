@@ -125,6 +125,9 @@ func TestSwitchPanel_TogglesSides(t *testing.T) {
 func TestActivate_OnThePullRequestListOpensTheDetail(t *testing.T) {
 	t.Parallel()
 	app := keysApp(t)
+	// This is about the preview, not the review tabs: the prefetch focusing the
+	// panel sets off has its own tests in review_prefetch_test.go.
+	app.cfg.GUI.PrefetchDetailTabs = new(bool)
 
 	_, cmd := app.handleActivate()
 

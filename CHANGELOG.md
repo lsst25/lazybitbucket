@@ -20,6 +20,16 @@ one are upstream lazyjira history, and their compare links still point at upstre
   literal — a departed colleague, an id written inside a code span — stays an id, exactly as the web
   UI shows it. Read side only: composing a mention is still out of scope, and everything that
   round-trips the text (the description editor, `{{.PR.Description}}`) keeps the raw form
+- Moving the focus onto the detail panel fetches its Files, Commits and Comments tabs together
+  instead of one per first tab entry: a reader who moves in is about to walk the tabs, and three
+  requests now beat a pause on each of them later. A tab entered while its fetch is still in flight
+  waits for that answer rather than asking again, a tab whose prefetch failed says so when you open
+  it rather than the moment it failed, moving the cursor in the list still fetches no tab at all,
+  and `gui.prefetchDetailTabs: false` goes back to fetching each tab on first entry
+- The Comments tab carries a number from the start: the pull request's own `comment_count` before and
+  while the threads load, and the number of comments actually loaded — roots and replies, deleted
+  placeholders excluded — once they are in. Files and Commits are unchanged; no count comes with a
+  pull request for either
 - Started inside a checkout whose remote points at one of the listed repositories, the pull request
   list opens scoped to that repository, with the cursor on the pull request for the branch you have
   checked out — in whichever tab holds it, which it says (`selected #103 in Reviewing — the pull

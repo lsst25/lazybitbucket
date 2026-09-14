@@ -68,6 +68,8 @@ What exists:
   `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`/`approve`, and `keybinding.builds` with
   `rerun`/`stop` — the only group besides `pullRequests` that carries write actions. Also
   `gui.startView` (`pullRequests` | `pipelines`, validated like `gui.screenMode`),
+  `gui.prefetchDetailTabs` (`*bool`, nil means true, resolved by `PrefetchesDetailTabs()` the way
+  `CustomCommandConfig.Suspend` is by `ShouldSuspend()`),
   `keybinding.universal.nextView` (`shift+tab`) and `keybinding.pipelines` with the single
   `openPullRequest` (`L`); rerun and stop stay under `builds` because they are one action wherever
   they are pressed.
@@ -83,17 +85,21 @@ What exists:
   run, its steps and each step's log, repo filter, `/` search, URL picker, copy URL, browser hand-off,
   source-branch checkout, custom commands, themes, and a `refreshInterval` auto-refresh of the active
   tab. The detail pane has four PR tabs — Overview (Markdown description via glamour), Files, Commits,
-  Comments — each fetched on first tab entry (`review.go`) and cached per PR key, stamped with the
+  Comments — fetched on first tab entry, or all three at once when the detail panel takes focus
+  (`gui.prefetchDetailTabs`, default on; `focusDetail` in `app.go`, `prefetchDetailTabs` and the
+  `reviewInFlight` marks that deduplicate a tab entered mid-prefetch in `review.go` — a failed prefetch
+  stays quiet until its tab is opened, and an answer for a head the branch has left is dropped), and
+  cached per PR key, stamped with the
   source commit so a push invalidates it. Overview and Comments render the readable body, resolving
   `@{account_id}` through the `summary.html` / `content.html` that came with it, and paint each
   mention in `theme.Mention` (the palette's blue): `views/mentions.go` wraps a mention in U+FFF9 /
   U+FFFB — zero-width for glamour and lipgloss alike — before the Markdown pass and `paintMentions`
   swaps the markers for the style afterwards, re-asserting the colour after glamour's own SGR codes
   and replaying them once the mention closes. Commit messages are not resolved, and neither is
-  anything that round-trips the text — the description editor and `{{.PR.Description}}` keep the raw
-  form. Behind the Files tab is `ModeFileDiff`: a per-file unified
-  diff with a line cursor, chroma syntax highlighting, `●` markers on commented lines, `n`/`p` to walk
-  the files and `e` to open the file at the cursor's line in `config.ResolveEditor()` (`editor.go`).
+  anything that round-trips the text — the description editor and `{{.PR.Description}}` keep the raw form. Behind the
+  Files tab is `ModeFileDiff`: a per-file unified diff with a line cursor, chroma syntax
+  highlighting, `●` markers on commented lines, `n`/`p` to walk the files and `e` to open the file
+  at the cursor's line in `config.ResolveEditor()` (`editor.go`).
   The six write flows live in `actions.go` on `M` merge, `S` sync, `E` edit, `V` reviewers, `D` draft,
   `A` approve — they work from the list and the detail panel alike, always open a dialog first, are
   refused for a non-`OPEN` PR, while another write on that PR is in flight, and in read-only mode. The

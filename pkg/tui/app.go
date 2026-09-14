@@ -187,6 +187,11 @@ type App struct {
 	threadsCache  map[string]reviewEntry[[]bitbucket.Thread]
 	fileDiffCache map[string]reviewEntry[fileDiffData]
 
+	// reviewInFlight marks the review fetches that have been issued and not yet
+	// answered, keyed by reviewFetchKey, so a tab entered while its prefetch is
+	// still in flight waits for that answer instead of asking again.
+	reviewInFlight map[string]bool
+
 	// diffRendererDisabled turns the configured external diff renderer off for
 	// the rest of the session, which is what a program that cannot be run at
 	// all or whose output does not line up with the diff earns: neither gets
@@ -349,6 +354,7 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 		commitsCache:   make(map[string]reviewEntry[[]bitbucket.Commit]),
 		threadsCache:   make(map[string]reviewEntry[[]bitbucket.Thread]),
 		fileDiffCache:  make(map[string]reviewEntry[fileDiffData]),
+		reviewInFlight: make(map[string]bool),
 		writesInFlight: make(map[string]string),
 		pipelineWrites: make(map[string]string),
 		renderer:       renderer,
@@ -882,6 +888,16 @@ func (a *App) updateFocusState() {
 
 	a.helpBar.SetItems(a.helpBarItems())
 	a.layoutPanels()
+}
+
+// focusDetail moves the focus onto the detail panel and, when the panel shows a
+// pull request and gui.prefetchDetailTabs is on, warms its three review tabs at
+// once. Every path that lands the focus on the right-hand side goes through it,
+// so the prefetch has one place to live rather than one per key and click.
+func (a *App) focusDetail() tea.Cmd {
+	a.side = sideRight
+	a.updateFocusState()
+	return a.prefetchDetailTabs()
 }
 
 // showSplash points the detail panel at the startup screen with fresh counts.

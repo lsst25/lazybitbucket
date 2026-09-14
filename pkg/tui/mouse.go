@@ -100,11 +100,12 @@ func (a *App) mouseScroll(panel panelID, delta int) (tea.Model, tea.Cmd) {
 			a.detailView.SetRepo(repo)
 		}
 	case panelDetail:
+		var cmd tea.Cmd
 		if a.side != sideRight {
-			a.side = sideRight
-			a.updateFocusState()
+			cmd = a.focusDetail()
 		}
 		a.detailView.ScrollBy(step)
+		return a, cmd
 	}
 	return a, nil
 }
@@ -163,9 +164,9 @@ func (a *App) mouseClick(panel panelID, relY, x int) (tea.Model, tea.Cmd) {
 		}
 
 	case panelDetail:
+		var focusCmd tea.Cmd
 		if a.side != sideRight {
-			a.side = sideRight
-			a.updateFocusState()
+			focusCmd = a.focusDetail()
 		}
 		if relY == 0 {
 			relX := x
@@ -175,13 +176,14 @@ func (a *App) mouseClick(panel panelID, relY, x int) (tea.Model, tea.Cmd) {
 			// A click that actually changes the tab warms it, exactly as the
 			// tab keys do.
 			if a.detailView.ClickTab(relX) {
-				return a, a.onDetailTabChanged()
+				return a, tea.Batch(focusCmd, a.onDetailTabChanged())
 			}
-			return a, nil
+			return a, focusCmd
 		}
 		if cmd := a.detailView.ClickItem(relY); cmd != nil {
-			return a, cmd
+			return a, tea.Batch(focusCmd, cmd)
 		}
+		return a, focusCmd
 	}
 	return a, nil
 }

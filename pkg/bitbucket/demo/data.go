@@ -615,8 +615,12 @@ type prSpec struct {
 	closedBy     *bitbucket.Account
 	mergeHash    string
 	reason       string
-	comments     int
-	tasks        int
+	// comments is the pull request's comment_count. It has to equal the
+	// comments the dataset serves for the pull request, deleted ones excluded:
+	// the Comments tab shows this number before the tab loads and the served
+	// one afterwards (TestDataset_CommentCountsMatchTheCommentsServed).
+	comments int
+	tasks    int
 }
 
 func newPullRequestLinks(slug string, id int) bitbucket.PullRequestLinks {
@@ -703,7 +707,7 @@ func pullRequestSpecs() []prSpec {
 			destHash:    hashMainAPI,
 			created:     2 * day,
 			updated:     2 * hour,
-			comments:    6,
+			comments:    8,
 			tasks:       2,
 		},
 		{
@@ -725,7 +729,7 @@ func pullRequestSpecs() []prSpec {
 			destHash:    hashMainAPI,
 			created:     day,
 			updated:     5 * hour,
-			comments:    1,
+			comments:    0,
 		},
 		{
 			repo:        repoAPIGateway,
@@ -745,7 +749,7 @@ func pullRequestSpecs() []prSpec {
 			destHash:    hashMainAPI,
 			created:     3 * day,
 			updated:     26 * hour,
-			comments:    4,
+			comments:    0,
 			tasks:       1,
 		},
 		{
@@ -767,7 +771,7 @@ func pullRequestSpecs() []prSpec {
 			updated:     4 * day,
 			closedBy:    ptr(demoUser()),
 			mergeHash:   hashMergePR98,
-			comments:    9,
+			comments:    0,
 		},
 		{
 			repo:        repoAPIGateway,
@@ -790,7 +794,7 @@ func pullRequestSpecs() []prSpec {
 			closedBy:    ptr(grace()),
 			reason: "Declined in favour of #101: the sidecar doubles our p99 latency and we do not" +
 				" need the extra routing surface yet.",
-			comments: 12,
+			comments: 0,
 		},
 		{
 			repo:        repoWebApp,
@@ -827,7 +831,7 @@ func pullRequestSpecs() []prSpec {
 			destHash:    hashDevelopWeb,
 			created:     2 * day,
 			updated:     20 * hour,
-			comments:    7,
+			comments:    1,
 			tasks:       3,
 		},
 		{
@@ -849,7 +853,7 @@ func pullRequestSpecs() []prSpec {
 			updated:     6 * day,
 			closedBy:    ptr(ada()),
 			mergeHash:   hashMergePR37,
-			comments:    3,
+			comments:    0,
 		},
 		{
 			repo:        repoInfra,
@@ -868,7 +872,7 @@ func pullRequestSpecs() []prSpec {
 			destHash:    hashMainInfra,
 			created:     36 * hour,
 			updated:     8 * hour,
-			comments:    2,
+			comments:    0,
 		},
 		{
 			repo:        repoInfra,
@@ -889,7 +893,7 @@ func pullRequestSpecs() []prSpec {
 			updated:     11 * day,
 			closedBy:    ptr(ken()),
 			mergeHash:   hashMergePR5,
-			comments:    1,
+			comments:    0,
 		},
 	}
 }

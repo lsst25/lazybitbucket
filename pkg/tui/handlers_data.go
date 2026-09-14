@@ -544,15 +544,16 @@ func (a *App) openBuild(status *bitbucket.CommitStatus) (tea.Model, tea.Cmd) {
 	}
 
 	key := pr.Key()
+	// The panel is put into its pipeline mode before the focus moves, so
+	// focusDetail's prefetch leaves the review tabs alone.
 	a.detailView.SetPipelineLoading(key, build)
-	a.side = sideRight
-	a.updateFocusState()
+	focusCmd := a.focusDetail()
 
 	if entry, hit := a.pipelineCache[pipelineCacheKey(key, build)]; hit && entry != nil {
 		a.detailView.SetPipeline(key, entry.pipeline, entry.steps)
-		return a, nil
+		return a, focusCmd
 	}
-	return a, a.fetchPipeline(pr.Workspace(), pr.RepoSlug(), key, build)
+	return a, tea.Batch(focusCmd, a.fetchPipeline(pr.Workspace(), pr.RepoSlug(), key, build))
 }
 
 // startPrefetch refills the prefetch queue for the tab in view and starts the

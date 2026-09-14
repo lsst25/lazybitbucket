@@ -50,6 +50,7 @@ gui:
     collapsedPanelHeight: 5
     screenMode: normal       # normal | half | full — the layout at start-up
     startView: pullRequests  # pullRequests | pipelines — the view at start-up
+    prefetchDetailTabs: true # fetch Files, Commits and Comments together when the detail panel takes focus
     pullRequestListFields:   # default order; columns drop from the end on narrow lists
         - repo
         - id
@@ -201,6 +202,8 @@ gui:
 `screenMode` is the layout lazybitbucket starts in, the same three modes lazygit has: `normal` (the default) is the split described above; `half` gives the side panels and the detail panel half the window each, whatever `sidePanelWidth` says; `full` hands the whole window to the focused panel — the detail panel when it is focused, else the focused left panel — and the other panels are not drawn until you leave the mode or switch focus, which moves the full screen along. `+` and `_` cycle the modes at runtime (`universal.nextScreenMode` / `universal.prevScreenMode`). On a terminal too narrow for the side-by-side layout `half` behaves like `normal`.
 
 `startView` is the view lazybitbucket opens in: `pullRequests` (the default) is the pull request list with its Builds and Repos panels, `pipelines` is the [pipelines view](Keybindings.md#pipelines-view), the recent runs of every configured repository. Either way `⇧tab` switches between the two at runtime (`universal.nextView`), and the view you start in is the only thing this setting decides — it is not remembered across runs. An unknown value is an error at startup, named the way an unknown `screenMode` is.
+
+`prefetchDetailTabs` decides when the detail panel's Files, Commits and Comments tabs are fetched. On — the default — all three are fetched together the moment the detail panel takes focus, because a reader who moves into the panel is about to walk the tabs and three requests now beat a pause on each tab later; a tab entered while its fetch is still in flight waits for that answer instead of asking again, and a tab whose fetch failed says so when you open it rather than the moment it failed. Set it to `false` and each tab fetches itself the first time you open it, as before. Either way moving the cursor in the pull request list fetches no tab at all — the preview costs what it always did — so the price of the prefetch is three requests per pull request you actually focus, against the hourly request budget noted below.
 
 `theme` selects the color palette. Supported values: `default` (ANSI 16, original look); a preset name — the four [Catppuccin](https://github.com/catppuccin/catppuccin) flavors (`catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha`) and the three [Kanagawa](https://github.com/rebelot/kanagawa.nvim) variants (`kanagawa-wave`, `kanagawa-dragon`, `kanagawa-lotus`); or a family name that follows your terminal background — `auto` and `catppuccin` (`catppuccin-mocha` on dark, `catppuccin-latte` on light) and `kanagawa` (`kanagawa-wave` on dark, `kanagawa-lotus` on light). Omitting the `theme` key or setting it to `""` keeps the `default` ANSI 16 palette. An unknown theme name is an error. Hex-based themes require a terminal with truecolor support.
 

@@ -401,6 +401,65 @@ func TestCommentedLines_NoInlineThreads(t *testing.T) {
 	}
 }
 
+func TestCommentTotal(t *testing.T) {
+	t.Parallel()
+
+	pending := makeComment(commentOpts{id: 5, minutes: 25, body: "own draft"})
+	pending.Pending = true
+
+	tests := []struct {
+		name     string
+		comments []Comment
+		want     int
+	}{
+		{"no threads", nil, 0},
+		{
+			"a root and its replies",
+			[]Comment{
+				makeComment(commentOpts{id: 1, minutes: 0, body: "root"}),
+				makeComment(commentOpts{id: 2, parent: 1, minutes: 5, body: "reply"}),
+				makeComment(commentOpts{id: 3, parent: 1, minutes: 10, body: "another reply"}),
+			},
+			3,
+		},
+		{
+			// The placeholder is a caption for the reply below it, not a
+			// comment anybody wrote any more.
+			"a deleted placeholder root does not count",
+			[]Comment{
+				makeComment(commentOpts{id: 1, minutes: 0, deleted: true, body: "deleted root"}),
+				makeComment(commentOpts{id: 2, parent: 1, minutes: 5, body: "live reply"}),
+			},
+			1,
+		},
+		{
+			"a deleted placeholder reply does not count either",
+			[]Comment{
+				makeComment(commentOpts{id: 1, minutes: 0, body: "root"}),
+				makeComment(commentOpts{id: 2, parent: 1, minutes: 5, deleted: true, body: "deleted middle"}),
+				makeComment(commentOpts{id: 3, parent: 2, minutes: 10, body: "child"}),
+			},
+			2,
+		},
+		{
+			// A pending comment is the reader's own unpublished draft. It is
+			// on the pane, so it is in the count.
+			"a pending comment counts",
+			[]Comment{
+				makeComment(commentOpts{id: 4, minutes: 20, body: "published"}),
+				pending,
+			},
+			2,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			testkit.AssertEqual(t, "total", CommentTotal(BuildThreads(tc.comments)), tc.want)
+		})
+	}
+}
+
 func TestThreadAt(t *testing.T) {
 	t.Parallel()
 

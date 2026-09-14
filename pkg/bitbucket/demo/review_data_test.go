@@ -387,3 +387,21 @@ func assertAnchorLine(t *testing.T, label string, file diff.File, line *int, new
 	}
 	t.Errorf("%s = %d, which is not a line of %s", label, *line, file.Path())
 }
+
+// TestDataset_CommentCountsMatchTheCommentsServed keeps every pull request's
+// comment_count equal to the comments the dataset actually serves for it —
+// roots and replies, the deleted one excluded — because the Comments tab shows
+// the former before the tab loads and the latter afterwards, and a demo whose
+// number changed on load would look broken.
+func TestDataset_CommentCountsMatchTheCommentsServed(t *testing.T) {
+	t.Parallel()
+
+	data := NewDataset()
+	for slug, pullRequests := range data.PullRequests {
+		for _, pullRequest := range pullRequests {
+			key := reviewKey(slug, pullRequest.ID)
+			served := bitbucket.CommentTotal(bitbucket.BuildThreads(data.Comments[key]))
+			testkit.AssertEqual(t, key+" comment_count", pullRequest.CommentCount, served)
+		}
+	}
+}

@@ -15,8 +15,11 @@ import (
 
 // The review tabs — Files, Commits, Comments and the per-file diff behind the
 // Files tab — are each backed by their own request, and none of them is fetched
-// when a pull request is selected. They are warmed on tab entry instead
-// (onDetailTabChanged), so a user who only ever reads the overview pays no
+// when a pull request is selected. They are warmed when the reader moves in
+// instead: all three together the moment the detail panel takes focus
+// (prefetchDetailTabs, gui.prefetchDetailTabs), and one at a time on tab entry
+// (onDetailTabChanged) when that setting is off or the panel was focused on
+// something other than a pull request. A user who only skims the list pays no
 // extra requests, and the answers are cached per pull request so re-entering a
 // tab is free.
 //
@@ -50,6 +53,34 @@ type fileDiffData struct {
 
 // fileDiffKey addresses one file's diff within one pull request.
 func fileDiffKey(prKey, path string) string { return prKey + fileDiffKeySep + path }
+
+// The three review fetches, as reviewFetchKey names them.
+const (
+	reviewKindDiffStat = "diffstat"
+	reviewKindCommits  = "commits"
+	reviewKindThreads  = "threads"
+)
+
+// reviewFetchKey addresses one review fetch: its kind, the pull request it is
+// for and the head it describes. The head is part of the key because a fetch
+// issued for an older head is not the answer a pushed branch is waiting for.
+func reviewFetchKey(kind, key, hash string) string {
+	return kind + fileDiffKeySep + key + fileDiffKeySep + hash
+}
+
+// claimReviewFetch reserves one review fetch, answering false when the same
+// fetch is already in flight. It is what keeps a tab entered in the middle of a
+// prefetch from asking a second time: the answer already on its way is the one
+// that tab wants.
+func (a *App) claimReviewFetch(kind, key, hash string) bool {
+	a.ensureReviewCaches()
+	fetchKey := reviewFetchKey(kind, key, hash)
+	if a.reviewInFlight[fetchKey] {
+		return false
+	}
+	a.reviewInFlight[fetchKey] = true
+	return true
+}
 
 // sourceHash is the commit the pull request's source branch points at, "" when
 // the list row did not carry one.
@@ -98,10 +129,15 @@ func (a *App) ensureReviewCaches() {
 	if a.fileDiffCache == nil {
 		a.fileDiffCache = make(map[string]reviewEntry[fileDiffData])
 	}
+	if a.reviewInFlight == nil {
+		a.reviewInFlight = make(map[string]bool)
+	}
 }
 
 // dropReviewCaches forgets everything cached for one pull request, including
-// every file diff under it. It is what `r` does, and what a new push does.
+// every file diff under it, and releases the fetches still in flight for it, so
+// the next entry asks again rather than waiting for an answer that was asked
+// for before the drop. It is what `r` does, and what a new push does.
 func (a *App) dropReviewCaches(key string) {
 	delete(a.diffStatCache, key)
 	delete(a.commitsCache, key)
@@ -110,6 +146,12 @@ func (a *App) dropReviewCaches(key string) {
 	for cached := range a.fileDiffCache {
 		if strings.HasPrefix(cached, prefix) {
 			delete(a.fileDiffCache, cached)
+		}
+	}
+	inFlight := fileDiffKeySep + key + fileDiffKeySep
+	for fetch := range a.reviewInFlight {
+		if strings.Contains(fetch, inFlight) {
+			delete(a.reviewInFlight, fetch)
 		}
 	}
 }
@@ -169,6 +211,41 @@ func (a *App) onDetailTabChanged() tea.Cmd {
 	return nil
 }
 
+// prefetchDetailTabs warms the Files, Commits and Comments tabs of the pull
+// request on screen in one go. It is what focusing the detail panel means with
+// gui.prefetchDetailTabs on: a reader who moves in is about to walk the tabs,
+// and three requests now beat a pause on each tab later. It does nothing when
+// the setting is off, when no pull request is on screen, or when the panel is
+// showing a pipeline, a step log or a file diff; the tab a reader lands on
+// still warms itself through onDetailTabChanged.
+func (a *App) prefetchDetailTabs() tea.Cmd {
+	if a.cfg == nil || !a.cfg.GUI.PrefetchesDetailTabs() || a.view != viewPullRequests {
+		return nil
+	}
+	pr := a.currentPullRequest()
+	if pr == nil || a.detailView.Mode() != views.ModePullRequest {
+		return nil
+	}
+	cmds := make([]tea.Cmd, 0, 3)
+	if cmd := a.ensureDiffStat(pr); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := a.ensureCommits(pr); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := a.ensureThreads(pr); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	switch len(cmds) {
+	case 0:
+		return nil
+	case 1:
+		return cmds[0]
+	default:
+		return tea.Batch(cmds...)
+	}
+}
+
 // ensureDiffStat feeds the Files tab from the cache while the cache still
 // describes the pull request's head, and fetches it otherwise.
 func (a *App) ensureDiffStat(pr *bitbucket.PullRequest) tea.Cmd {
@@ -181,7 +258,13 @@ func (a *App) ensureDiffStat(pr *bitbucket.PullRequest) tea.Cmd {
 		}
 		return nil
 	}
+	// The loading flag is set even when the fetch is already in flight: the
+	// view drops it whenever the reader walks to another pull request, so the
+	// tab they come back to has to be told again that an answer is on its way.
 	a.detailView.SetDiffStatLoading(key)
+	if !a.claimReviewFetch(reviewKindDiffStat, key, sourceHash(pr)) {
+		return nil
+	}
 	return a.fetchDiffStat(pr)
 }
 
@@ -197,6 +280,9 @@ func (a *App) ensureCommits(pr *bitbucket.PullRequest) tea.Cmd {
 		return nil
 	}
 	a.detailView.SetCommitsLoading(key)
+	if !a.claimReviewFetch(reviewKindCommits, key, sourceHash(pr)) {
+		return nil
+	}
 	return a.fetchCommits(pr)
 }
 
@@ -213,6 +299,9 @@ func (a *App) ensureThreads(pr *bitbucket.PullRequest) tea.Cmd {
 		return nil
 	}
 	a.detailView.SetThreadsLoading(key)
+	if !a.claimReviewFetch(reviewKindThreads, key, sourceHash(pr)) {
+		return nil
+	}
 	return a.fetchThreads(pr)
 }
 
@@ -232,15 +321,21 @@ func (a *App) reviewErrorText(err error, what string) string {
 
 // handleDiffStatLoaded applies the changed-file list to the Files tab.
 func (a *App) handleDiffStatLoaded(msg diffStatLoadedMsg) (tea.Model, tea.Cmd) {
+	delete(a.reviewInFlight, reviewFetchKey(reviewKindDiffStat, msg.key, msg.hash))
 	a.logFlag.Store(false)
 	a.ensureReviewCaches()
+	if outdatedReviewAnswer(a.diffStatCache, msg.key, msg.hash, a.pullRequestByKey(msg.key)) {
+		return a, nil
+	}
 	a.diffStatCache[msg.key] = reviewEntry[[]bitbucket.DiffStatEntry]{
 		value: msg.entries, sourceHash: msg.hash, err: msg.err,
 	}
 	if msg.err != nil {
 		text := a.reviewErrorText(msg.err, "diff stat")
 		a.detailView.SetDiffStatError(msg.key, text)
-		a.noteReviewFailure(msg.err, text)
+		if a.reviewTabOnScreen(msg.key, views.TabFiles) {
+			a.noteReviewFailure(msg.err, text)
+		}
 		if a.pendingCmd != nil && a.pendingCmd.key == msg.key {
 			a.statusPanel.SetError(a.pendingCmd.cmd.Name + ": " + text)
 			a.pendingCmd = nil
@@ -254,14 +349,20 @@ func (a *App) handleDiffStatLoaded(msg diffStatLoadedMsg) (tea.Model, tea.Cmd) {
 
 // handleCommitsLoaded applies the commit list to the Commits tab.
 func (a *App) handleCommitsLoaded(msg commitsLoadedMsg) (tea.Model, tea.Cmd) {
+	delete(a.reviewInFlight, reviewFetchKey(reviewKindCommits, msg.key, msg.hash))
 	a.logFlag.Store(false)
 	a.ensureReviewCaches()
+	if outdatedReviewAnswer(a.commitsCache, msg.key, msg.hash, a.pullRequestByKey(msg.key)) {
+		return a, nil
+	}
 	a.commitsCache[msg.key] = reviewEntry[[]bitbucket.Commit]{
 		value: msg.commits, sourceHash: msg.hash, err: msg.err,
 	}
 	if msg.err != nil {
 		a.detailView.SetCommitsError(msg.key, msg.err.Error())
-		a.noteReviewFailure(msg.err, msg.err.Error())
+		if a.reviewTabOnScreen(msg.key, views.TabCommits) {
+			a.noteReviewFailure(msg.err, msg.err.Error())
+		}
 		return a, nil
 	}
 	a.statusPanel.SetOnline(true)
@@ -272,14 +373,20 @@ func (a *App) handleCommitsLoaded(msg commitsLoadedMsg) (tea.Model, tea.Cmd) {
 // handleThreadsLoaded applies the review threads to the Comments tab, and lights
 // up the markers of a file diff that is already on screen.
 func (a *App) handleThreadsLoaded(msg threadsLoadedMsg) (tea.Model, tea.Cmd) {
+	delete(a.reviewInFlight, reviewFetchKey(reviewKindThreads, msg.key, msg.hash))
 	a.logFlag.Store(false)
 	a.ensureReviewCaches()
+	if outdatedReviewAnswer(a.threadsCache, msg.key, msg.hash, a.pullRequestByKey(msg.key)) {
+		return a, nil
+	}
 	a.threadsCache[msg.key] = reviewEntry[[]bitbucket.Thread]{
 		value: msg.threads, sourceHash: msg.hash, err: msg.err,
 	}
 	if msg.err != nil {
 		a.detailView.SetThreadsError(msg.key, msg.err.Error())
-		a.noteReviewFailure(msg.err, msg.err.Error())
+		if a.reviewTabOnScreen(msg.key, views.TabComments) {
+			a.noteReviewFailure(msg.err, msg.err.Error())
+		}
 		return a, nil
 	}
 	a.statusPanel.SetOnline(true)
@@ -346,6 +453,40 @@ func rendererIsHopeless(err error) bool {
 	return errors.Is(err, exec.ErrNotFound) ||
 		errors.Is(err, fs.ErrNotExist) ||
 		errors.Is(err, errDiffRendererMisaligned)
+}
+
+// outdatedReviewAnswer reports whether an answer for key would overwrite a
+// fresher one: the cache already holds the pull request's current head and the
+// answer describes another. Two fetches issued for two heads land in whichever
+// order the network picks, so the order says nothing about which one is right.
+func outdatedReviewAnswer[T any](
+	cache map[string]reviewEntry[T], key, hash string, pr *bitbucket.PullRequest,
+) bool {
+	entry, ok := cache[key]
+	if !ok || pr == nil || hash == "" || entry.sourceHash == "" {
+		return false
+	}
+	return sameSource(entry.sourceHash, sourceHash(pr)) && !sameSource(entry.sourceHash, hash)
+}
+
+// reviewTabOnScreen reports whether the reader is looking at tab for the pull
+// request key — the one case a review fetch failure is worth announcing outside
+// the tab. A prefetch that fails behind the overview says nothing until the
+// reader opens the tab, which shows the failure itself; inside a file diff the
+// Files and Comments answers are the ones in use, so those two still speak.
+func (a *App) reviewTabOnScreen(key string, tab views.DetailTab) bool {
+	pr := a.currentPullRequest()
+	if pr == nil || pr.Key() != key {
+		return false
+	}
+	switch a.detailView.Mode() {
+	case views.ModePullRequest:
+		return a.detailView.ActiveTab() == tab
+	case views.ModeFileDiff:
+		return tab == views.TabFiles || tab == views.TabComments
+	default:
+		return false
+	}
 }
 
 // noteReviewFailure records a review fetch failure outside the tab it belongs

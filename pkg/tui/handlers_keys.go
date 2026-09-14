@@ -224,10 +224,9 @@ func (a *App) handleFocusAction(action Action) (tea.Model, tea.Cmd, bool) {
 	switch action { //nolint:exhaustive // only the focus actions are handled here
 	case ActSwitchPanel:
 		if a.side == sideLeft {
-			a.side = sideRight
-		} else {
-			a.side = sideLeft
+			return a, a.focusDetail(), true
 		}
+		a.side = sideLeft
 		a.updateFocusState()
 		return a, nil, true
 
@@ -249,9 +248,7 @@ func (a *App) handleFocusAction(action Action) (tea.Model, tea.Cmd, bool) {
 		return a, nil, true
 
 	case ActFocusDetail:
-		a.side = sideRight
-		a.updateFocusState()
-		return a, nil, true
+		return a, a.focusDetail(), true
 
 	case ActFocusStatus:
 		a.side = sideLeft
@@ -645,9 +642,7 @@ func (a *App) handleActivate() (tea.Model, tea.Cmd) {
 		if a.prList.SelectedPullRequest() == nil {
 			return a, nil
 		}
-		a.side = sideRight
-		a.updateFocusState()
-		return a, nil
+		return a, a.focusDetail()
 	case focusBuilds:
 		return a.openBuild(a.buildsPanel.SelectedStatus())
 	case focusPipelines:
@@ -656,10 +651,10 @@ func (a *App) handleActivate() (tea.Model, tea.Cmd) {
 		if a.pipelineList.SelectedEntry() == nil {
 			return a, nil
 		}
+		// showSelectedRun goes first: it puts the panel into a pipeline mode,
+		// which is what makes focusDetail's prefetch skip the review tabs.
 		cmd := a.showSelectedRun()
-		a.side = sideRight
-		a.updateFocusState()
-		return a, cmd
+		return a, tea.Batch(cmd, a.focusDetail())
 	case focusRepos:
 		return a, a.selectRepo(a.repoList.SelectedRepo())
 	case focusStatus:

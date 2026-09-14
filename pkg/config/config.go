@@ -390,6 +390,16 @@ type GUIConfig struct {
 	// StartView is the view the app opens in: "pullRequests" (default) or
 	// "pipelines". See StartViewPullRequests.
 	StartView string `yaml:"startView"`
+	// PrefetchDetailTabs fetches the Files, Commits and Comments tabs together
+	// the moment the detail panel takes focus, instead of each on first entry.
+	// nil means true.
+	PrefetchDetailTabs *bool `yaml:"prefetchDetailTabs,omitempty"`
+}
+
+// PrefetchesDetailTabs resolves PrefetchDetailTabs: on unless the config says
+// false.
+func (g GUIConfig) PrefetchesDetailTabs() bool {
+	return g.PrefetchDetailTabs == nil || *g.PrefetchDetailTabs
 }
 
 // DefaultConfig returns a Config populated with sensible defaults

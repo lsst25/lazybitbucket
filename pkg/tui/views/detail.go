@@ -773,31 +773,69 @@ type tabLabel struct {
 }
 
 // tabLabels is the tab set for the current mode: the four pull request tabs,
-// each carrying the item count once its data has arrived. Every other mode has
-// no tabs, so the title stays the plain mode title.
+// each carrying the item count once its data has arrived — and, for Comments,
+// from the start, because the pull request payload counts its comments. Every
+// other mode has no tabs, so the title stays the plain mode title.
 func (d *DetailView) tabLabels() []tabLabel {
 	if d.mode != ModePullRequest || d.pr == nil {
 		return nil
 	}
+	// The Comments tab counts comments, not threads: comment_count is what the
+	// pull request knows in advance, and roots plus replies is the same number
+	// once the threads are in hand.
+	comments := d.threads.counts()
+	comments.known = d.pr.CommentCount
+	comments.count = bitbucket.CommentTotal(d.threads.items)
 	return []tabLabel{
 		{tab: TabOverview, label: "Overview", short: "Overview"},
-		countedTab(TabFiles, "Files", d.files.loading, d.files.loaded, len(d.files.items)),
-		countedTab(TabCommits, "Commits", d.commits.loading, d.commits.loaded, len(d.commits.items)),
-		countedTab(TabComments, "Comments", d.threads.loading, d.threads.loaded, len(d.threads.items)),
+		countedTab(TabFiles, "Files", d.files.counts()),
+		countedTab(TabCommits, "Commits", d.commits.counts()),
+		countedTab(TabComments, "Comments", comments),
 	}
 }
 
-// countedTab builds a tab label that shows its item count once known, an
-// ellipsis while the fetch is in flight and the bare name before either.
-func countedTab(tab DetailTab, name string, loading, loaded bool, count int) tabLabel {
+// tabCounts is what a tab label knows about its number: the state of the fetch,
+// the count of what it loaded, and the count the pull request itself already
+// carries, if any.
+type tabCounts struct {
+	loading bool
+	loaded  bool
+	count   int
+	// known is the count shown before and instead of the ellipsis while the
+	// fetch runs — the pull request payload counts its comments but neither
+	// its files nor its commits. unknownCount for a tab that has none.
+	known int
+}
+
+// counts is the label state of one review tab, before anything the pull request
+// payload may already know about it.
+func (t *tabData[T]) counts() tabCounts {
+	return tabCounts{loading: t.loading, loaded: t.loaded, count: len(t.items), known: unknownCount}
+}
+
+// countedTab builds a tab label that shows its count: the number the pull
+// request itself carries while there is no answer of the tab's own — before the
+// fetch and while one is in flight — the number of what the tab loaded once it
+// has landed, and, for a tab the pull request cannot count, an ellipsis while
+// the fetch runs and the bare name before it.
+func countedTab(tab DetailTab, name string, counts tabCounts) tabLabel {
 	label := name
 	switch {
-	case loading:
+	case counts.loading && counts.known >= 0:
+		label = withCount(name, counts.known)
+	case counts.loading:
 		label = name + " (…)"
-	case loaded:
-		label = name + " (" + strconv.Itoa(count) + ")"
+	case counts.loaded:
+		label = withCount(name, counts.count)
+	case counts.known >= 0:
+		label = withCount(name, counts.known)
 	}
 	return tabLabel{tab: tab, label: label, short: name}
+}
+
+// withCount is a tab name carrying its count.
+func withCount(name string, count int) string {
+	return name + " (" + strconv.Itoa(count) + ")"
 }
 
 // ClickTab switches tabs from a click on the title bar and reports whether the
