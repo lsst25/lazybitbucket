@@ -336,6 +336,9 @@ type PullRequestKeys struct {
 	// Create opens a pull request for the checked-out branch, after a form.
 	// Default: N.
 	Create string `yaml:"create"`
+	// Resolve marks the conversation in hand resolved, or reopens it when it
+	// already is, after a confirmation. Default: T.
+	Resolve string `yaml:"resolve"`
 }
 
 // BuildsKeys are the two pipeline actions, active with a build selected in the
@@ -376,6 +379,9 @@ type DetailKeys struct {
 	FilesTab    string `yaml:"filesTab"`
 	CommitsTab  string `yaml:"commitsTab"`
 	CommentsTab string `yaml:"commentsTab"`
+	// HideResolved leaves the resolved conversations off the Comments tab, and
+	// puts them back. Default: f.
+	HideResolved string `yaml:"hideResolved"`
 	// Diff view: step through the changed files and open the selected file in
 	// Config.Editor at the cursor's line.
 	NextFile   string `yaml:"nextFile"`

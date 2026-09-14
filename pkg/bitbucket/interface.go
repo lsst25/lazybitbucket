@@ -44,14 +44,14 @@ type RequestLog struct {
 // method takes workspace and repoSlug explicitly: the client is not bound to a
 // workspace.
 //
-// Most of it is reads. The write methods are exactly eight — CreatePullRequest,
+// Most of it is reads. The write methods are exactly ten — CreatePullRequest,
 // MergePullRequest, UpdatePullRequest, ApprovePullRequest, UnapprovePullRequest,
-// CreateComment, RunPipeline and StopPipeline — and every one of them fails with ErrReadOnly,
+// CreateComment, ResolveComment, ReopenComment, RunPipeline and StopPipeline — and every one of them fails with ErrReadOnly,
 // before a request is built, on a client constructed with ClientOpts.ReadOnly.
 // GetMergeTaskStatus (the poll a queued merge needs) and the two candidate
 // listings the reviewer picker feeds on are GETs that only a write flow ever
-// issues. Requesting changes, declining and resolving a thread are still
-// deliberately absent, as is anchoring a new comment to a diff line and
+// issues. Requesting changes, declining, and editing or deleting a comment are
+// still deliberately absent, as is a comment spanning a range of lines and
 // starting an arbitrary custom pipeline: RunPipeline only repeats the target of
 // a run that already exists.
 type ClientInterface interface {
@@ -96,6 +96,12 @@ type ClientInterface interface {
 	// the server created, rendered html included. An empty body is refused
 	// locally with ErrEmptyComment.
 	CreateComment(ctx context.Context, workspace, repoSlug string, id int, create CommentCreate) (*Comment, error)
+	// ResolveComment marks the thread a comment starts as resolved, and answers
+	// with the resolution the server recorded — nil, without an error, when the
+	// answer carried none.
+	ResolveComment(ctx context.Context, workspace, repoSlug string, id int, commentID int64) (*CommentResolution, error)
+	// ReopenComment reopens a resolved thread. The endpoint answers 204.
+	ReopenComment(ctx context.Context, workspace, repoSlug string, id int, commentID int64) error
 	// RunPipeline starts a new run for target — the target of an existing run —
 	// and returns the run the server created, PENDING and triggered MANUAL. It
 	// is how a run is rerun; a target it cannot repeat is refused locally with

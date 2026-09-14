@@ -75,16 +75,17 @@ From any left panel except Status, these scroll the detail panel without moving 
 | `A` | Approve, or remove your approval… | `pullRequests.approve` |
 | `C` | Comment… — on the pull request, a thread, a file or a diff line, depending on where you are | `pullRequests.comment` |
 | `N` | Open a pull request for the checked-out branch… | `pullRequests.create` |
+| `T` | Resolve the conversation in hand, or reopen it… | `pullRequests.resolve` |
 
 ## Pull request actions
 
-The eight keys above are the only ones that write — `P` and `X` write too, but to a pipeline run rather than the pull request (see [Rerun and stop a pipeline](#rerun-and-stop-a-pipeline)). They work from the pull request list and from the detail panel alike — whatever has focus, they act on the pull request the list cursor is on — and each one asks before it writes. Six open a dialog: nothing is sent until you confirm, and `esc` closes a dialog without a request. `C` is the seventh: it opens the [comment popup](#c--comment-or-reply) — the same input the title editor uses — and what you send there is the confirmation.
+The nine keys above are the only ones that write — `P` and `X` write too, but to a pipeline run rather than the pull request (see [Rerun and stop a pipeline](#rerun-and-stop-a-pipeline)). They work from the pull request list and from the detail panel alike — whatever has focus, they act on the pull request the list cursor is on — and each one asks before it writes. Six open a dialog: nothing is sent until you confirm, and `esc` closes a dialog without a request. `C` is the seventh: it opens the [comment popup](#c--comment-or-reply) — the same input the title editor uses — and what you send there is the confirmation.
 
 A refusal is a one-line message in the hint bar and no dialog:
 
 | Message | Reason |
 |---------|--------|
-| `read-only mode: cannot merge` | [Read-only mode](Config.md#read-only-mode) is on. It refuses all eight, sync, commenting and creating included |
+| `read-only mode: cannot merge` | [Read-only mode](Config.md#read-only-mode) is on. It refuses all nine, sync, commenting, creating and resolving included |
 | `cannot merge: pull request is MERGED` | The pull request is not `OPEN` any more. `C` is the exception: a merged or declined pull request still takes comments |
 | `merge already in progress` | The previous write on this pull request has not answered yet |
 | `cannot approve your own pull request` | `A` on a pull request you opened. Bitbucket refuses it, so lazybitbucket does not ask |
@@ -285,6 +286,36 @@ Confirming runs whatever the form asked for — the push, then the editor, then 
 
 Bitbucket's own refusals — a source branch it does not have, a pull request already open for the same pair of branches — arrive as its own message in the hint bar.
 
+### `T` — resolve a conversation
+
+Bitbucket resolves a *conversation*, not a comment: the state hangs off the comment that starts the thread, and the whole thread carries it. `T` therefore acts on the conversation in hand — the one the [thread section](#thread) is showing, or the one under the cursor on the Comments tab — whichever comment of it you happen to be looking at.
+
+One key, two directions, and the dialog says which:
+
+```
+ ╭────────────────────────────────────────────────────────────╮
+ │ Resolve internal/upstream/retry.go:16?                     │
+ │                                                            │
+ │ Demo User · 1 reply                                        │
+ │                                                            │
+ │ enter: confirm   esc: cancel                               │
+ ╰────────────────────────────────────────────────────────────╯
+```
+
+On a conversation that is already resolved the question is `Reopen …?` instead, and confirming takes the resolution off. What you resolve is marked `✔ resolved` in the list and in the section straight away — the answer carries who resolved it and when — and the hint bar says `resolved internal/upstream/retry.go:16`.
+
+Like commenting, and unlike the other writes, it is not refused on a merged or declined pull request.
+
+### `f` — hide the resolved conversations
+
+`f` on the Comments tab (or in a conversation) leaves the resolved threads off the list, and pressing it again puts them back. It is a view, not a filter on the data: the Comments tab label says how many are being kept back —
+
+```
+[0] #103 api-gateway - Overview - Files (3) - Commits (3) - Comments (8 · 2 hidden)
+```
+
+— and everything that indexes the list follows it, so `enter`, `T`, `C`, `o` and `y` act on what you can see rather than on a row underneath a hidden one. Jumping to a specific conversation from a diff line (`enter` on a `●`) turns the filter off when that conversation is one of the hidden ones, rather than sending you to a list without it.
+
 ## Builds `[3]`
 
 The Builds panel lists the commit statuses of the selected pull request.
@@ -464,7 +495,7 @@ Focusing the detail panel fetches the Files, Commits and Comments tabs together,
 | Overview | — | `C` comments on the pull request, `o` opens the pull request, `u` the URL picker, `y` copies its URL |
 | Files | Open the selected file's diff | `n` / `p` move to the next / previous file, `e` opens the file in your editor, `C` comments on the file, `o` opens the pull request |
 | Commits | Expand the full commit message | `o` opens the commit in a browser, `y` copies its URL |
-| Comments | Open the thread in the panel | `C` replies to the thread under the cursor, `o` opens the thread in a browser, `y` copies its URL |
+| Comments | Open the thread in the panel | `C` replies to the thread under the cursor, `T` resolves or reopens it, `f` hides the resolved ones, `o` opens the thread in a browser, `y` copies its URL |
 
 The Files tab lists a status letter (`A` added, `M` modified, `D` removed, `R` renamed, plus a gray `B` for a binary file) and the `+added −removed` counts. The Comments tab shows each thread as `path:line` (or `General`), whether it is resolved and its replies; a thread longer than eight lines is collapsed behind an ellipsis in the list and `enter` opens it whole — see [Thread](#thread). A comment body — like the Overview's description — shows an `@`-mention by display name, `@Grace Hopper` in the theme's blue for the `@{account_id}` the Markdown stores; a mention Bitbucket itself left unresolved, a departed colleague or one written inside a code span, stays as the id, which is what the web UI shows too.
 
@@ -495,6 +526,7 @@ A `●` in the marker column means the line carries at least one inline comment 
 |-----|--------|------------|
 | `j` / `k` | Scroll the conversation | `navigation.down`, `navigation.up` |
 | `C` | Reply to this conversation — see [`C` — comment or reply](#c--comment-or-reply) | `pullRequests.comment` |
+| `T` | Resolve this conversation, or reopen it — see [`T` — resolve a conversation](#t--resolve-a-conversation) | `pullRequests.resolve` |
 | `o` | Open the comment in a browser | `pullRequests.browser` |
 | `y` | Copy the comment URL | `pullRequests.copyURL` |
 | `backspace` | Back to the Comments tab, with the cursor on the thread you were reading | `detail.back` |

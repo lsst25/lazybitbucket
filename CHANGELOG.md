@@ -14,6 +14,17 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Added
 
+- `T` resolves the conversation in hand and reopens it — one key in two directions, like `A`, with a
+  dialog that names which. Bitbucket hangs the state off the comment that starts a thread, so it acts
+  on the whole conversation whichever of its comments is under the cursor, and it works on the
+  Comments tab and inside an open thread alike. What the answer records — who resolved it and when —
+  is folded straight in, so `✔ resolved` appears without a refetch; an answer that carries no
+  resolution document still marks it resolved, against whoever pressed the key. Like commenting it is
+  allowed on a merged or declined pull request
+- `f` hides the resolved conversations from the Comments tab, and shows them again. The tab label
+  says how many are out of sight (`Comments (8 · 2 hidden)`), and everything that indexes the list —
+  the cursor, `enter`, `T`, `C`, `o`, `y` — follows what is on screen. Jumping to a hidden
+  conversation from a `●` in a diff turns the filter off rather than landing on a list without it
 - `N` opens a pull request for the checked-out branch: one form for the title (prefilled from the
   last commit's subject), the target (the repository's own default branch), the reviewers (its
   default reviewers, nobody, or a checklist over them and the workspace members), a draft flag and a

@@ -33,7 +33,9 @@ What exists:
   with six values and `Label()`, `MergeResult.Queued()` for the 202) and `GetMergeTaskStatus`,
   `UpdatePullRequest` (`PullRequestUpdate`: title, description, draft, reviewers),
   `ApprovePullRequest` (POST with no body, answers a `Participant`) and `UnapprovePullRequest`
-  (DELETE, answers 204), `CreateComment` (POST `…/comments` with `CommentCreate` — a raw body and either a
+  (DELETE, answers 204), `ResolveComment`/`ReopenComment` (POST and DELETE on
+  `…/comments/{id}/resolve`; the POST answer is read as either the comment carrying its `resolution`
+  or the resolution alone, and a nil resolution with no error means "resolved, detail not sent"), `CreateComment` (POST `…/comments` with `CommentCreate` — a raw body and either a
   `ParentID` or a `CommentAnchor` (`Path`, `Line`, `OldSide` → `inline.path` plus `to` or `from`,
   the line omitted for a comment on the file), the two refused together with `ErrCommentAnchor`
   because a reply hangs where its parent hangs; the 201 carries the created comment with the html Bitbucket rendered, which is
@@ -75,7 +77,8 @@ What exists:
   `pullrequests`/`builds`/`repos`/`detail`/`diff` (plus the per-command `changedFiles: true`, the one
   scope a command opts into rather than inheriting from its context, because it costs a diffstat
   request — it fills `{{.Files}}` with the whole changed-file list), `keybinding.pullRequests` with
-  `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`/`approve`/`comment`/`create`, and `keybinding.builds` with
+  `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`/`approve`/`comment`/`create`/`resolve`,
+  `keybinding.detail.hideResolved`, and `keybinding.builds` with
   `rerun`/`stop` — the only group besides `pullRequests` that carries write actions. Also
   `gui.startView` (`pullRequests` | `pipelines`, validated like `gui.screenMode`),
   `gui.prefetchDetailTabs` (`*bool`, nil means true, resolved by `PrefetchesDetailTabs()` the way
@@ -128,7 +131,14 @@ What exists:
   failed post asks again with the text prefilled, or leaves it in the editor's file and names it. An
   inline comment leaves the panel in the diff with its `●` marker lit up rather than opening the
   thread it made, because a review is a pass down a file. It is the one write `writeTargetInState`
-  does not require an `OPEN` pull request for.
+  does not require an `OPEN` pull request for. `T` (`resolve.go`) resolves the conversation
+  `SelectedOrOpenThread` reports and reopens what is resolved, behind a `FormModal` confirmation that
+  names the direction; the resolution is patched into `threadsCache` rather than refetched, and an
+  answer without one is recorded against `currentUser` and `nowFn`. `f` (`ActHideResolved`) hides
+  resolved conversations: `DetailView.listedThreads` is what the cursor, the blocks, the block keys,
+  the header count and `SelectedThread` all index, `threadIndex` stays over the full set so an open
+  conversation survives being filtered out, and `FocusThread` turns the filter off rather than
+  landing on a list without the thread it was sent to.
   Opening one lives in `create.go` on `N`: it starts from the checkout rather than from a pull
   request (the repository is the configured one this checkout's remotes name), reads its prefill in
   one command — `git.LastCommitSubject` for the title, `GetRepository` for the default branch,
@@ -165,16 +175,16 @@ Hard constraints that still hold:
 - **Every write goes through `writeJSON`/`do` and is refused under `ClientOpts.ReadOnly`** with
   `ErrReadOnly`, before a request is built. `writeJSON` sends no body and no `Content-Type` for a nil
   payload, which is what the approve endpoints take. Read-only is browse-only: the TUI blocks sync too,
-  because it pushes. Requesting changes, declining, editing or deleting a comment, resolving a thread,
-  a comment spanning a range of lines, review tasks and running an arbitrary custom pipeline
-  definition still have no methods at all.
+  because it pushes. Requesting changes, declining, editing or deleting a comment, a comment spanning
+  a range of lines, review tasks and running an arbitrary custom pipeline definition still have no
+  methods at all.
 - **No test may reach the real API.** Unit tests use `bitbuckettest.FakeClient` or `httptest`;
   integration tests use `pkg/bitbucket/demo`; **every `bitbucket.NewClient` in a test passes a local
   `BaseURL`** — never the default, which is the real host.
 - `pkg/bitbucket` and `pkg/bitbucket/demo` import nothing from `pkg/tui` or `pkg/config`.
 
 Not built yet (ROADMAP step 4+): the richer search and saved filters of step 4, and
-everything left under "Later / maybe" — requesting changes, declining, editing or resolving comments,
+everything left under "Later / maybe" — requesting changes, declining, editing a comment,
 multi-line comment ranges, review tasks, triggering a custom pipeline definition, a CLI mode. In the pipelines view specifically:
 filter tabs over the run list, custom commands, and auto-refresh on the background tick. Also not built: the activity feed,
 side-by-side diffs, whole-file views and conflict display (deliberate step-2 non-goals), and
@@ -244,9 +254,9 @@ Everything user-visible is `lazybitbucket`:
 Auth: Atlassian removed app passwords on 2026-07-28. There is no app-password mode. Two credential
 shapes: a token alone (API token or access token) sent as `Authorization: Bearer`, or an Atlassian
 account email plus an API token sent as HTTP Basic — the Basic username must be the **account email**,
-not a Bitbucket username, or the server answers 401. The five read scopes cover browsing; the eight PR write
-actions additionally want `write:pullrequest:bitbucket` (creating, merging, approving and commenting
-included)
+not a Bitbucket username, or the server answers 401. The five read scopes cover browsing; the nine PR write
+actions additionally want `write:pullrequest:bitbucket` (creating, merging, approving, commenting and
+resolving included)
 and the two pipeline ones `write:pipeline:bitbucket`, both of which read-only mode makes unnecessary.
 
 ## Conventions

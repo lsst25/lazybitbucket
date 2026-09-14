@@ -84,6 +84,14 @@ const (
 	// wherever the pull request view is.
 	ActCreatePullRequest Action = "createPullRequest"
 
+	// ActResolveThread resolves the conversation in hand, or reopens it when it
+	// is already resolved — one key in two directions, like ActApprove.
+	ActResolveThread Action = "resolveThread"
+
+	// ActHideResolved is not a write: it leaves the resolved conversations off
+	// the Comments tab, and puts them back.
+	ActHideResolved Action = "hideResolved"
+
 	// ActComment is the seventh write and the only one whose dialog is the
 	// title editor's input popup rather than a form. It is read-only-refused
 	// and hidden like the rest.
@@ -192,6 +200,8 @@ func DefaultKeymap() Keymap {
 		ActApprove:           {"A"},
 		ActComment:           {"C"},
 		ActCreatePullRequest: {"N"},
+		ActResolveThread:     {"T"},
+		ActHideResolved:      {"f"},
 
 		ActRerunPipeline: {"P"},
 		ActStopPipeline:  {"X"},
@@ -252,6 +262,7 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	set(ActApprove, kcfg.PullRequests.Approve)
 	set(ActComment, kcfg.PullRequests.Comment)
 	set(ActCreatePullRequest, kcfg.PullRequests.Create)
+	set(ActResolveThread, kcfg.PullRequests.Resolve)
 
 	// The Builds group carries the two pipeline writes and nothing else: every
 	// other key that works on a build row is the pull request group's.
@@ -268,6 +279,7 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	set(ActDetailScrollUp, kcfg.Detail.ScrollUp)
 	set(ActDetailHalfDown, kcfg.Detail.HalfPageDown)
 	set(ActDetailHalfUp, kcfg.Detail.HalfPageUp)
+	set(ActHideResolved, kcfg.Detail.HideResolved)
 	set(ActDetailOverview, kcfg.Detail.OverviewTab)
 	set(ActDetailFiles, kcfg.Detail.FilesTab)
 	set(ActDetailCommits, kcfg.Detail.CommitsTab)

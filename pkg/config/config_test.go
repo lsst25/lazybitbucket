@@ -818,6 +818,7 @@ func detailKeysFixture() DetailKeys {
 		FilesTab:     "d",
 		CommitsTab:   "m",
 		CommentsTab:  "t",
+		HideResolved: "f",
 		NextFile:     "n",
 		PrevFile:     "p",
 		OpenEditor:   "e",
@@ -828,7 +829,7 @@ func detailKeysFixture() DetailKeys {
 // declaration order.
 var detailKeyYAMLNames = []string{
 	"focusLeft", "back", "scrollDown", "scrollUp", "halfPageDown", "halfPageUp",
-	"overviewTab", "filesTab", "commitsTab", "commentsTab",
+	"overviewTab", "filesTab", "commitsTab", "commentsTab", "hideResolved",
 	"nextFile", "prevFile", "openEditor",
 }
 
@@ -895,6 +896,8 @@ func detailKeyByYAMLName(t *testing.T, keys DetailKeys, name string) string {
 		return keys.CommitsTab
 	case "commentsTab":
 		return keys.CommentsTab
+	case "hideResolved":
+		return keys.HideResolved
 	case "nextFile":
 		return keys.NextFile
 	case "prevFile":
@@ -926,6 +929,7 @@ func pullRequestKeysFixture() PullRequestKeys {
 		Approve:     "A",
 		Comment:     "C",
 		Create:      "N",
+		Resolve:     "T",
 	}
 }
 
@@ -933,7 +937,7 @@ func pullRequestKeysFixture() PullRequestKeys {
 // field, in declaration order.
 var pullRequestKeyYAMLNames = []string{
 	"select", "open", "focusRight", "browser", "urlPicker", "copyURL", "checkout",
-	"merge", "sync", "edit", "reviewers", "toggleDraft", "approve", "comment", "create",
+	"merge", "sync", "edit", "reviewers", "toggleDraft", "approve", "comment", "create", "resolve",
 }
 
 func TestLoad_ReadsPullRequestKeybindingsFromYAML(t *testing.T) {
@@ -1018,6 +1022,8 @@ func pullRequestKeyByYAMLName(t *testing.T, keys PullRequestKeys, name string) s
 		return keys.Comment
 	case "create":
 		return keys.Create
+	case "resolve":
+		return keys.Resolve
 	default:
 		t.Fatalf("pullRequestKeyByYAMLName: unknown yaml key %q", name)
 		return ""

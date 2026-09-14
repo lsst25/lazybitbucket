@@ -682,6 +682,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleCreateDescriptionEdited(msg)
 	case pullRequestCreatedMsg:
 		return a.handlePullRequestCreated(msg)
+	case commentResolvedMsg:
+		return a.handleCommentResolved(msg)
 	case commentEditedMsg:
 		return a.handleCommentEdited(msg)
 	case syncDoneMsg:

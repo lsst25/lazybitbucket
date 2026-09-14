@@ -146,10 +146,13 @@ func (d *DetailView) SelectedThread() *bitbucket.Thread {
 	if _, ok := d.threadsPlaceholder(); ok {
 		return nil
 	}
-	if d.listKind() != listThreads || d.listCursor >= len(d.threads.items) || d.listCursor < 0 {
+	// The cursor indexes what is on the list, which is not every thread when
+	// the resolved ones are hidden.
+	listed := d.listedThreads()
+	if d.listKind() != listThreads || d.listCursor >= len(listed) || d.listCursor < 0 {
 		return nil
 	}
-	return &d.threads.items[d.listCursor]
+	return &listed[d.listCursor]
 }
 
 // FocusThread puts the Comments tab on screen with the cursor on the thread
@@ -157,18 +160,22 @@ func (d *DetailView) SelectedThread() *bitbucket.Thread {
 // conversation. It reports false when no such thread is loaded, so the caller
 // can say the comments are still on their way.
 func (d *DetailView) FocusThread(rootID int64) bool {
-	for i := range d.threads.items {
-		if d.threads.items[i].Root.ID != rootID {
-			continue
-		}
-		d.clearFileDiff()
-		d.clearThread()
-		d.mode = ModePullRequest
-		d.SetActiveTab(TabComments)
-		d.listCursor = i
-		return true
+	if d.threadIndex(rootID) < 0 {
+		return false
 	}
-	return false
+	d.clearFileDiff()
+	d.clearThread()
+	d.mode = ModePullRequest
+	d.SetActiveTab(TabComments)
+	if d.listedThreadIndex(rootID) < 0 {
+		// The thread is resolved and the resolved ones are hidden. Being sent
+		// to a conversation and shown a list without it in it would be worse
+		// than the filter turning itself off, which the tab label then says.
+		d.hideResolved = false
+		d.invalidateBlocksFor(listThreads)
+	}
+	d.listCursor = max(d.listedThreadIndex(rootID), 0)
+	return true
 }
 
 // NextFile moves to the following changed file, PrevFile to the preceding one,

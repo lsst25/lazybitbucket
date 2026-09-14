@@ -183,6 +183,16 @@ func (s *stubClient) CreateComment(
 	return nil, nil
 }
 
+func (s *stubClient) ResolveComment(
+	context.Context, string, string, int, int64,
+) (*CommentResolution, error) {
+	return nil, nil
+}
+
+func (s *stubClient) ReopenComment(context.Context, string, string, int, int64) error {
+	return nil
+}
+
 func (s *stubClient) RunPipeline(context.Context, string, string, PipelineTarget) (*Pipeline, error) {
 	return nil, nil
 }

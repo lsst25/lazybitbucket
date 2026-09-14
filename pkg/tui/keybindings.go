@@ -107,11 +107,13 @@ func (a *App) reviewTabBindings() []Binding {
 			a.bind(ActCopyURL, "copy the commit URL"),
 		}
 	case views.TabComments:
-		return append([]Binding{
+		bindings := append([]Binding{
 			a.bind(ActOpen, "open the thread"),
 			a.bind(ActBrowser, "open the thread in a browser"),
 			a.bind(ActCopyURL, "copy the thread URL"),
 		}, a.commentBindings("reply to this thread")...)
+		bindings = append(bindings, a.resolveBindings()...)
+		return append(bindings, a.bind(ActHideResolved, "hide or show resolved conversations"))
 	case views.TabOverview:
 		return append([]Binding{
 			a.bind(ActBrowser, "open in browser"),
@@ -120,6 +122,15 @@ func (a *App) reviewTabBindings() []Binding {
 		}, a.commentBindings("comment on the pull request")...)
 	}
 	return nil
+}
+
+// resolveBindings is the resolve key, which is a write and so is absent in
+// read-only mode. It reads both ways round because one key does both.
+func (a *App) resolveBindings() []Binding {
+	if a.readOnly {
+		return nil
+	}
+	return []Binding{a.bind(ActResolveThread, "resolve this conversation (again: reopen it)")}
 }
 
 // commentBindings is the composer key, described for where it is pressed. Like
@@ -240,6 +251,7 @@ func (a *App) ContextBindings() []Binding {
 				a.bind(ActCopyURL, "copy the comment URL"),
 			)
 			bindings = append(bindings, a.commentBindings("reply to this thread")...)
+			bindings = append(bindings, a.resolveBindings()...)
 			bindings = append(bindings, a.tabJumpBindings()...)
 		case views.ModePullRequest:
 			bindings = append(bindings, a.reviewTabBindings()...)
@@ -385,6 +397,7 @@ func (a *App) helpBarItems() []components.HelpItem {
 			head = append(head, components.HelpItem{Key: km.Keys(ActBack), Description: "back"})
 		case views.ModeThread:
 			head = append(head, a.commentHelpItems("reply")...)
+			head = append(head, a.resolveHelpItems()...)
 			head = append(head,
 				components.HelpItem{Key: km.Keys(ActBrowser), Description: "browser"},
 				components.HelpItem{Key: km.Keys(ActBack), Description: "back"},
@@ -463,10 +476,14 @@ func (a *App) reviewTabHelpItems() []components.HelpItem {
 			{Key: km.Keys(ActBrowser), Description: "browser"},
 		}
 	case views.TabComments:
-		return append([]components.HelpItem{
+		items := append([]components.HelpItem{
 			{Key: km.Keys(ActOpen), Description: "open"},
 			{Key: km.Keys(ActBrowser), Description: "browser"},
 		}, a.commentHelpItems("reply")...)
+		items = append(items, a.resolveHelpItems()...)
+		return append(items, components.HelpItem{
+			Key: km.Keys(ActHideResolved), Description: "resolved",
+		})
 	case views.TabOverview:
 		return append([]components.HelpItem{
 			{Key: km.Keys(ActBrowser), Description: "browser"},
@@ -474,6 +491,15 @@ func (a *App) reviewTabHelpItems() []components.HelpItem {
 		}, a.commentHelpItems("comment")...)
 	}
 	return nil
+}
+
+// resolveHelpItems is the resolve key on a help strip, absent in read-only
+// mode like every other write.
+func (a *App) resolveHelpItems() []components.HelpItem {
+	if a.readOnly {
+		return nil
+	}
+	return []components.HelpItem{{Key: a.keymap.Keys(ActResolveThread), Description: "resolve"}}
 }
 
 // commentHelpItems is the composer key on a help strip, absent in read-only

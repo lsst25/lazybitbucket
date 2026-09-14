@@ -363,6 +363,8 @@ func (a *App) handleReviewAction(action Action) (tea.Model, tea.Cmd, bool) {
 		return a, a.stepChangedFile(false), true
 	case ActOpenEditor:
 		return a, a.openEditorAtCursor(), true
+	case ActHideResolved:
+		return a, a.handleActionHideResolved(), true
 	}
 	return nil, nil, false
 }
@@ -490,6 +492,11 @@ func (a *App) handlePullRequestAction(action Action) (tea.Model, tea.Cmd, bool) 
 	// from a pull request; see create.go.
 	case ActCreatePullRequest:
 		return a, a.handleActionCreate(), true
+
+	// The ninth: it acts on a conversation rather than on the pull request,
+	// and reopens what is already resolved; see resolve.go.
+	case ActResolveThread:
+		return a, a.handleActionResolve(), true
 
 	// The two pipeline writes. They act on the run behind a build rather than
 	// on the pull request, and answer with a hint where there is no run to act

@@ -35,9 +35,10 @@ func (d *DetailView) renderThreadBlocks(width int) [][]string {
 		return [][]string{{placeholder}}
 	}
 
-	blocks := make([][]string, 0, len(d.threads.items))
-	for i := range d.threads.items {
-		blocks = append(blocks, d.renderThread(d.threads.items[i], width, ""))
+	listed := d.listedThreads()
+	blocks := make([][]string, 0, len(listed))
+	for i := range listed {
+		blocks = append(blocks, d.renderThread(listed[i], width, ""))
 	}
 	return blocks
 }
@@ -46,7 +47,7 @@ func (d *DetailView) renderThreadBlocks(width int) [][]string {
 // list, and whether there is one. Like the Files tab, a refetch over a loaded
 // list keeps the list rather than collapsing it to a placeholder.
 func (d *DetailView) threadsPlaceholder() (string, bool) {
-	if len(d.threads.items) > 0 {
+	if len(d.listedThreads()) > 0 {
 		return "", false
 	}
 	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
@@ -55,6 +56,9 @@ func (d *DetailView) threadsPlaceholder() (string, bool) {
 		return d.theme.ErrorText.Render(d.threads.errMsg), true
 	case d.threads.loading || !d.threads.loaded:
 		return gray.Render("Loading comments…"), true
+	case d.hiddenThreadCount() > 0:
+		// Not "No comments": there are some, and the reader hid them.
+		return gray.Render("Every conversation is resolved"), true
 	default:
 		return gray.Render("No comments"), true
 	}
@@ -182,8 +186,13 @@ func (d *DetailView) OpenedThread() *bitbucket.Thread {
 	return &d.threads.items[i]
 }
 
-// threadIndex is the position of the thread rooted at rootID, -1 when the list
-// does not have it.
+// threadIndex is the position of the thread rooted at rootID among every
+// thread the pull request has, -1 when there is none. It deliberately ignores
+// the resolved-threads filter: a conversation open in the section stays open
+// when the list it came from stops listing it.
+//
+// listedThreadIndex is the other one — where a thread sits on the list, which
+// is what the cursor indexes.
 func (d *DetailView) threadIndex(rootID int64) int {
 	for i := range d.threads.items {
 		if d.threads.items[i].Root.ID == rootID {
@@ -230,4 +239,67 @@ type threadBodyCache struct {
 	root  int64
 	width int
 	valid bool
+}
+
+// SelectedOrOpenThread is the conversation a key pressed now would act on: the
+// one the section is showing, or the one under the cursor on the Comments tab.
+// It is nil anywhere else, and nil for a thread a refetch has taken away.
+func (d *DetailView) SelectedOrOpenThread() *bitbucket.Thread {
+	if d.mode == ModeThread {
+		return d.OpenedThread()
+	}
+	return d.SelectedThread()
+}
+
+// HidesResolvedThreads reports whether the Comments tab is leaving resolved
+// conversations out of the list.
+func (d *DetailView) HidesResolvedThreads() bool { return d.hideResolved }
+
+// ToggleResolvedThreads hides or shows the resolved conversations and reports
+// the state it left behind. The cursor lands on the first thread that is still
+// listed, because the row it was on may not be there any more.
+func (d *DetailView) ToggleResolvedThreads() bool {
+	d.hideResolved = !d.hideResolved
+	d.listCursor = 0
+	d.scrollY = 0
+	d.invalidateBlocksFor(listThreads)
+	return d.hideResolved
+}
+
+// listedThreads is what the Comments tab shows: every thread, or only the
+// unresolved ones. Everything that indexes the list — the cursor, Enter, the
+// copy and browser keys — goes through it, so hiding a thread hides it from
+// all of them at once rather than from the rendering alone.
+func (d *DetailView) listedThreads() []bitbucket.Thread {
+	if !d.hideResolved {
+		return d.threads.items
+	}
+	kept := make([]bitbucket.Thread, 0, len(d.threads.items))
+	for _, thread := range d.threads.items {
+		if !thread.Resolved() {
+			kept = append(kept, thread)
+		}
+	}
+	return kept
+}
+
+// hiddenThreadCount is how many conversations the filter is keeping off the
+// list, which is what the tab label says.
+func (d *DetailView) hiddenThreadCount() int {
+	if !d.hideResolved {
+		return 0
+	}
+	return len(d.threads.items) - len(d.listedThreads())
+}
+
+// listedThreadIndex is the position of the thread rooted at rootID on the list
+// as it is drawn, -1 when the filter is keeping it off.
+func (d *DetailView) listedThreadIndex(rootID int64) int {
+	listed := d.listedThreads()
+	for i := range listed {
+		if listed[i].Root.ID == rootID {
+			return i
+		}
+	}
+	return -1
 }

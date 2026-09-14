@@ -136,6 +136,9 @@ type DetailView struct {
 	// on every render, so a refetch that changes the conversation changes what
 	// the reader is looking at rather than leaving a stale copy of it.
 	threadRoot int64
+	// hideResolved leaves resolved conversations out of the Comments tab, and
+	// out of everything that indexes it. See listedThreads.
+	hideResolved bool
 	// threadBody memoises that conversation's rendered lines. A text body is
 	// re-rendered on every View, and running glamour over a long thread once
 	// per keystroke is exactly what blockCache exists to prevent.
@@ -691,7 +694,7 @@ func (d *DetailView) Back() bool {
 		d.mode = ModePullRequest
 		d.activeTab = TabComments
 		d.scrollY = 0
-		d.listCursor = max(d.threadIndex(root), 0)
+		d.listCursor = max(d.listedThreadIndex(root), 0)
 		d.invalidateBlocks()
 		return true
 	case ModeStepLog:
@@ -823,11 +826,18 @@ func (d *DetailView) tabLabels() []tabLabel {
 	comments := d.threads.counts()
 	comments.known = d.pr.CommentCount
 	comments.count = bitbucket.CommentTotal(d.threads.items)
+	commentsTab := countedTab(TabComments, "Comments", comments)
+	if hidden := d.hiddenThreadCount(); hidden > 0 {
+		// The count stays the pull request's own; what the filter is keeping
+		// back is said next to it, or a reader wonders where a thread went.
+		commentsTab.label = strings.TrimSuffix(commentsTab.label, ")") +
+			" · " + strconv.Itoa(hidden) + " hidden)"
+	}
 	return []tabLabel{
 		{tab: TabOverview, label: "Overview", short: "Overview"},
 		countedTab(TabFiles, "Files", d.files.counts()),
 		countedTab(TabCommits, "Commits", d.commits.counts()),
-		countedTab(TabComments, "Comments", comments),
+		commentsTab,
 	}
 }
 
@@ -958,7 +968,7 @@ func (d *DetailView) listTabItemCount() int {
 	case listCommits:
 		return placeholderOr(d.commitsPlaceholder, len(d.commits.items))
 	case listThreads:
-		return placeholderOr(d.threadsPlaceholder, len(d.threads.items))
+		return placeholderOr(d.threadsPlaceholder, len(d.listedThreads()))
 	case listDiffLines:
 		return placeholderOr(d.fileDiffPlaceholder, len(d.fileDiff.lines))
 	default:
@@ -1524,7 +1534,7 @@ func (d *DetailView) listModeHeader(width int) []string {
 	case listCommits:
 		return d.reviewHeader(d.commits.errMsg, len(d.commits.items), width)
 	case listThreads:
-		return d.reviewHeader(d.threads.errMsg, len(d.threads.items), width)
+		return d.reviewHeader(d.threads.errMsg, len(d.listedThreads()), width)
 	case listNone:
 		return nil
 	default:
@@ -1913,8 +1923,8 @@ func (d *DetailView) buildBlockKeys(blocks [][]string) []string {
 				keys[i] = d.commits.items[i].Hash
 			}
 		case listThreads:
-			if i < len(d.threads.items) {
-				keys[i] = strconv.FormatInt(d.threads.items[i].Root.ID, 10)
+			if listed := d.listedThreads(); i < len(listed) {
+				keys[i] = strconv.FormatInt(listed[i].Root.ID, 10)
 			}
 		case listDiffLines:
 			keys[i] = "L" + strconv.Itoa(i)
