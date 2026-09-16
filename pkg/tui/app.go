@@ -401,6 +401,9 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 	app.pipelineList.ResolveNav = navResolver
 	app.repoList.ResolveNav = navResolver
 	app.detailView.ResolveNav = navResolver
+	// A conversation that is done is out of the way from the start; f asks for
+	// them back, and gui.showResolvedComments starts the other way round.
+	app.detailView.SetShowResolvedThreads(cfg.GUI.ShowsResolvedComments())
 
 	app.initCustomCommands()
 	if warning := quitReachableWarning(app.keymap, app.customCmds); warning != "" {

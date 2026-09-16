@@ -302,19 +302,28 @@ One key, two directions, and the dialog says which:
  ╰────────────────────────────────────────────────────────────╯
 ```
 
-On a conversation that is already resolved the question is `Reopen …?` instead, and confirming takes the resolution off. What you resolve is marked `✔ resolved` in the list and in the section straight away — the answer carries who resolved it and when — and the hint bar says `resolved internal/upstream/retry.go:16`.
+On a conversation that is already resolved the question is `Reopen …?` instead, and confirming takes the resolution off. What you resolve leaves the list at once — [resolved conversations are hidden](#f--show-the-resolved-conversations) — and is marked `✔ resolved by …` wherever it is shown — the answer carries who resolved it and when — and the hint bar says `resolved internal/upstream/retry.go:16`.
 
 Like commenting, and unlike the other writes, it is not refused on a merged or declined pull request.
 
-### `f` — hide the resolved conversations
+### `f` — show the resolved conversations
 
-`f` on the Comments tab (or in a conversation) leaves the resolved threads off the list, and pressing it again puts them back. It is a view, not a filter on the data: the Comments tab label says how many are being kept back —
+Resolved conversations are **off the list from the start**: a thread someone has finished with is not what you opened the Comments tab for. `f` asks for them back, and `f` again puts them away. Set [`gui.showResolvedComments: true`](Config.md#gui) to start the other way round.
+
+A resolved conversation that is on the list is marked twice over, so it is tellable apart at a glance from the open ones around it: a green `✔` leads the line, and the anchor is drawn in gray rather than the cyan an open conversation gets.
+
+```
+ ✔ internal/upstream/retry.go:13  resolved by Ken Thompson · 23h ago
+   internal/upstream/retry.go:16 · 1 reply
+```
+
+It is a view, not a filter on the data: the Comments tab label says how many are being kept back —
 
 ```
 [0] #103 api-gateway - Overview - Files (3) - Commits (3) - Comments (8 · 2 hidden)
 ```
 
-— and everything that indexes the list follows it, so `enter`, `T`, `C`, `o` and `y` act on what you can see rather than on a row underneath a hidden one. Jumping to a specific conversation from a diff line (`enter` on a `●`) turns the filter off when that conversation is one of the hidden ones, rather than sending you to a list without it.
+— and everything that indexes the list follows it, so `enter`, `T`, `C`, `o` and `y` act on what you can see rather than on a row underneath a hidden one. Jumping to a specific conversation from a diff line (`enter` on a `●`) turns the filter off when that conversation is one of the hidden ones, rather than sending you to a list without it. A conversation open in the [thread section](#thread) stays on screen when it is resolved — only the list hides it — so `T` there can still reopen what it just resolved.
 
 ## Builds `[3]`
 
@@ -495,7 +504,7 @@ Focusing the detail panel fetches the Files, Commits and Comments tabs together,
 | Overview | — | `C` comments on the pull request, `o` opens the pull request, `u` the URL picker, `y` copies its URL |
 | Files | Open the selected file's diff | `n` / `p` move to the next / previous file, `e` opens the file in your editor, `C` comments on the file, `o` opens the pull request |
 | Commits | Expand the full commit message | `o` opens the commit in a browser, `y` copies its URL |
-| Comments | Open the thread in the panel | `C` replies to the thread under the cursor, `T` resolves or reopens it, `f` hides the resolved ones, `o` opens the thread in a browser, `y` copies its URL |
+| Comments | Open the thread in the panel | `C` replies to the thread under the cursor, `T` resolves or reopens it, `f` shows the resolved ones (hidden by default), `o` opens the thread in a browser, `y` copies its URL |
 
 The Files tab lists a status letter (`A` added, `M` modified, `D` removed, `R` renamed, plus a gray `B` for a binary file) and the `+added −removed` counts. The Comments tab shows each thread as `path:line` (or `General`), whether it is resolved and its replies; a thread longer than eight lines is collapsed behind an ellipsis in the list and `enter` opens it whole — see [Thread](#thread). A comment body — like the Overview's description — shows an `@`-mention by display name, `@Grace Hopper` in the theme's blue for the `@{account_id}` the Markdown stores; a mention Bitbucket itself left unresolved, a departed colleague or one written inside a code span, stays as the id, which is what the web UI shows too.
 

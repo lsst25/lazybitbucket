@@ -330,7 +330,7 @@ func newComment(spec commentSpec) bitbucket.Comment {
 	// unresolved either way.
 	if spec.resolvedBy != nil {
 		comment.Resolution = &bitbucket.CommentResolution{
-			Type:      "pullrequest_comment_resolution",
+			Type:      "comment_resolution",
 			User:      spec.resolvedBy,
 			CreatedOn: ago(spec.resolvedAge),
 		}

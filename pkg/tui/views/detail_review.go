@@ -171,7 +171,7 @@ func (d *DetailView) FocusThread(rootID int64) bool {
 		// The thread is resolved and the resolved ones are hidden. Being sent
 		// to a conversation and shown a list without it in it would be worse
 		// than the filter turning itself off, which the tab label then says.
-		d.hideResolved = false
+		d.showResolved = true
 		d.invalidateBlocksFor(listThreads)
 	}
 	d.listCursor = max(d.listedThreadIndex(rootID), 0)

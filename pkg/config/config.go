@@ -407,12 +407,22 @@ type GUIConfig struct {
 	// the moment the detail panel takes focus, instead of each on first entry.
 	// nil means true.
 	PrefetchDetailTabs *bool `yaml:"prefetchDetailTabs,omitempty"`
+	// ShowResolvedComments lists the resolved conversations on the Comments tab
+	// from the start. nil means false: a conversation that is done is out of
+	// the way until `f` asks for it.
+	ShowResolvedComments *bool `yaml:"showResolvedComments,omitempty"`
 }
 
 // PrefetchesDetailTabs resolves PrefetchDetailTabs: on unless the config says
 // false.
 func (g GUIConfig) PrefetchesDetailTabs() bool {
 	return g.PrefetchDetailTabs == nil || *g.PrefetchDetailTabs
+}
+
+// ShowsResolvedComments resolves ShowResolvedComments: off unless the config
+// says true, so the Comments tab opens on what still needs an answer.
+func (g GUIConfig) ShowsResolvedComments() bool {
+	return g.ShowResolvedComments != nil && *g.ShowResolvedComments
 }
 
 // DefaultConfig returns a Config populated with sensible defaults

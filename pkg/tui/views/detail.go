@@ -136,9 +136,11 @@ type DetailView struct {
 	// on every render, so a refetch that changes the conversation changes what
 	// the reader is looking at rather than leaving a stale copy of it.
 	threadRoot int64
-	// hideResolved leaves resolved conversations out of the Comments tab, and
-	// out of everything that indexes it. See listedThreads.
-	hideResolved bool
+	// showResolved lists the resolved conversations on the Comments tab. It is
+	// false by default — a conversation that is done is out of the way until
+	// `f` asks for it — so the zero value is the filter being on. See
+	// listedThreads.
+	showResolved bool
 	// threadBody memoises that conversation's rendered lines. A text body is
 	// re-rendered on every View, and running glamour over a long thread once
 	// per keystroke is exactly what blockCache exists to prevent.

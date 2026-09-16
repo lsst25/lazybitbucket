@@ -887,8 +887,11 @@ type Comment struct {
 	Pending   bool            `json:"pending"` // an unpublished draft review comment
 	Parent    *CommentRef     `json:"parent"`  // nil for a thread root
 	Inline    *CommentInline  `json:"inline"`  // nil for a general (non-inline) comment
-	// Resolution may be an EMPTY object on an unresolved comment, so its
-	// presence means nothing on its own — ask Resolved().
+	// Resolution is PRESENT AND EMPTY — `{}` — on a resolved comment, and
+	// absent entirely on one that is not: the collection strips the members of
+	// what it does send. Its presence is therefore the whole signal, which is
+	// what Resolved() reads; the members arrive only when the request asks for
+	// them by name (see ListPullRequestComments).
 	Resolution *CommentResolution `json:"resolution"`
 	Links      CommentLinks       `json:"links"`
 }
@@ -955,17 +958,23 @@ func (in CommentInline) Range() (int, int, bool, bool) {
 // CommentResolution is the "thread resolved" marker. Bitbucket also emits it as
 // an empty object on unresolved comments, so use Resolved rather than a nil
 // check.
+// The members are omitted when they are not there, so an empty resolution
+// marshals back to the `{}` a collection sends — which is what lets the demo
+// server reproduce it.
 type CommentResolution struct {
-	Type      string    `json:"type"`
-	User      *Account  `json:"user"`
-	CreatedOn time.Time `json:"created_on"`
+	Type      string    `json:"type,omitempty"`
+	User      *Account  `json:"user,omitempty"`
+	CreatedOn time.Time `json:"created_on,omitzero"`
 }
 
-// Resolved reports whether the resolution object actually marks a resolution.
-// Both absent and empty ({}) mean unresolved.
-func (r *CommentResolution) Resolved() bool {
-	return r != nil && (r.User != nil || !r.CreatedOn.IsZero() || r.Type != "")
-}
+// Resolved reports whether the thread this comment starts has been resolved.
+//
+// The presence of the object is the signal, empty or not. Bitbucket sends
+// `"resolution": {}` on a resolved comment in a collection — the members are
+// stripped unless the request names them — and sends no resolution member at
+// all on one that is not resolved. Reading the members instead, as this once
+// did, makes every resolved thread in a list look open.
+func (r *CommentResolution) Resolved() bool { return r != nil }
 
 // CommentLinks are the links carried by a Comment. Code is present on inline
 // comments only: it is a diff URL that encodes the anchor independently.

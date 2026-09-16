@@ -39,7 +39,7 @@ func (s *Server) handleResolveComment(w http.ResponseWriter, r *http.Request) {
 
 	user := s.Data.User
 	s.Data.Comments[key][index].Resolution = &bitbucket.CommentResolution{
-		Type:      "pullrequest_comment_resolution",
+		Type:      "comment_resolution",
 		User:      &user,
 		CreatedOn: time.Now().UTC(),
 	}

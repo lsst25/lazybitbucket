@@ -60,7 +60,7 @@ func makeComment(opts commentOpts) Comment {
 	}
 	if opts.resolved {
 		comment.Resolution = &CommentResolution{
-			Type:      "pullrequest_comment_resolution",
+			Type:      "comment_resolution",
 			User:      &Account{UUID: testReviewerUUID},
 			CreatedOn: threadBase.Add(time.Hour),
 		}

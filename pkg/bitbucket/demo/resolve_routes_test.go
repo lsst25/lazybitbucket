@@ -1,6 +1,7 @@
 package demo
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -108,4 +109,51 @@ func TestServer_ResolveAnUnknownComment(t *testing.T) {
 	testkit.AssertEqual(t, "an unknown pull request",
 		postJSON(t, server.URL+resolvePath(repoAPIGateway, 4041, 9001), nil, nil).Status,
 		http.StatusNotFound)
+}
+
+func TestServer_CommentListStripsTheResolutionMembers(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t)
+	commentID := anUnresolvedComment(t, server, repoAPIGateway, 103)
+	postJSON(t, server.URL+resolvePath(repoAPIGateway, 103, commentID), nil, nil)
+
+	// Plain: the resolved comment carries the object, empty. That emptiness is
+	// the whole signal a client gets by default, and reading the members to
+	// decide whether a thread is resolved is what production punishes.
+	var plain struct {
+		Values []map[string]json.RawMessage `json:"values"`
+	}
+	if err := json.Unmarshal(getOK(t, server, commentsPath(repoAPIGateway, 103)), &plain); err != nil {
+		t.Fatalf("decode the comment list: %v", err)
+	}
+	stripped, present := 0, 0
+	for _, comment := range plain.Values {
+		resolution, ok := comment["resolution"]
+		if !ok || string(resolution) == "null" {
+			continue
+		}
+		present++
+		if string(resolution) == "{}" {
+			stripped++
+		}
+	}
+	if present == 0 {
+		t.Fatal("the list should carry a resolved comment")
+	}
+	testkit.AssertEqual(t, "every resolution stripped to {}", stripped, present)
+
+	// Asking for them by name brings them back, which is what the client does.
+	asked := decodeJSON[listPage[bitbucket.Comment]](t, getOK(t, server,
+		commentsPath(repoAPIGateway, 103)+
+			"?fields=%2Bvalues.resolution.user,%2Bvalues.resolution.created_on,%2Bvalues.resolution.type"))
+	for _, comment := range asked.Values {
+		if comment.ID != commentID {
+			continue
+		}
+		if comment.Resolution == nil || comment.Resolution.User == nil {
+			t.Fatalf("the resolution should carry its members: %+v", comment.Resolution)
+		}
+		testkit.AssertEqual(t, "who", comment.Resolution.User.UUID, server.Data.User.UUID)
+	}
 }

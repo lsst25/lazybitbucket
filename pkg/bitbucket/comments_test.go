@@ -3,6 +3,7 @@ package bitbucket
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,7 +89,7 @@ const resolvedCommentJSON = `{
   "type": "pullrequest_comment",
   "inline": {"from": 12, "to": null, "path": "pkg/tui/app.go", "start_from": 10, "start_to": null},
   "resolution": {
-    "type": "pullrequest_comment_resolution",
+    "type": "comment_resolution",
     "created_on": "2026-08-05T10:00:00.000000+00:00",
     "user": {"type": "user", "uuid": "{e5743438-cc31-49a0-96b7-9febd7b946f4}", "display_name": "Yurii Tatar"}
   },
@@ -168,11 +169,13 @@ func TestComment_UnmarshalInline(t *testing.T) {
 	testkit.AssertEqual(t, "range newSide", newSide, true)
 	testkit.AssertEqual(t, "range ok", ok, true)
 
-	// An empty resolution object is NOT a resolution.
+	// An empty resolution object IS a resolution: a collection sends `{}` for a
+	// resolved comment and nothing at all for one that is not. Verified against
+	// the API on 2026-09-16 — see CommentResolution.Resolved.
 	if comment.Resolution == nil {
 		t.Fatal("Resolution should be a non-nil empty object")
 	}
-	testkit.AssertEqual(t, "Resolved", comment.Resolution.Resolved(), false)
+	testkit.AssertEqual(t, "Resolved", comment.Resolution.Resolved(), true)
 	testkit.AssertEqual(t, "code link", comment.Links.Code.Href,
 		"https://bitbucket.org/acme/api-gateway/pull-requests/9/diff#chg-pkg/tui/app.go")
 }
@@ -299,17 +302,20 @@ func TestCommentInline_LineAndRange(t *testing.T) {
 func TestCommentResolution_Resolved(t *testing.T) {
 	t.Parallel()
 
+	// The presence of the object is the whole signal. Bitbucket strips the
+	// members in a collection — a resolved comment arrives as `{}` — and sends
+	// no resolution member at all on an unresolved one.
 	tests := []struct {
 		name       string
 		resolution *CommentResolution
 		want       bool
 	}{
 		{name: "absent", resolution: nil, want: false},
-		{name: "empty object", resolution: &CommentResolution{}, want: false},
-		{name: "type only", resolution: &CommentResolution{Type: "resolution"}, want: true},
+		{name: "empty object, as a collection sends it", resolution: &CommentResolution{}, want: true},
+		{name: "type only", resolution: &CommentResolution{Type: "comment_resolution"}, want: true},
 		{name: "user only", resolution: &CommentResolution{User: &Account{UUID: testAuthorUUID}}, want: true},
 		{
-			name:       "timestamp only",
+			name:       "the whole thing, as a single comment carries it",
 			resolution: &CommentResolution{CreatedOn: time.Unix(1780000000, 0)},
 			want:       true,
 		},
@@ -343,6 +349,16 @@ func TestClient_ListPullRequestComments_RequestShape(t *testing.T) {
 	testkit.AssertEqual(t, "path", recorded.Path, testCommentsPath)
 	testkit.AssertEqual(t, "pagelen", recorded.Query.Get(paramPageLen), "100")
 	testkit.AssertEqual(t, "sort", recorded.Query.Get(paramSort), "created_on")
+	// Without these the collection sends a resolved comment's resolution as an
+	// empty object, and nothing can say who resolved the thread or when.
+	fields := recorded.Query.Get(paramFields)
+	for _, want := range []string{
+		"+values.resolution.user", "+values.resolution.created_on", "+values.resolution.type",
+	} {
+		if !strings.Contains(fields, want) {
+			t.Errorf("fields = %q, want it to ask for %q", fields, want)
+		}
+	}
 }
 
 func TestClient_ListPullRequestComments_MaxItemsBoundsPageLen(t *testing.T) {

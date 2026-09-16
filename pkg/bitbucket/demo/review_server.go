@@ -19,6 +19,7 @@ const (
 	queryContext         = "context"
 	queryFromPullRequest = "from_pullrequest_id"
 	queryTopic           = "topic"
+	queryFields          = "fields"
 )
 
 // Path segments of the repository-level diff resources the pull request
@@ -68,10 +69,34 @@ func (s *Server) handlePullRequestComments(w http.ResponseWriter, r *http.Reques
 	key := reviewKey(r.PathValue("slug"), pullRequest.ID)
 	comments := make([]bitbucket.Comment, len(s.Data.Comments[key]))
 	copy(comments, s.Data.Comments[key])
+	stripResolutionMembers(comments, r.URL.Query().Get(queryFields))
 	sortByTime(comments, ascending(r), func(comment bitbucket.Comment) time.Time {
 		return comment.CreatedOn
 	})
 	writeList(w, r, comments, s.maxPageLen())
+}
+
+// stripResolutionMembers reproduces what the real collection does to a resolved
+// comment: it sends `"resolution": {}` — the object, with none of its members —
+// unless the request asks for them by name. An unresolved comment carries no
+// resolution at all either way.
+//
+// It matters because the emptiness is all a client sees by default, so a client
+// that reads the members to decide whether a thread is resolved sees every
+// resolved thread as open. This fake answered with the members filled in and
+// therefore could not show that.
+func stripResolutionMembers(comments []bitbucket.Comment, fields string) {
+	if strings.Contains(fields, "resolution") {
+		return
+	}
+	for i := range comments {
+		if comments[i].Resolution == nil {
+			continue
+		}
+		comments[i].Resolution = &bitbucket.CommentResolution{
+			Type: "", User: nil, CreatedOn: time.Time{},
+		}
+	}
 }
 
 // handlePullRequestDiffStat and handlePullRequestDiff do not serve a document:

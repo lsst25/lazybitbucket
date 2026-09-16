@@ -380,8 +380,14 @@ func TestDemo_ReplyIsWrittenAndReadBackInTheThread(t *testing.T) {
 	if len(before) == 0 {
 		t.Fatal("the fixture pull request should have comments")
 	}
-	rootID := before[0].Root.ID
-	replies := len(before[0].Replies)
+	// The conversation under the cursor, which is not the first of the whole
+	// set: the resolved ones are not on the list.
+	selected := app.detailView.SelectedThread()
+	if selected == nil {
+		t.Fatal("the Comments tab should have a conversation under the cursor")
+	}
+	rootID := selected.Root.ID
+	replies := len(selected.Replies)
 
 	openComment(t, app)
 	typeComment(t, app, "one more round and this is good")
@@ -391,10 +397,10 @@ func TestDemo_ReplyIsWrittenAndReadBackInTheThread(t *testing.T) {
 	if len(after) != len(before) {
 		t.Fatalf("threads = %d, want the same %d", len(after), len(before))
 	}
-	testkit.AssertEqual(t, "the reply joined its thread", len(after[0].Replies), replies+1)
-	testkit.AssertEqual(t, "root", after[0].Root.ID, rootID)
+	answered := threadByRoot(t, app, rootID)
+	testkit.AssertEqual(t, "the reply joined its thread", len(answered.Replies), replies+1)
 
-	written := after[0].Replies[len(after[0].Replies)-1]
+	written := answered.Replies[len(answered.Replies)-1]
 	testkit.AssertEqual(t, "author", written.User.UUID, demo.NewDataset().User.UUID)
 	testkit.AssertEqual(t, "raw", written.Content.Raw, "one more round and this is good")
 	// The server rendered it, which is what makes a mention in it readable.
@@ -404,7 +410,7 @@ func TestDemo_ReplyIsWrittenAndReadBackInTheThread(t *testing.T) {
 
 	// And the server really has it: a refetch says the same.
 	runAll(t, app, app.fetchThreads(app.prCache[demoPRKey103]))
-	testkit.AssertEqual(t, "after a refetch", len(app.detailView.Threads()[0].Replies), replies+1)
+	testkit.AssertEqual(t, "after a refetch", len(threadByRoot(t, app, rootID).Replies), replies+1)
 }
 
 func TestDemo_ReplyIsRefusedInReadOnlyMode(t *testing.T) {

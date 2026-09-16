@@ -25,7 +25,7 @@ func TestResolveComment_PostsAndReadsTheResolution(t *testing.T) {
 			name: "the comment shape", status: http.StatusOK, body: `{
 			  "type": "pullrequest_comment", "id": 9001,
 			  "resolution": {
-			    "type": "pullrequest_comment_resolution",
+			    "type": "comment_resolution",
 			    "user": {"type": "user", "uuid": "{b6b5d0ff-32d1-4e3c-816a-9253437180ca}", "display_name": "Grace Hopper"},
 			    "created_on": "2026-03-16T09:00:00.000000+00:00"
 			  }
@@ -34,7 +34,7 @@ func TestResolveComment_PostsAndReadsTheResolution(t *testing.T) {
 		{
 			// The answer as the resolution alone.
 			name: "the resolution shape", status: http.StatusCreated, body: `{
-			  "type": "pullrequest_comment_resolution",
+			  "type": "comment_resolution",
 			  "user": {"type": "user", "uuid": "{b6b5d0ff-32d1-4e3c-816a-9253437180ca}", "display_name": "Grace Hopper"},
 			  "created_on": "2026-03-16T09:00:00.000000+00:00"
 			}`,

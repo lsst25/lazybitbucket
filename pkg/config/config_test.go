@@ -1459,3 +1459,37 @@ func TestValidateStartView(t *testing.T) {
 		t.Errorf("validateStartView(builds) = %v, want an error naming the value", err)
 	}
 }
+
+func TestGUIConfig_ShowsResolvedComments(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		show *bool
+		want bool
+	}{
+		// A conversation someone has finished with is out of the way unless
+		// the config asks for it.
+		{"nil defaults to false", nil, false},
+		{"explicit true", pointerTo(true), true},
+		{"explicit false", pointerTo(false), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gui := GUIConfig{ShowResolvedComments: tc.show}
+			testkit.AssertEqual(t, "ShowsResolvedComments", gui.ShowsResolvedComments(), tc.want)
+		})
+	}
+}
+
+func TestLoad_ShowResolvedCommentsFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigDir, dir)
+	clearBitbucketEnv(t)
+	writeConfigFile(t, dir, `gui:
+  showResolvedComments: true
+`)
+
+	cfg := loadOrFatal(t)
+	testkit.AssertEqual(t, "ShowsResolvedComments", cfg.GUI.ShowsResolvedComments(), true)
+}

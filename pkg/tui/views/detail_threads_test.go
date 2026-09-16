@@ -52,7 +52,7 @@ func testThreads() []bitbucket.Thread {
 
 	resolved := inlineAnchor(threadComment(testResolvedRootID, testAuthor, "Naming nit.", 5*time.Hour), 40)
 	resolved.Resolution = &bitbucket.CommentResolution{
-		Type:      "pullrequest_comment_resolution",
+		Type:      "comment_resolution",
 		User:      &bitbucket.Account{UUID: "{r}", DisplayName: testReviewer},
 		CreatedOn: time.Now().Add(-2 * time.Hour),
 	}
@@ -85,7 +85,11 @@ func threadsDetail(t *testing.T) *DetailView {
 
 func TestDetailView_Threads_RendersAnchorsBodiesAndReplies(t *testing.T) {
 	t.Parallel()
-	out := stripANSI(threadsDetail(t).View())
+	view := threadsDetail(t)
+	// The resolved one is hidden by default; this is about what a thread looks
+	// like, so ask for all of them.
+	view.SetShowResolvedThreads(true)
+	out := stripANSI(view.View())
 
 	for _, want := range []string{
 		testDiffPath + ":12",
@@ -95,7 +99,8 @@ func TestDetailView_Threads_RendersAnchorsBodiesAndReplies(t *testing.T) {
 		"↳ " + testAuthor,
 		"Fixed in the next commit.",
 		testDiffPath + ":40",
-		"✔ resolved",
+		"✔ ",
+		"resolved by",
 		generalThreadLabel,
 		"(pending)",
 		"(deleted)",
@@ -108,6 +113,31 @@ func TestDetailView_Threads_RendersAnchorsBodiesAndReplies(t *testing.T) {
 	if !strings.Contains(out, "1 of 4") {
 		t.Errorf("footer should count the threads:\n%s", out)
 	}
+}
+
+func TestDetailView_Threads_ResolvedOnesAreHiddenUntilAsked(t *testing.T) {
+	t.Parallel()
+	view := threadsDetail(t)
+
+	// One of the four fixtures is resolved, and it is not on the list.
+	out := stripANSI(view.View())
+	if strings.Contains(out, testDiffPath+":40") {
+		t.Errorf("a resolved conversation should not be listed:\n%s", out)
+	}
+	if !strings.Contains(out, "1 hidden") {
+		t.Errorf("the tab label should say how many are hidden:\n%s", out)
+	}
+	testkit.AssertEqual(t, "footer counts what is listed",
+		strings.Contains(out, "1 of 3"), true)
+
+	// Asking for them brings it back, marked.
+	testkit.AssertEqual(t, "now showing", view.ToggleResolvedThreads(), false)
+	out = stripANSI(view.View())
+	if !strings.Contains(out, "✔ "+testDiffPath+":40") {
+		t.Errorf("a shown resolved conversation should be marked:\n%s", out)
+	}
+	testkit.AssertEqual(t, "footer counts every thread",
+		strings.Contains(out, "1 of 4"), true)
 }
 
 func TestDetailView_Threads_PlaceholderStates(t *testing.T) {
@@ -312,7 +342,8 @@ func TestDetailView_Threads_RefetchKeepsTheListAndTheCursor(t *testing.T) {
 	if strings.Contains(out, "Loading comments…") {
 		t.Errorf("a refetch must not replace the list it is refreshing:\n%s", out)
 	}
-	testkit.AssertEqual(t, "block count", view.listTabItemCount(), len(testThreads()))
+	// Three of the four fixtures are listed; the resolved one is hidden.
+	testkit.AssertEqual(t, "block count", view.listTabItemCount(), len(testThreads())-1)
 	testkit.AssertEqual(t, "cursor kept", view.SelectedThread().Root.ID, second)
 
 	view.SetThreadsError(testPRKey, "403 forbidden")

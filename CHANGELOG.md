@@ -18,13 +18,17 @@ one are upstream lazyjira history, and their compare links still point at upstre
   dialog that names which. Bitbucket hangs the state off the comment that starts a thread, so it acts
   on the whole conversation whichever of its comments is under the cursor, and it works on the
   Comments tab and inside an open thread alike. What the answer records — who resolved it and when —
-  is folded straight in, so `✔ resolved` appears without a refetch; an answer that carries no
+  is folded straight in, so the `✔` appears without a refetch; an answer that carries no
   resolution document still marks it resolved, against whoever pressed the key. Like commenting it is
   allowed on a merged or declined pull request
-- `f` hides the resolved conversations from the Comments tab, and shows them again. The tab label
-  says how many are out of sight (`Comments (8 · 2 hidden)`), and everything that indexes the list —
-  the cursor, `enter`, `T`, `C`, `o`, `y` — follows what is on screen. Jumping to a hidden
-  conversation from a `●` in a diff turns the filter off rather than landing on a list without it
+- Resolved conversations are off the Comments tab from the start — a thread someone has finished
+  with is not what the tab is for — and `f` asks for them back. The tab label says how many are out
+  of sight (`Comments (8 · 2 hidden)`); a resolved conversation that is shown is marked with a green
+  `✔`, the name of whoever ended it and when, and its anchor is drawn gray rather than cyan.
+  `gui.showResolvedComments: true` starts the other way round. Everything that indexes the list —
+  the cursor, `enter`, `T`, `C`, `o`, `y` — follows what is on screen; jumping to a hidden
+  conversation from a `●` in a diff turns the filter off rather than landing on a list without it,
+  and a conversation open in the thread section stays on screen when it is resolved
 - `N` opens a pull request for the checked-out branch: one form for the title (prefilled from the
   last commit's subject), the target (the repository's own default branch), the reviewers (its
   default reviewers, nobody, or a checklist over them and the workspace members), a draft flag and a
@@ -198,6 +202,17 @@ one are upstream lazyjira history, and their compare links still point at upstre
   designated fixtures — `api-gateway` #103 answers the queued `202` and its task, `web-app` #41
   answers the `409` of a lost race
 - `--demo` (needs a `-tags demo` build), `--workspace`, the repeatable `--repo` flag and `--read-only`
+
+### Fixed
+
+- A resolved conversation is recognised as resolved. Bitbucket marks one in a collection by sending
+  `"resolution": {}` — the object, with every member stripped — and sends no resolution member at all
+  on a conversation that is open, so reading the members to decide (as this did) made every resolved
+  thread look open: no `✔`, and nothing for the filter to hide. The presence of the object is now the
+  whole signal, and the comment list asks for `+values.resolution.user`,
+  `+values.resolution.created_on` and `+values.resolution.type` so the marker can also say who
+  resolved it and when. Verified against the API on 2026-09-16; the demo server now strips the
+  members the same way, so the trap is reproduced rather than papered over
 
 ### Changed
 

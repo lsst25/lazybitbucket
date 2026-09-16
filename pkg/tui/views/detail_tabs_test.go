@@ -33,6 +33,7 @@ func TestDetailView_Tabs_CommentsCountIsKnownBeforeTheThreadsLoad(t *testing.T) 
 	view.SetThreadsLoading(testPRKey)
 	testkit.AssertEqual(t, "while loading", tabLabelFor(t, view, TabComments), "Comments (7)")
 
+	view.SetShowResolvedThreads(true)
 	view.SetThreads(testPRKey, testThreads())
 	// testThreads() holds five comments: the inline root and its reply, the
 	// resolved root, the pending general root and the live reply under the
@@ -50,6 +51,9 @@ func TestDetailView_Tabs_CommentsCountsCommentsNotThreads(t *testing.T) {
 	t.Parallel()
 	view := makeFocusedDetail()
 	view.SetPullRequest(detailPR())
+	// The label's business here is the count, not the "· n hidden" the filter
+	// appends to it.
+	view.SetShowResolvedThreads(true)
 	view.SetThreads(testPRKey, testThreads())
 
 	threads := view.Threads()

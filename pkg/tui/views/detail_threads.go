@@ -79,18 +79,50 @@ func (d *DetailView) renderThread(thread bitbucket.Thread, width int, headerInde
 
 // threadHeader is the anchor line: where the thread hangs, whether it has been
 // resolved and how many replies it carries.
+//
+// A resolved conversation is marked twice over, because it is listed among open
+// ones only when the reader asked for it and has to be tellable apart at a
+// glance: a green ✔ leads the line, and the anchor itself is drawn in gray
+// rather than in the cyan an open conversation gets.
 func (d *DetailView) threadHeader(thread bitbucket.Thread, width int) string {
-	cyan := lipgloss.NewStyle().Foreground(theme.ColorCyan)
 	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
+	anchorStyle := lipgloss.NewStyle().Foreground(theme.ColorCyan)
 
-	header := cyan.Render(components.TruncateEnd(threadAnchor(thread), max(width-24, 8)))
+	prefix := ""
 	if thread.Resolved() {
-		header += gray.Render("  ✔ resolved")
+		prefix = lipgloss.NewStyle().Foreground(theme.ColorGreen).Render("✔ ")
+		anchorStyle = gray
+	}
+
+	header := prefix + anchorStyle.Render(
+		components.TruncateEnd(threadAnchor(thread), max(width-30, 8)))
+	if thread.Resolved() {
+		header += gray.Render("  " + resolvedBy(thread))
 	}
 	if n := len(thread.Replies); n > 0 {
 		header += gray.Render(" · " + strconv.Itoa(n) + " " + plural(n, "reply", "replies"))
 	}
 	return header
+}
+
+// resolvedBy says who ended the conversation and when, and falls back to the
+// bare word for a resolution whose members the server did not send — which is
+// what a collection answers with unless the request asks for them by name.
+func resolvedBy(thread bitbucket.Thread) string {
+	resolution := thread.Root.Resolution
+	if resolution == nil {
+		return "resolved"
+	}
+	text := "resolved"
+	if resolution.User != nil {
+		if name := resolution.User.Name(); name != "" {
+			text += " by " + name
+		}
+	}
+	if age := timeAgo(resolution.CreatedOn); age != "" {
+		text += " · " + age + " ago"
+	}
+	return text
 }
 
 // threadAnchor is "path:line" for an inline thread, the bare path when the
@@ -253,17 +285,24 @@ func (d *DetailView) SelectedOrOpenThread() *bitbucket.Thread {
 
 // HidesResolvedThreads reports whether the Comments tab is leaving resolved
 // conversations out of the list.
-func (d *DetailView) HidesResolvedThreads() bool { return d.hideResolved }
+func (d *DetailView) HidesResolvedThreads() bool { return !d.showResolved }
+
+// SetShowResolvedThreads sets where the filter starts, which is what
+// gui.showResolvedComments configures.
+func (d *DetailView) SetShowResolvedThreads(show bool) {
+	d.showResolved = show
+	d.invalidateBlocksFor(listThreads)
+}
 
 // ToggleResolvedThreads hides or shows the resolved conversations and reports
-// the state it left behind. The cursor lands on the first thread that is still
-// listed, because the row it was on may not be there any more.
+// whether they are now hidden. The cursor lands on the first thread that is
+// still listed, because the row it was on may not be there any more.
 func (d *DetailView) ToggleResolvedThreads() bool {
-	d.hideResolved = !d.hideResolved
+	d.showResolved = !d.showResolved
 	d.listCursor = 0
 	d.scrollY = 0
 	d.invalidateBlocksFor(listThreads)
-	return d.hideResolved
+	return !d.showResolved
 }
 
 // listedThreads is what the Comments tab shows: every thread, or only the
@@ -271,7 +310,7 @@ func (d *DetailView) ToggleResolvedThreads() bool {
 // copy and browser keys — goes through it, so hiding a thread hides it from
 // all of them at once rather than from the rendering alone.
 func (d *DetailView) listedThreads() []bitbucket.Thread {
-	if !d.hideResolved {
+	if d.showResolved {
 		return d.threads.items
 	}
 	kept := make([]bitbucket.Thread, 0, len(d.threads.items))
@@ -286,7 +325,7 @@ func (d *DetailView) listedThreads() []bitbucket.Thread {
 // hiddenThreadCount is how many conversations the filter is keeping off the
 // list, which is what the tab label says.
 func (d *DetailView) hiddenThreadCount() int {
-	if !d.hideResolved {
+	if d.showResolved {
 		return 0
 	}
 	return len(d.threads.items) - len(d.listedThreads())

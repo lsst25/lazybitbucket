@@ -24,7 +24,7 @@ func stubResolve(fake *bitbuckettest.FakeClient) {
 	) (*bitbucket.CommentResolution, error) {
 		user := bitbucket.Account{UUID: testUserUUID, DisplayName: "Yurii Tatar"}
 		return &bitbucket.CommentResolution{
-			Type: "pullrequest_comment_resolution", User: &user, CreatedOn: testNow,
+			Type: "comment_resolution", User: &user, CreatedOn: testNow,
 		}, nil
 	}
 	fake.ReopenCommentFunc = func(context.Context, string, string, int, int64) error { return nil }
@@ -73,9 +73,6 @@ func TestResolve_AsksFirstAndThenResolvesTheThreadUnderTheCursor(t *testing.T) {
 	if len(threads) != 1 || !threads[0].Resolved() {
 		t.Fatalf("threads = %+v, want the first one resolved", threads)
 	}
-	if rendered := plain(app.detailView.View()); !strings.Contains(rendered, "✔ resolved") {
-		t.Errorf("the list should mark it resolved:\n%s", rendered)
-	}
 	if got := plain(app.helpBar.View()); !strings.Contains(got, "resolved "+testFileGo+":13") {
 		t.Errorf("help bar = %q, want it to say what was resolved", got)
 	}
@@ -91,7 +88,10 @@ func TestResolve_ASecondPressReopens(t *testing.T) {
 	runAll(t, app, cmd)
 	answerResolveDialog(t, app)
 
-	// The same key on a resolved conversation asks the other question.
+	// Resolving it took it off the list, so reopening starts by asking for the
+	// resolved ones back. The same key then offers the other direction.
+	_, cmd = app.Update(runeKey(hideKey))
+	runAll(t, app, cmd)
 	_, cmd = app.Update(runeKey(resolveKey))
 	runAll(t, app, cmd)
 	if got := plain(app.form.View()); !strings.Contains(got, "Reopen "+testFileGo+":13?") {
@@ -123,8 +123,14 @@ func TestResolve_WorksOnTheConversationInTheSection(t *testing.T) {
 	testkit.AssertEqual(t, "comment", fake.ResolveCommentCalls[0].CommentID, testThreadRoot)
 	// Resolving does not walk the reader out of the conversation.
 	testkit.AssertEqual(t, "mode", app.detailView.Mode(), views.ModeThread)
-	if rendered := plain(app.detailView.View()); !strings.Contains(rendered, "✔ resolved") {
+	// The section shows the conversation whatever the list is filtering, and
+	// marks it.
+	rendered := plain(app.detailView.View())
+	if !strings.Contains(rendered, "✔ "+testFileGo+":13") {
 		t.Errorf("the section should mark it resolved:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "resolved by") {
+		t.Errorf("the marker should say who resolved it:\n%s", rendered)
 	}
 }
 
@@ -227,7 +233,29 @@ func TestResolve_AnAnswerWithoutAResolutionStillMarksItResolved(t *testing.T) {
 // Hiding resolved conversations
 // -----------------------------------------------------------------------------
 
-func TestHideResolved_TakesThemOffTheListAndPutsThemBack(t *testing.T) {
+func TestHideResolved_AResolvedConversationLeavesTheListAtOnce(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	stubResolve(fake)
+	app := commentApp(t, fake)
+
+	_, cmd := app.Update(runeKey(resolveKey))
+	runAll(t, app, cmd)
+	answerResolveDialog(t, app)
+
+	// Resolved conversations are hidden from the start, so the one just
+	// finished with is out of the way without a key being pressed.
+	rendered := plain(app.detailView.View())
+	if strings.Contains(rendered, "Is one token enough here?") {
+		t.Errorf("the resolved conversation should be off the list:\n%s", rendered)
+	}
+	// The tab label says where it went.
+	if !strings.Contains(rendered, "1 hidden") {
+		t.Errorf("the tab should say how many are hidden:\n%s", rendered)
+	}
+}
+
+func TestHideResolved_ShowsThemAgainAndMarksThem(t *testing.T) {
 	t.Parallel()
 	fake := &bitbuckettest.FakeClient{T: t}
 	stubResolve(fake)
@@ -241,22 +269,26 @@ func TestHideResolved_TakesThemOffTheListAndPutsThemBack(t *testing.T) {
 	runAll(t, app, cmd)
 
 	rendered := plain(app.detailView.View())
-	if strings.Contains(rendered, "Is one token enough here?") {
-		t.Errorf("the resolved conversation should be off the list:\n%s", rendered)
+	if !strings.Contains(rendered, "Is one token enough here?") {
+		t.Errorf("the conversation should be listed again:\n%s", rendered)
 	}
-	// The tab label says where it went.
-	if !strings.Contains(rendered, "1 hidden") {
-		t.Errorf("the tab should say how many are hidden:\n%s", rendered)
+	// And it is tellable apart from the open ones at a glance, with who ended
+	// it and when.
+	if !strings.Contains(rendered, "✔ "+testFileGo+":13") {
+		t.Errorf("a shown resolved conversation should be marked:\n%s", rendered)
 	}
-	if got := plain(app.helpBar.View()); !strings.Contains(got, "hiding resolved") {
+	if !strings.Contains(rendered, "resolved by Yurii Tatar") {
+		t.Errorf("the marker should say who resolved it:\n%s", rendered)
+	}
+	if got := plain(app.helpBar.View()); !strings.Contains(got, "showing every conversation") {
 		t.Errorf("help bar = %q, want it to say what happened", got)
 	}
 
-	// And the same key puts them back.
+	// And the same key puts them away again.
 	_, cmd = app.Update(runeKey(hideKey))
 	runAll(t, app, cmd)
-	if !strings.Contains(plain(app.detailView.View()), "Is one token enough here?") {
-		t.Error("the conversation should be listed again")
+	if strings.Contains(plain(app.detailView.View()), "Is one token enough here?") {
+		t.Error("the conversation should be hidden again")
 	}
 }
 
@@ -269,8 +301,6 @@ func TestHideResolved_TheCursorFollowsTheListItCanSee(t *testing.T) {
 	_, cmd := app.Update(runeKey(resolveKey))
 	runAll(t, app, cmd)
 	answerResolveDialog(t, app)
-	_, cmd = app.Update(runeKey(hideKey))
-	runAll(t, app, cmd)
 	_ = app.detailView.View()
 
 	// The only thread is hidden, so there is nothing under the cursor — and
@@ -322,7 +352,14 @@ func TestDemo_ResolveAndReopenThroughTheRealRoutes(t *testing.T) {
 		t.Error("the server did not keep the resolution")
 	}
 
-	// Reopening it takes it off again.
+	// Reopening it: the resolved ones are off the list now, so they are asked
+	// back first — the same two keystrokes a reader would use.
+	_, cmd = app.Update(runeKey(hideKey))
+	runAll(t, app, cmd)
+	_ = app.detailView.View()
+	if !app.detailView.FocusThread(rootID) {
+		t.Fatal("the resolved conversation should be back on the list")
+	}
 	_, cmd = app.Update(runeKey(resolveKey))
 	runAll(t, app, cmd)
 	answerResolveDialog(t, app)
@@ -342,4 +379,20 @@ func threadByRoot(t *testing.T, app *App, rootID int64) bitbucket.Thread {
 	}
 	t.Fatalf("no thread rooted at %d", rootID)
 	return bitbucket.Thread{}
+}
+
+func TestHideResolved_TheConfigDecidesWhereTheFilterStarts(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	app := commentApp(t, fake)
+
+	// The default: the filter is on, whatever the threads happen to be.
+	testkit.AssertEqual(t, "hidden by default", app.detailView.HidesResolvedThreads(), true)
+
+	// gui.showResolvedComments: true starts the other way round.
+	shown := true
+	app.cfg.GUI.ShowResolvedComments = &shown
+	app.detailView.SetShowResolvedThreads(app.cfg.GUI.ShowsResolvedComments())
+	testkit.AssertEqual(t, "shown when the config says so",
+		app.detailView.HidesResolvedThreads(), false)
 }

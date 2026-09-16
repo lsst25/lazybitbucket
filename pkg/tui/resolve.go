@@ -182,7 +182,7 @@ func (a *App) resolutionFor(msg commentResolvedMsg) *bitbucket.CommentResolution
 		return msg.resolution
 	default:
 		resolution := &bitbucket.CommentResolution{
-			Type: "pullrequest_comment_resolution", User: nil, CreatedOn: a.nowFn(),
+			Type: "comment_resolution", User: nil, CreatedOn: a.nowFn(),
 		}
 		if a.currentUser != nil {
 			user := *a.currentUser

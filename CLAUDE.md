@@ -35,7 +35,14 @@ What exists:
   `ApprovePullRequest` (POST with no body, answers a `Participant`) and `UnapprovePullRequest`
   (DELETE, answers 204), `ResolveComment`/`ReopenComment` (POST and DELETE on
   `…/comments/{id}/resolve`; the POST answer is read as either the comment carrying its `resolution`
-  or the resolution alone, and a nil resolution with no error means "resolved, detail not sent"), `CreateComment` (POST `…/comments` with `CommentCreate` — a raw body and either a
+  or the resolution alone, and a nil resolution with no error means "resolved, detail not sent").
+  **A resolved comment is marked by the PRESENCE of `resolution`, not by its contents**: a collection
+  sends `"resolution": {}` with every member stripped, and nothing at all on an unresolved comment,
+  so `CommentResolution.Resolved()` is a nil check and `ListPullRequestComments` asks for
+  `+values.resolution.user,+values.resolution.created_on,+values.resolution.type` to get the detail
+  (verified against the API 2026-09-16; the resolution's `type` is `comment_resolution`). The demo
+  server strips the members the same way unless the request names them, so the trap stays
+  reproducible. Also `CreateComment` (POST `…/comments` with `CommentCreate` — a raw body and either a
   `ParentID` or a `CommentAnchor` (`Path`, `Line`, `OldSide` → `inline.path` plus `to` or `from`,
   the line omitted for a comment on the file), the two refused together with `ErrCommentAnchor`
   because a reply hangs where its parent hangs; the 201 carries the created comment with the html Bitbucket rendered, which is
@@ -78,7 +85,8 @@ What exists:
   scope a command opts into rather than inheriting from its context, because it costs a diffstat
   request — it fills `{{.Files}}` with the whole changed-file list), `keybinding.pullRequests` with
   `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`/`approve`/`comment`/`create`/`resolve`,
-  `keybinding.detail.hideResolved`, and `keybinding.builds` with
+  `keybinding.detail.hideResolved`, `gui.showResolvedComments` (`*bool`, nil means false), and
+  `keybinding.builds` with
   `rerun`/`stop` — the only group besides `pullRequests` that carries write actions. Also
   `gui.startView` (`pullRequests` | `pipelines`, validated like `gui.screenMode`),
   `gui.prefetchDetailTabs` (`*bool`, nil means true, resolved by `PrefetchesDetailTabs()` the way
@@ -134,8 +142,10 @@ What exists:
   does not require an `OPEN` pull request for. `T` (`resolve.go`) resolves the conversation
   `SelectedOrOpenThread` reports and reopens what is resolved, behind a `FormModal` confirmation that
   names the direction; the resolution is patched into `threadsCache` rather than refetched, and an
-  answer without one is recorded against `currentUser` and `nowFn`. `f` (`ActHideResolved`) hides
-  resolved conversations: `DetailView.listedThreads` is what the cursor, the blocks, the block keys,
+  answer without one is recorded against `currentUser` and `nowFn`. `f` (`ActHideResolved`) shows the
+  resolved conversations, which are hidden from the start (`gui.showResolvedComments`, nil means
+  false, `SetShowResolvedThreads`) and marked with a green `✔`, a gray anchor and `resolved by X ·
+  ago` when shown: `DetailView.listedThreads` is what the cursor, the blocks, the block keys,
   the header count and `SelectedThread` all index, `threadIndex` stays over the full set so an open
   conversation survives being filtered out, and `FocusThread` turns the filter off rather than
   landing on a list without the thread it was sent to.

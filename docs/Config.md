@@ -51,6 +51,7 @@ gui:
     screenMode: normal       # normal | half | full — the layout at start-up
     startView: pullRequests  # pullRequests | pipelines — the view at start-up
     prefetchDetailTabs: true # fetch Files, Commits and Comments together when the detail panel takes focus
+    showResolvedComments: false # list the resolved conversations on the Comments tab from the start
     pullRequestListFields:   # default order; columns drop from the end on narrow lists
         - repo
         - id
@@ -208,6 +209,8 @@ gui:
 `startView` is the view lazybitbucket opens in: `pullRequests` (the default) is the pull request list with its Builds and Repos panels, `pipelines` is the [pipelines view](Keybindings.md#pipelines-view), the recent runs of every configured repository. Either way `⇧tab` switches between the two at runtime (`universal.nextView`), and the view you start in is the only thing this setting decides — it is not remembered across runs. An unknown value is an error at startup, named the way an unknown `screenMode` is.
 
 `prefetchDetailTabs` decides when the detail panel's Files, Commits and Comments tabs are fetched. On — the default — all three are fetched together the moment the detail panel takes focus, because a reader who moves into the panel is about to walk the tabs and three requests now beat a pause on each tab later; a tab entered while its fetch is still in flight waits for that answer instead of asking again, and a tab whose fetch failed says so when you open it rather than the moment it failed. Set it to `false` and each tab fetches itself the first time you open it, as before. Either way moving the cursor in the pull request list fetches no tab at all — the preview costs what it always did — so the price of the prefetch is three requests per pull request you actually focus, against the hourly request budget noted below.
+
+`showResolvedComments` decides what the Comments tab opens on. Off — the default — leaves the resolved conversations off the list, because a thread someone has finished with is not what the tab is for; the tab label says how many are out of sight (`Comments (8 · 2 hidden)`) and [`f`](Keybindings.md#f--show-the-resolved-conversations) asks for them, marked with a green `✔` and the name of whoever ended them. Set it to `true` to list everything from the start; `f` still works either way, and the setting only decides where it begins.
 
 `theme` selects the color palette. Supported values: `default` (ANSI 16, original look); a preset name — the four [Catppuccin](https://github.com/catppuccin/catppuccin) flavors (`catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha`) and the three [Kanagawa](https://github.com/rebelot/kanagawa.nvim) variants (`kanagawa-wave`, `kanagawa-dragon`, `kanagawa-lotus`); or a family name that follows your terminal background — `auto` and `catppuccin` (`catppuccin-mocha` on dark, `catppuccin-latte` on light) and `kanagawa` (`kanagawa-wave` on dark, `kanagawa-lotus` on light). Omitting the `theme` key or setting it to `""` keeps the `default` ANSI 16 palette. An unknown theme name is an error. Hex-based themes require a terminal with truecolor support.
 

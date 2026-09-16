@@ -138,6 +138,9 @@ func TestDetailView_BuildTitle_DropsCountsThenSlugToFit(t *testing.T) {
 	view.SetDiffStat(testPRKey, testDiffStat())
 	view.SetCommits(testPRKey, testCommits())
 	view.SetThreads(testPRKey, testThreads())
+	// The title's own business here is truncation, not the resolved-thread
+	// filter, whose "· n hidden" note would be a second thing to truncate.
+	view.SetShowResolvedThreads(true)
 
 	full := stripANSI(view.buildTitle(90))
 	testkit.AssertEqual(t, "full title",

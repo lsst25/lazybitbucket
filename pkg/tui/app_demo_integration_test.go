@@ -337,18 +337,30 @@ func TestDemo_CommitsTabListsTheCommits(t *testing.T) {
 	}
 }
 
-func TestDemo_CommentsTabShowsTheResolvedThread(t *testing.T) {
+func TestDemo_CommentsTabHidesTheResolvedThreadUntilAsked(t *testing.T) {
 	t.Parallel()
 	app := demoReviewApp(t, "acme/api-gateway#103")
 
 	runAll(t, app, app.jumpToTab(views.TabComments))
 
+	// A resolved conversation is out of the way from the start, and the tab
+	// says so rather than leaving a reader to wonder.
 	rendered := plain(app.detailView.View())
-	if !strings.Contains(rendered, "resolved") {
-		t.Errorf("the Comments tab should mark the resolved thread:\n%s", rendered)
+	if !strings.Contains(rendered, "1 hidden") {
+		t.Errorf("the tab should say how many are hidden:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "resolved by") {
+		t.Errorf("no resolved conversation should be listed:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "internal/upstream/retry.go") {
 		t.Errorf("an inline thread should name its file:\n%s", rendered)
+	}
+
+	// f asks for them, and they come back marked.
+	runAll(t, app, app.handleActionHideResolved())
+	rendered = plain(app.detailView.View())
+	if !strings.Contains(rendered, "✔ ") || !strings.Contains(rendered, "resolved by") {
+		t.Errorf("a shown resolved conversation should be marked:\n%s", rendered)
 	}
 }
 
