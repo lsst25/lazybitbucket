@@ -16,6 +16,7 @@ import (
 	"github.com/lsst25/lazybitbucket/pkg/config"
 	"github.com/lsst25/lazybitbucket/pkg/tui"
 	"github.com/lsst25/lazybitbucket/pkg/tui/theme"
+	"github.com/lsst25/lazybitbucket/pkg/viewed"
 )
 
 // version is set at build time via ldflags.
@@ -102,6 +103,11 @@ func run(args []string, stderr io.Writer) error {
 	tui.Version = version
 	app := tui.NewAppWithAuth(cfg, client, authMethod)
 	defer app.Shutdown()
+	if authMethod != tui.AuthDemo {
+		// The demo's pull requests are not real: their marks stay in memory
+		// rather than landing in the user's file.
+		app.SetViewedStore(viewed.Open(config.ViewedPath()))
+	}
 
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {

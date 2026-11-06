@@ -514,3 +514,54 @@ func TestClient_GetPullRequestDiff_PassesANonUTF8BodyThrough(t *testing.T) {
 		t.Error("the fixture is not the non-UTF-8 case it claims to be")
 	}
 }
+
+func TestCompareDiffStat_RequestShape(t *testing.T) {
+	t.Parallel()
+
+	client, recorded := newRecordingClient(t, bearerOpts(), testkit.StubResponse{
+		Status: http.StatusOK,
+		Body:   `{"pagelen": 500, "values": [` + diffStatEntryJSON + `]}`,
+	})
+	entries, err := client.CompareDiffStat(t.Context(), testWorkspace, testRepoSlug,
+		"06fd23caff6b", "3c39f5b55d7f", []string{testDiffFilePath, "README.md"})
+	if err != nil {
+		t.Fatalf("CompareDiffStat() error = %v", err)
+	}
+
+	testkit.AssertEqual(t, "method", recorded.Method, http.MethodGet)
+	testkit.AssertEqual(t, "path", recorded.Path,
+		"/repositories/acme/api-gateway/diffstat/06fd23caff6b..3c39f5b55d7f")
+	testkit.AssertEqual(t, "topic", recorded.Query.Get("topic"), "false")
+	testkit.AssertSliceEqual(t, "paths", recorded.Query["path"], []string{testDiffFilePath, "README.md"})
+	testkit.AssertEqual(t, "entries", len(entries), 1)
+	testkit.AssertEqual(t, "entry path", entries[0].Path(), testDiffFilePath)
+}
+
+func TestCompareDiffStat_DropsAnOversizedPathFilter(t *testing.T) {
+	t.Parallel()
+
+	client, recorded := newRecordingClient(t, bearerOpts(), testkit.StubResponse{
+		Status: http.StatusOK, Body: `{"values": []}`,
+	})
+	paths := make([]string, maxDiffStatPaths+1)
+	for i := range paths {
+		paths[i] = "file" + strconv.Itoa(i) + ".go"
+	}
+	if _, err := client.CompareDiffStat(t.Context(), testWorkspace, testRepoSlug, "aaaaaaa", "bbbbbbb", paths); err != nil {
+		t.Fatalf("CompareDiffStat() error = %v", err)
+	}
+	testkit.AssertEqual(t, "no path filter", len(recorded.Query["path"]), 0)
+}
+
+func TestCompareDiffStat_MissingCommitIsNotFound(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newRecordingClient(t, bearerOpts(), testkit.StubResponse{
+		Status: http.StatusNotFound,
+		Body:   `{"type": "error", "error": {"message": "Commit not found"}}`,
+	})
+	_, err := client.CompareDiffStat(t.Context(), testWorkspace, testRepoSlug, "aaaaaaa", "bbbbbbb", nil)
+	if !IsNotFound(err) {
+		t.Errorf("CompareDiffStat() error = %v, want a 404", err)
+	}
+}

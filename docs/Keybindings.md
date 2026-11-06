@@ -502,11 +502,11 @@ Focusing the detail panel fetches the Files, Commits and Comments tabs together,
 | Tab | `enter` | Other keys |
 |-----|---------|------------|
 | Overview | — | `C` comments on the pull request, `o` opens the pull request, `u` the URL picker, `y` copies its URL |
-| Files | Open the selected file's diff | `n` / `p` move to the next / previous file, `e` opens the file in your editor, `C` comments on the file, `o` opens the pull request |
+| Files | Open the selected file's diff | `v` marks the file viewed — see [`v` — mark a file viewed](#v--mark-a-file-viewed), `n` / `p` move to the next / previous file, `e` opens the file in your editor, `C` comments on the file, `o` opens the pull request |
 | Commits | Expand the full commit message | `o` opens the commit in a browser, `y` copies its URL |
 | Comments | Open the thread in the panel | `C` replies to the thread under the cursor, `T` resolves or reopens it, `f` shows the resolved ones (hidden by default), `o` opens the thread in a browser, `y` copies its URL |
 
-The Files tab lists a status letter (`A` added, `M` modified, `D` removed, `R` renamed, plus a gray `B` for a binary file) and the `+added −removed` counts. The Comments tab shows each thread as `path:line` (or `General`), whether it is resolved and its replies; a thread longer than eight lines is collapsed behind an ellipsis in the list and `enter` opens it whole — see [Thread](#thread). A comment body — like the Overview's description — shows an `@`-mention by display name, `@Grace Hopper` in the theme's blue for the `@{account_id}` the Markdown stores; a mention Bitbucket itself left unresolved, a departed colleague or one written inside a code span, stays as the id, which is what the web UI shows too.
+The Files tab lists a green `✔` on each file you marked viewed, a status letter (`A` added, `M` modified, `D` removed, `R` renamed, plus a gray `B` for a binary file) and the `+added −removed` counts. The Comments tab shows each thread as `path:line` (or `General`), whether it is resolved and its replies; a thread longer than eight lines is collapsed behind an ellipsis in the list and `enter` opens it whole — see [Thread](#thread). A comment body — like the Overview's description — shows an `@`-mention by display name, `@Grace Hopper` in the theme's blue for the `@{account_id}` the Markdown stores; a mention Bitbucket itself left unresolved, a departed colleague or one written inside a code span, stays as the id, which is what the web UI shows too.
 
 ### File diff
 
@@ -517,6 +517,7 @@ The Files tab lists a status letter (`A` added, `M` modified, `D` removed, `R` r
 | `j` / `k` | Move the line cursor | `navigation.down`, `navigation.up` |
 | `n` / `p` | Open the next / previous changed file; it stops at both ends rather than wrapping | `detail.nextFile`, `detail.prevFile` |
 | `e` | Open the file in your editor, at the cursor's line — in a new tmux window when running inside tmux | `detail.openEditor` |
+| `v` | Mark this file viewed and open the next file you have not viewed; `v` on a viewed file clears the mark | `detail.toggleViewed` |
 | `C` | Comment on the line under the cursor — see [`C` — comment or reply](#c--comment-or-reply) | `pullRequests.comment` |
 | `enter` | Jump to the review thread on this line, when the line is marked with `●` | `pullRequests.open` |
 | `o` | Open the pull request's diff in a browser | `pullRequests.browser` |
@@ -526,6 +527,26 @@ The Files tab lists a status letter (`A` added, `M` modified, `D` removed, `R` r
 A `●` in the marker column means the line carries at least one inline comment (a digit when there are several). Comment markers need the review threads, which are fetched alongside the diff, so they may appear a moment after the diff itself.
 
 `e` opens the new side of the diff: on an added or context line its own line, on a removed line the next line that still exists, on a hunk header the hunk's first line. Files are resolved against the git repository lazybitbucket was started in, which is never checked against the pull request's repository — when the checkout is on another branch the hint bar says so and the file still opens. Inside tmux the editor gets a new window and the session stays on screen; elsewhere the terminal is handed over until the editor exits. See [Editor](Config.md#editor) for the editors that understand a line number and for `editorInTmux`.
+
+### `v` — mark a file viewed
+
+`v` marks a changed file as viewed, the way the checkbox in the Bitbucket web UI does. On the Files tab it marks the file under the cursor. In a file diff it marks the file on screen.
+
+After a mark, lazybitbucket goes to the next file that you have not viewed. On the Files tab the cursor moves to it. In a file diff its diff opens. The search wraps to the top of the list. When no file is left, a diff goes back to the Files tab and the hint bar says `every file viewed`. Thus, a review is a pass of `v` presses through the pull request.
+
+`v` on a viewed file clears the mark, and the cursor stays where it is.
+
+The Files tab shows a green `✔` and a gray path on each viewed file, and the tab label counts them:
+
+```
+ Files (5 · 2 viewed)
+ ✔ M internal/rate/bucket.go          +2 −1
+   A docs/rate.md                        +2
+```
+
+A mark is kept only while the file does not change. If a push changes a file, its mark goes away, like in the web UI. Marks on files that the push did not touch stay. To find the changed files, lazybitbucket sends one diffstat request between the old and the new head commit, limited to the marked files. Until the answer comes, the marks made before the push are not shown. If the request fails, the marks stay hidden, and lazybitbucket asks again the next time you open the Files tab. If Bitbucket no longer has the old commit, for example after a force push, the marks made at that commit are removed.
+
+The marks stay on this computer only. Bitbucket's public API has no viewed-file state, so the web UI and lazybitbucket do not share their marks. The marks are kept in `viewed.json` in the [config directory](Config.md), and marks that did not change for 90 days are removed. You can delete the file safely. `v` writes nothing to Bitbucket, so it also works in read-only mode. Under `--demo` the marks stay in memory.
 
 ### Thread
 

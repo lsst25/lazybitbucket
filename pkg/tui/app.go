@@ -18,6 +18,7 @@ import (
 	"github.com/lsst25/lazybitbucket/pkg/tui/components"
 	"github.com/lsst25/lazybitbucket/pkg/tui/theme"
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
+	"github.com/lsst25/lazybitbucket/pkg/viewed"
 )
 
 // Version is stamped by cmd/lazybitbucket at build time.
@@ -197,6 +198,10 @@ type App struct {
 	// answered, keyed by reviewFetchKey, so a tab entered while its prefetch is
 	// still in flight waits for that answer instead of asking again.
 	reviewInFlight map[string]bool
+
+	// viewed holds the files marked as viewed, nil until SetViewedStore or
+	// the first use creates an in-memory one. See viewed.go.
+	viewed *viewed.Store
 
 	// diffRendererDisabled turns the configured external diff renderer off for
 	// the rest of the session, which is what a program that cannot be run at
@@ -622,6 +627,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleThreadsLoaded(msg)
 	case fileDiffLoadedMsg:
 		return a.handleFileDiffLoaded(msg)
+	case viewedComparedMsg:
+		return a.handleViewedCompared(msg)
 
 	case views.PullRequestSelectedMsg:
 		// The list emits this only when the user moves its cursor: the app's

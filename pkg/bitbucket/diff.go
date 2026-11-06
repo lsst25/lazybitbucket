@@ -47,6 +47,41 @@ func (c *Client) ListPullRequestDiffStat(
 	return entries, nil
 }
 
+// maxDiffStatPaths is the most path= filters CompareDiffStat sends. Past it the
+// query string grows long enough to worry a proxy, and the filter is dropped:
+// the answer is then every file that changed, which is still correct.
+const maxDiffStatPaths = 100
+
+// CompareDiffStat returns one entry per file whose content differs between two
+// commits of a repository: GET /repositories/{ws}/{slug}/diffstat/{from}..{to}
+// with topic=false, a plain two-dot comparison rather than a pull request's
+// three-dot one. paths limits the answer to those files, and nil asks for every
+// file. Note the order: Bitbucket reads the spec as "from compared to to",
+// which is the opposite of `git diff` — the first commit is the newer one.
+//
+// It is what tells the viewed-file marks which files a push changed. A commit
+// that no longer exists — a force push the server has already collected — is a
+// 404, which IsNotFound reports.
+func (c *Client) CompareDiffStat(
+	ctx context.Context, workspace, repoSlug, from, to string, paths []string,
+) ([]DiffStatEntry, error) {
+	query := url.Values{}
+	query.Set("pagelen", strconv.Itoa(maxPageLenDiffStat))
+	query.Set("topic", "false")
+	if len(paths) <= maxDiffStatPaths {
+		for _, path := range paths {
+			query.Add("path", path)
+		}
+	}
+
+	path := repoPath(workspace, repoSlug) + "/diffstat/" + url.PathEscape(from) + ".." + url.PathEscape(to)
+	entries, err := getAll[DiffStatEntry](ctx, c, path, query, 0)
+	if err != nil {
+		return nil, fmt.Errorf("compare %s/%s %s..%s: %w", workspace, repoSlug, from, to, err)
+	}
+	return entries, nil
+}
+
 // GetPullRequestDiff returns a raw git-style unified diff for the pull request,
 // or for the single file named by opts.Path.
 //

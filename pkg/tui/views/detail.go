@@ -127,7 +127,10 @@ type DetailView struct {
 	stepLogLoading bool
 	stepLogErr     string
 
-	files    tabData[bitbucket.DiffStatEntry]
+	files tabData[bitbucket.DiffStatEntry]
+	// viewed is the set of changed files the reader has marked as viewed; see
+	// SetViewedFiles.
+	viewed   viewedFiles
 	commits  tabData[bitbucket.Commit]
 	threads  tabData[bitbucket.Thread]
 	fileDiff fileDiffState
@@ -835,9 +838,14 @@ func (d *DetailView) tabLabels() []tabLabel {
 		commentsTab.label = strings.TrimSuffix(commentsTab.label, ")") +
 			" · " + strconv.Itoa(hidden) + " hidden)"
 	}
+	filesTab := countedTab(TabFiles, "Files", d.files.counts())
+	if viewed := d.ViewedFileCount(); viewed > 0 && d.files.loaded && !d.files.loading {
+		filesTab.label = strings.TrimSuffix(filesTab.label, ")") +
+			" · " + strconv.Itoa(viewed) + " viewed)"
+	}
 	return []tabLabel{
 		{tab: TabOverview, label: "Overview", short: "Overview"},
-		countedTab(TabFiles, "Files", d.files.counts()),
+		filesTab,
 		countedTab(TabCommits, "Commits", d.commits.counts()),
 		commentsTab,
 	}

@@ -250,22 +250,26 @@ func (a *App) prefetchDetailTabs() tea.Cmd {
 // describes the pull request's head, and fetches it otherwise.
 func (a *App) ensureDiffStat(pr *bitbucket.PullRequest) tea.Cmd {
 	key := pr.Key()
+	// The viewed marks ride along with the file list: shown from the store at
+	// once, and checked against a push when they were made at an older head.
+	a.syncViewed(pr)
+	reconcile := a.reconcileViewed(pr)
 	if entry, ok := reviewFresh(a.diffStatCache, key, pr); ok {
 		if entry.err != nil {
 			a.detailView.SetDiffStatError(key, a.reviewErrorText(entry.err, "diff stat"))
 		} else {
 			a.detailView.SetDiffStat(key, entry.value)
 		}
-		return nil
+		return reconcile
 	}
 	// The loading flag is set even when the fetch is already in flight: the
 	// view drops it whenever the reader walks to another pull request, so the
 	// tab they come back to has to be told again that an answer is on its way.
 	a.detailView.SetDiffStatLoading(key)
 	if !a.claimReviewFetch(reviewKindDiffStat, key, sourceHash(pr)) {
-		return nil
+		return reconcile
 	}
-	return a.fetchDiffStat(pr)
+	return tea.Batch(a.fetchDiffStat(pr), reconcile)
 }
 
 // ensureCommits is ensureDiffStat for the Commits tab.
@@ -344,6 +348,9 @@ func (a *App) handleDiffStatLoaded(msg diffStatLoadedMsg) (tea.Model, tea.Cmd) {
 	}
 	a.statusPanel.SetOnline(true)
 	a.detailView.SetDiffStat(msg.key, msg.entries)
+	if pr := a.pullRequestByKey(msg.key); pr != nil {
+		a.syncViewed(pr)
+	}
 	return a, a.resumeCustomCommand(msg.key)
 }
 

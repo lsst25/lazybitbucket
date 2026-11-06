@@ -14,6 +14,13 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Added
 
+- `v` marks a changed file as viewed, on the Files tab and in a file diff, and goes to the next file
+  that you have not viewed; `v` on a viewed file clears the mark. The Files tab shows a green `✔`
+  and counts the marks in its label (`Files (5 · 2 viewed)`). A push that changes a file removes its
+  mark: one diffstat request between the old and the new head finds the changed files, and the other
+  marks stay. Bitbucket's public API has no viewed-file state, so the marks stay on this computer, in
+  `viewed.json` in the config directory. `v` writes nothing to Bitbucket and works in read-only mode.
+  The key is `keybinding.detail.toggleViewed`
 - `T` resolves the conversation in hand and reopens it — one key in two directions, like `A`, with a
   dialog that names which. Bitbucket hangs the state off the comment that starts a thread, so it acts
   on the whole conversation whichever of its comments is under the cursor, and it works on the

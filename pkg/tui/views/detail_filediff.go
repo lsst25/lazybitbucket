@@ -192,7 +192,8 @@ func (d *DetailView) fileDiffHeader(width int) []string {
 
 	entry := d.diffStatEntryFor(d.fileDiff.path)
 	counts := fileCounts(entry)
-	headline := fileLine(entry, counts, lipgloss.Width(counts), max(width-2-len(note), 8))
+	headline := fileLine(entry, d.FileViewed(d.fileDiff.path), counts, lipgloss.Width(counts),
+		max(width-2-len(note), 8))
 
 	return []string{
 		" " + headline + gray.Render(note),

@@ -104,6 +104,12 @@ func (s *stubClient) ListPullRequestDiffStat(
 	return nil, nil
 }
 
+func (s *stubClient) CompareDiffStat(
+	context.Context, string, string, string, string, []string,
+) ([]DiffStatEntry, error) {
+	return nil, nil
+}
+
 func (s *stubClient) GetPullRequestDiff(
 	context.Context, string, string, int, DiffOptions,
 ) (string, error) {

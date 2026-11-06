@@ -123,6 +123,7 @@ keybinding:
         commitsTab: m
         commentsTab: t
         hideResolved: f
+        toggleViewed: v
         nextFile: n
         prevFile: p
         openEditor: e
@@ -590,7 +591,7 @@ The `pullRequests` section also carries the nine [pull request actions](Keybindi
 
 `universal.nextView` (`shift+tab`) switches between the two views; which one the app starts in is [`gui.startView`](#gui).
 
-The `detail` section includes keys for scrolling the detail panel from any left panel without switching focus (defaults: `J`/`K` for line scroll, `ctrl+f`/`ctrl+b` for half-page), plus the keys the detail panel answers to itself: `overviewTab`/`filesTab`/`commitsTab`/`commentsTab` (`i`/`d`/`m`/`t`) jump straight to one pull request tab, `hideResolved` (`f`) leaves the resolved conversations off the Comments tab, `nextFile`/`prevFile` (`n`/`p`) step through the changed files, and `openEditor` (`e`) opens the file under the cursor in [your editor](#editor). Those eight only act while the detail panel is focused.
+The `detail` section includes keys for scrolling the detail panel from any left panel without switching focus (defaults: `J`/`K` for line scroll, `ctrl+f`/`ctrl+b` for half-page), plus the keys the detail panel answers to itself: `overviewTab`/`filesTab`/`commitsTab`/`commentsTab` (`i`/`d`/`m`/`t`) jump straight to one pull request tab, `hideResolved` (`f`) leaves the resolved conversations off the Comments tab, `toggleViewed` (`v`) [marks a changed file viewed](Keybindings.md#v--mark-a-file-viewed), `nextFile`/`prevFile` (`n`/`p`) step through the changed files, and `openEditor` (`e`) opens the file under the cursor in [your editor](#editor). Those nine only act while the detail panel is focused.
 
 Setting a navigation key replaces all defaults for that action. For example, `down: "n"` means only `n` navigates down, `j`, arrow down and `ctrl+j` will no longer work.
 

@@ -819,6 +819,7 @@ func detailKeysFixture() DetailKeys {
 		CommitsTab:   "m",
 		CommentsTab:  "t",
 		HideResolved: "f",
+		ToggleViewed: "v",
 		NextFile:     "n",
 		PrevFile:     "p",
 		OpenEditor:   "e",
@@ -830,7 +831,7 @@ func detailKeysFixture() DetailKeys {
 var detailKeyYAMLNames = []string{
 	"focusLeft", "back", "scrollDown", "scrollUp", "halfPageDown", "halfPageUp",
 	"overviewTab", "filesTab", "commitsTab", "commentsTab", "hideResolved",
-	"nextFile", "prevFile", "openEditor",
+	"toggleViewed", "nextFile", "prevFile", "openEditor",
 }
 
 func TestLoad_ReadsDetailKeybindingsFromYAML(t *testing.T) {
@@ -898,6 +899,8 @@ func detailKeyByYAMLName(t *testing.T, keys DetailKeys, name string) string {
 		return keys.CommentsTab
 	case "hideResolved":
 		return keys.HideResolved
+	case "toggleViewed":
+		return keys.ToggleViewed
 	case "nextFile":
 		return keys.NextFile
 	case "prevFile":

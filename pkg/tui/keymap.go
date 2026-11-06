@@ -92,6 +92,11 @@ const (
 	// the Comments tab, and puts them back.
 	ActHideResolved Action = "hideResolved"
 
+	// ActToggleViewed is not a write either: it marks the changed file in hand
+	// as viewed, or clears the mark, and the marks never leave this machine —
+	// Bitbucket's API has no viewed-file state. It works in read-only mode.
+	ActToggleViewed Action = "toggleViewed"
+
 	// ActComment is the seventh write and the only one whose dialog is the
 	// title editor's input popup rather than a form. It is read-only-refused
 	// and hidden like the rest.
@@ -202,6 +207,7 @@ func DefaultKeymap() Keymap {
 		ActCreatePullRequest: {"N"},
 		ActResolveThread:     {"T"},
 		ActHideResolved:      {"f"},
+		ActToggleViewed:      {"v"},
 
 		ActRerunPipeline: {"P"},
 		ActStopPipeline:  {"X"},
@@ -280,6 +286,7 @@ func KeymapFromConfig(kcfg config.KeybindingConfig) Keymap {
 	set(ActDetailHalfDown, kcfg.Detail.HalfPageDown)
 	set(ActDetailHalfUp, kcfg.Detail.HalfPageUp)
 	set(ActHideResolved, kcfg.Detail.HideResolved)
+	set(ActToggleViewed, kcfg.Detail.ToggleViewed)
 	set(ActDetailOverview, kcfg.Detail.OverviewTab)
 	set(ActDetailFiles, kcfg.Detail.FilesTab)
 	set(ActDetailCommits, kcfg.Detail.CommitsTab)

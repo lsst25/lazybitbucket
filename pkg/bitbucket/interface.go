@@ -68,6 +68,9 @@ type ClientInterface interface {
 	ListPullRequestComments(ctx context.Context, workspace, repoSlug string, id int, opts ListOptions) ([]Comment, error)
 	ListPullRequestDiffStat(ctx context.Context, workspace, repoSlug string, id int) ([]DiffStatEntry, error)
 	GetPullRequestDiff(ctx context.Context, workspace, repoSlug string, id int, opts DiffOptions) (string, error)
+	// CompareDiffStat lists the files whose content differs between two
+	// commits, from compared to to, optionally limited to paths.
+	CompareDiffStat(ctx context.Context, workspace, repoSlug, from, to string, paths []string) ([]DiffStatEntry, error)
 	ListPipelines(ctx context.Context, workspace, repoSlug string, opts ListPipelinesOptions) ([]Pipeline, error)
 	GetPipeline(ctx context.Context, workspace, repoSlug, pipelineRef string) (*Pipeline, error)
 	ListPipelineSteps(ctx context.Context, workspace, repoSlug, pipelineRef string) ([]PipelineStep, error)

@@ -365,6 +365,8 @@ func (a *App) handleReviewAction(action Action) (tea.Model, tea.Cmd, bool) {
 		return a, a.openEditorAtCursor(), true
 	case ActHideResolved:
 		return a, a.handleActionHideResolved(), true
+	case ActToggleViewed:
+		return a, a.handleActionToggleViewed(), true
 	}
 	return nil, nil, false
 }

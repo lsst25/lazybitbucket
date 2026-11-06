@@ -95,6 +95,7 @@ func (a *App) reviewTabBindings() []Binding {
 	case views.TabFiles:
 		return append([]Binding{
 			a.bind(ActOpen, "open this file's diff"),
+			a.bind(ActToggleViewed, "mark this file viewed and go to the next (again: clear the mark)"),
 			a.bind(ActNextFile, "next changed file"),
 			a.bind(ActPrevFile, "previous changed file"),
 			a.bind(ActOpenEditor, "open this file in the editor"),
@@ -236,6 +237,7 @@ func (a *App) ContextBindings() []Binding {
 			bindings = append(bindings,
 				a.bind(ActBack, "back to the changed files"),
 				a.bind(ActOpen, "jump to the thread on this line"),
+				a.bind(ActToggleViewed, "mark this file viewed and open the next (again: clear the mark)"),
 				a.bind(ActNextFile, "next changed file"),
 				a.bind(ActPrevFile, "previous changed file"),
 				a.bind(ActOpenEditor, "open this line in the editor"),
@@ -390,6 +392,7 @@ func (a *App) helpBarItems() []components.HelpItem {
 			head = append(head, a.pipelineWriteHelpItems()...)
 		case views.ModeFileDiff:
 			head = append(head,
+				components.HelpItem{Key: km.Keys(ActToggleViewed), Description: "viewed"},
 				components.HelpItem{Key: km.Keys(ActNextFile) + "/" + km.Keys(ActPrevFile), Description: "file"},
 				components.HelpItem{Key: km.Keys(ActOpenEditor), Description: "editor"},
 			)
@@ -467,6 +470,7 @@ func (a *App) reviewTabHelpItems() []components.HelpItem {
 	case views.TabFiles:
 		return append([]components.HelpItem{
 			{Key: km.Keys(ActOpen), Description: "diff"},
+			{Key: km.Keys(ActToggleViewed), Description: "viewed"},
 			{Key: km.Keys(ActNextFile) + "/" + km.Keys(ActPrevFile), Description: "file"},
 			{Key: km.Keys(ActOpenEditor), Description: "editor"},
 		}, a.commentHelpItems("comment")...)

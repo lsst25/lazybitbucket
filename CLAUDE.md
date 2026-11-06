@@ -47,7 +47,10 @@ What exists:
   the line omitted for a comment on the file), the two refused together with `ErrCommentAnchor`
   because a reply hangs where its parent hangs; the 201 carries the created comment with the html Bitbucket rendered, which is
   what lets a written comment be read back without a refetch, and `ErrEmptyComment` refuses an empty
-  one before any request), plus `ListEffectiveDefaultReviewers` and `ListWorkspaceMembers`, and the two
+  one before any request), plus `ListEffectiveDefaultReviewers` and `ListWorkspaceMembers`,
+  `CompareDiffStat` (GET `/repositories/{ws}/{slug}/diffstat/{from}..{to}?topic=false`, repeated
+  `path=` up to 100, which Bitbucket reads as "from compared to to" — the newer commit first, the
+  opposite of `git diff`; the viewed marks use it), and the two
   pipeline writes `RunPipeline` (POST `/pipelines` with the target of an existing run — the rerun,
   answered 201 with the new run) and `StopPipeline` (POST `…/stopPipeline`, 204), guarded by
   `ErrPipelineTarget`, which refuses a target that cannot be turned into a request body before any
@@ -75,6 +78,12 @@ What exists:
   `renderHTML` produced for it, mentions included).
 - `pkg/diff` — a lenient unified-diff parser (files, hunks, per-side line numbers, renames, binary
   files, `\ No newline at end of file`, quoted paths). Pure, stdlib only.
+- `pkg/viewed` — the viewed-file marks, pure apart from `Open`/`Save` and importing nothing from the
+  module: path → the source commit the file was marked at, per PR key, in `config.ViewedPath()`
+  (`viewed.json` in the config dir, written via temp file + rename, PRs untouched for `Retention` = 90
+  days pruned on save, a newer `version` refused). A mark counts only at its commit (`SameCommit`,
+  prefix match ≥ 7); `Stale` groups the others by commit and `Reconcile` carries them to the new head
+  minus the changed paths. `New()` is the in-memory store the demo and tests get.
 - `pkg/git` — branch checkout, plus the sync helpers in `sync.go`: `IsClean`, `RemoteFor` (the remote
   whose URL points at `<workspace>/<slug>`, else `origin`), `Fetch`, `MergeBranch`, `RebaseOnto`,
   `Push` (`--force-with-lease` after a rebase) and `ErrConflict` (both operations abort before
@@ -85,7 +94,7 @@ What exists:
   scope a command opts into rather than inheriting from its context, because it costs a diffstat
   request — it fills `{{.Files}}` with the whole changed-file list), `keybinding.pullRequests` with
   `merge`/`sync`/`edit`/`reviewers`/`toggleDraft`/`approve`/`comment`/`create`/`resolve`,
-  `keybinding.detail.hideResolved`, `gui.showResolvedComments` (`*bool`, nil means false), and
+  `keybinding.detail.hideResolved`, `keybinding.detail.toggleViewed` (`v`), `gui.showResolvedComments` (`*bool`, nil means false), and
   `keybinding.builds` with
   `rerun`/`stop` — the only group besides `pullRequests` that carries write actions. Also
   `gui.startView` (`pullRequests` | `pipelines`, validated like `gui.screenMode`),
@@ -149,7 +158,18 @@ What exists:
   the header count and `SelectedThread` all index, `threadIndex` stays over the full set so an open
   conversation survives being filtered out, and `FocusThread` turns the filter off rather than
   landing on a list without the thread it was sent to.
-  Opening one lives in `create.go` on `N`: it starts from the checkout rather than from a pull
+  `v` (`viewed.go`, `views/detail_viewed.go`) marks the file in hand viewed — the Files tab's cursor
+  row or the open diff — and goes to the next unviewed file (cursor move, or `openFileDiff`; with none
+  left a diff goes `Back()`); `v` on a viewed file unmarks. Bitbucket's public API has **no**
+  viewed-file state (checked against the OpenAPI spec 2026-11-05), so the marks are local and never
+  shared with the web UI; `v` is not a write and works read-only. `ensureDiffStat` pushes the set to
+  the view (`SetViewedFiles`, dropped for another PR key; `✔` column in `fileLine`, `Files (N · M
+  viewed)`) and calls `reconcileViewed`: marks made at an older head are hidden until one
+  `CompareDiffStat` per old head (deduplicated through `reviewInFlight`) says which marked paths
+  changed. A 404 (commit gone) drops those marks; any other failure keeps them hidden and retries on
+  the next Files tab visit. `main.go` opens the store with `SetViewedStore(viewed.Open(...))`, except
+  under `--demo`; an unreadable file falls back to memory with a status warning.
+  Opening a pull request lives in `create.go` on `N`: it starts from the checkout rather than from a pull
   request (the repository is the configured one this checkout's remotes name), reads its prefill in
   one command — `git.LastCommitSubject` for the title, `GetRepository` for the default branch,
   `ListEffectiveDefaultReviewers` for the reviewers, `git.IsRemoteBranch` for whether the branch is

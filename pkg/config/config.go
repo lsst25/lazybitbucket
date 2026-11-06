@@ -382,6 +382,9 @@ type DetailKeys struct {
 	// HideResolved leaves the resolved conversations off the Comments tab, and
 	// puts them back. Default: f.
 	HideResolved string `yaml:"hideResolved"`
+	// ToggleViewed marks the changed file in hand as viewed, or clears the
+	// mark. The marks are kept on this machine only. Default: v.
+	ToggleViewed string `yaml:"toggleViewed"`
 	// Diff view: step through the changed files and open the selected file in
 	// Config.Editor at the cursor's line.
 	NextFile   string `yaml:"nextFile"`
@@ -555,6 +558,13 @@ func ConfigDir() string {
 		home = "."
 	}
 	return filepath.Join(home, ".config", appName)
+}
+
+// ViewedPath is the file the viewed-file marks are kept in. It sits next to
+// the config because the config dir is the one place this tool owns; it is
+// state rather than settings, and is safe to delete.
+func ViewedPath() string {
+	return filepath.Join(ConfigDir(), "viewed.json")
 }
 
 // ConfigPath returns the full path to the config file

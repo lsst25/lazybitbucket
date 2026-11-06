@@ -92,6 +92,16 @@ type ListPullRequestDiffStatCall struct {
 	ID        int
 }
 
+// CompareDiffStatCall records one CompareDiffStat call.
+type CompareDiffStatCall struct {
+	Ctx       context.Context
+	Workspace string
+	RepoSlug  string
+	From      string
+	To        string
+	Paths     []string
+}
+
 // GetPullRequestDiffCall records one GetPullRequestDiff call.
 type GetPullRequestDiffCall struct {
 	Ctx       context.Context
@@ -259,6 +269,7 @@ type FakeClient struct {
 	ListPullRequestCommentsFunc func(ctx context.Context, workspace, repoSlug string, id int, opts bitbucket.ListOptions) ([]bitbucket.Comment, error)
 	ListPullRequestDiffStatFunc func(ctx context.Context, workspace, repoSlug string, id int) ([]bitbucket.DiffStatEntry, error)
 	GetPullRequestDiffFunc      func(ctx context.Context, workspace, repoSlug string, id int, opts bitbucket.DiffOptions) (string, error)
+	CompareDiffStatFunc         func(ctx context.Context, workspace, repoSlug, from, to string, paths []string) ([]bitbucket.DiffStatEntry, error)
 	ListPipelinesFunc           func(ctx context.Context, workspace, repoSlug string, opts bitbucket.ListPipelinesOptions) ([]bitbucket.Pipeline, error)
 	GetPipelineFunc             func(ctx context.Context, workspace, repoSlug, pipelineRef string) (*bitbucket.Pipeline, error)
 	ListPipelineStepsFunc       func(ctx context.Context, workspace, repoSlug, pipelineRef string) ([]bitbucket.PipelineStep, error)
@@ -294,6 +305,7 @@ type FakeClient struct {
 	ListPullRequestCommentsCalls []ListPullRequestCommentsCall
 	ListPullRequestDiffStatCalls []ListPullRequestDiffStatCall
 	GetPullRequestDiffCalls      []GetPullRequestDiffCall
+	CompareDiffStatCalls         []CompareDiffStatCall
 	ListPipelinesCalls           []ListPipelinesCall
 	GetPipelineCalls             []GetPipelineCall
 	ListPipelineStepsCalls       []ListPipelineStepsCall
@@ -357,6 +369,8 @@ func (f *FakeClient) CallCount(method string) int {
 		return len(f.ListPullRequestDiffStatCalls)
 	case "GetPullRequestDiff":
 		return len(f.GetPullRequestDiffCalls)
+	case "CompareDiffStat":
+		return len(f.CompareDiffStatCalls)
 	case "ListPipelines":
 		return len(f.ListPipelinesCalls)
 	case "GetPipeline":
@@ -542,6 +556,23 @@ func (f *FakeClient) ListPullRequestDiffStat(ctx context.Context, workspace, rep
 		return nil, nil
 	}
 	return fn(ctx, workspace, repoSlug, id)
+}
+
+// CompareDiffStat records the call and dispatches CompareDiffStatFunc.
+func (f *FakeClient) CompareDiffStat(ctx context.Context, workspace, repoSlug, from, to string, paths []string) ([]bitbucket.DiffStatEntry, error) {
+	f.mu.Lock()
+	f.CompareDiffStatCalls = append(f.CompareDiffStatCalls, CompareDiffStatCall{
+		Ctx: ctx, Workspace: workspace, RepoSlug: repoSlug, From: from, To: to,
+		Paths: append([]string(nil), paths...),
+	})
+	fn := f.CompareDiffStatFunc
+	f.mu.Unlock()
+
+	if fn == nil {
+		f.fatal("CompareDiffStat")
+		return nil, nil
+	}
+	return fn(ctx, workspace, repoSlug, from, to, paths)
 }
 
 // GetPullRequestDiff records the call and dispatches GetPullRequestDiffFunc.

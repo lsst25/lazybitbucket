@@ -42,7 +42,8 @@ func (d *DetailView) renderFileBlocks(width int) [][]string {
 
 	blocks := make([][]string, 0, len(d.files.items))
 	for i := range d.files.items {
-		blocks = append(blocks, []string{fileLine(d.files.items[i], counts[i], countsWidth, width)})
+		entry := d.files.items[i]
+		blocks = append(blocks, []string{fileLine(entry, d.FileViewed(entry.Path()), counts[i], countsWidth, width)})
 	}
 	return blocks
 }
@@ -67,22 +68,35 @@ func (d *DetailView) filesPlaceholder() (string, bool) {
 	}
 }
 
-// fileLine renders one changed file: a status glyph, the path (both paths on a
-// rename), a binary marker and the added/removed counts, right-aligned so the
-// numbers form a column.
-func fileLine(entry bitbucket.DiffStatEntry, counts string, countsWidth, width int) string {
+// viewedGlyph marks a file the reader has marked as viewed. It is the same
+// tick a resolved conversation carries.
+const viewedGlyph = "✔"
+
+// fileLine renders one changed file: the viewed mark, a status glyph, the path
+// (both paths on a rename), a binary marker and the added/removed counts,
+// right-aligned so the numbers form a column. The viewed column is always
+// there, blank on a file not viewed, so marking a file does not shift the list
+// under the cursor; a viewed file's path is grayed out, the way the web UI
+// folds it away.
+func fileLine(entry bitbucket.DiffStatEntry, viewed bool, counts string, countsWidth, width int) string {
+	gray := lipgloss.NewStyle().Foreground(theme.ColorGray)
 	glyph, style := fileGlyph(entry.Status)
 	name := entry.Path()
 	if entry.Status == bitbucket.DiffStatRenamed && entry.OldPath() != "" {
 		name = entry.OldPath() + " → " + entry.Path()
 	}
+	mark := " "
+	if viewed {
+		name = gray.Render(name)
+		mark = lipgloss.NewStyle().Foreground(theme.ColorGreen).Render(viewedGlyph)
+	}
 	if entry.IsBinary() {
-		name += lipgloss.NewStyle().Foreground(theme.ColorGray).Render(" B")
+		name += gray.Render(" B")
 	}
 
-	// glyph, a space, the name, a space, the counts column.
-	nameWidth := max(width-countsWidth-3, 8)
-	return style.Render(glyph) + " " +
+	// mark, a space, glyph, a space, the name, a space, the counts column.
+	nameWidth := max(width-countsWidth-5, 8)
+	return mark + " " + style.Render(glyph) + " " +
 		padRight(components.TruncateEnd(name, nameWidth), nameWidth) + " " +
 		padLeft(counts, countsWidth)
 }
