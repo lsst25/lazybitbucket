@@ -75,20 +75,7 @@ make build
 <details>
 <summary><b>Packaged builds</b></summary>
 
-The release pipeline publishes these channels. They only exist once a release is cut, so build from source until then.
-
-#### Homebrew (macOS, Linux)
-
-```
-brew install lsst25/tap/lazybitbucket
-```
-
-#### Arch Linux (AUR)
-
-```
-yay -S lazybitbucket-bin     # prebuilt binary
-yay -S lazybitbucket-git     # build from source
-```
+There are no prebuilt releases, Homebrew formula or AUR packages. Build from source, or use Nix.
 
 #### Nix / NixOS
 
@@ -101,20 +88,6 @@ Or add to your flake inputs:
 ```nix
 inputs.lazybitbucket.url = "github:lsst25/lazybitbucket";
 ```
-
-#### deb / rpm / apk
-
-Download the package for your distro from [Releases](https://github.com/lsst25/lazybitbucket/releases):
-
-```
-sudo dpkg -i lazybitbucket_*.deb
-sudo rpm -i lazybitbucket_*.rpm
-sudo apk add --allow-untrusted lazybitbucket_*.apk
-```
-
-#### Windows
-
-Download the `.zip` from [Releases](https://github.com/lsst25/lazybitbucket/releases), extract `lazybitbucket.exe`, and add it to your `PATH`. Use [Windows Terminal](https://aka.ms/terminal) for best rendering.
 
 </details>
 

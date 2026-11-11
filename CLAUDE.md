@@ -261,7 +261,9 @@ make tidy
 `go build ./...` clean and `go test -race ./...` green is the baseline. If a change makes the suite red,
 that is a regression, not the starting state.
 
-Go 1.25+ (toolchain declared in `go.mod`). Nix flake and goreleaser config are inherited and work.
+Go 1.25+ (toolchain declared in `go.mod`). The Nix flake is inherited and works.
+There is no release pipeline: goreleaser, the release workflow and the AUR/Homebrew packaging were
+removed, because this project is not released.
 `--demo` needs `make build-demo`: only `cmd/lazybitbucket/demo.go` is behind the `demo` build tag.
 
 ## Repo setup
@@ -273,7 +275,7 @@ Go 1.25+ (toolchain declared in `go.mod`). Nix flake and goreleaser config are i
   expect conflicts in `pkg/tui` and `pkg/config` instead.
 - **No tags yet.** The 49 inherited upstream tags were deleted so releases can start clean. The
   version is the git tag: `make build` stamps `git describe --tags --always --dirty` into
-  `main.version` (`VERSION=...` overrides it), goreleaser stamps the tag, and `resolveVersion`
+  `main.version` (`VERSION=...` overrides it), and `resolveVersion`
   (`cmd/lazybitbucket/version.go`) falls back to the embedded build information for `go install`.
   The version shows at the right end of the help bar (`HelpBar.SetVersion`) and on the splash.
 - `fetch.pruneTags = false` is set repo-locally on purpose. The global `~/.gitconfig` sets it to `true`,
@@ -290,8 +292,8 @@ Everything user-visible is `lazybitbucket`:
 - Env overrides: `BITBUCKET_WORKSPACE`, `BITBUCKET_REPOSITORIES`, `BITBUCKET_EMAIL`, `BITBUCKET_TOKEN`,
   `BITBUCKET_API_URL`, and `LAZYBITBUCKET_READ_ONLY` (`1|true|yes`, one-way: it can only turn read-only
   mode on, as can `--read-only`).
-- Packaging: GitHub `lsst25/lazybitbucket`, brew tap `lsst25/homebrew-tap`, AUR `lazybitbucket-bin` and
-  `lazybitbucket-git`, nix attr `.#lazybitbucket`, nfpm package `lazybitbucket`.
+- Packaging: GitHub `lsst25/lazybitbucket` and nix attr `.#lazybitbucket`. Nothing is published: no
+  releases, no Homebrew tap, no AUR, no deb/rpm/apk. A `v*` tag releases nothing.
 - `LICENSE` keeps the upstream copyright notice, and the `CHANGELOG.md` compare links **stay** pointed at
   upstream — that is accurate history. Everything below the `[Unreleased]` section is upstream's.
 

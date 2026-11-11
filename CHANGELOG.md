@@ -234,8 +234,8 @@ one are upstream lazyjira history, and their compare links still point at upstre
   checking it out, fast-forwards a local branch the remote has moved past, and reports a diverged one
   instead of touching it
 
-- Renamed `cmd/lazyjira` to `cmd/lazybitbucket`; the binary, the Homebrew tap, the AUR packages, the
-  nix attribute and the nfpm package are all `lazybitbucket`
+- Renamed `cmd/lazyjira` to `cmd/lazybitbucket`; the binary and the nix attribute are
+  `lazybitbucket`
 - Config directory moved to `~/.config/lazybitbucket`; the override env var is now
   `LAZYBITBUCKET_CONFIG_DIR`
 - Config schema replaced: `bitbucket` (workspace, repositories, email, baseUrl), `pullRequestTabs`,
@@ -263,6 +263,9 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Removed
 
+- The release pipeline that came with lazyjira: the `release` workflow, `.goreleaser.yml`, the AUR
+  `PKGBUILD`, `make release`, and the Homebrew, AUR, deb, rpm, apk and Windows install notes in the
+  README. This project does not publish releases. A `v*` tag now releases nothing
 - Everything Jira: `pkg/jira`, JQL search and history, issue create/edit/transition, comments,
   the info panel and custom fields, ADF conversion and rendering, mentions, issue hierarchy, and
   Jira Server / Data Center and mTLS support

@@ -1,4 +1,4 @@
-.PHONY: build build-version build-demo lint lint-fix lint-docs vet test clean check check-demo tidy fix release preview e2e e2e-gen e2e-update nix-deps
+.PHONY: build build-version build-demo lint lint-fix lint-docs vet test clean check check-demo tidy fix preview e2e e2e-gen e2e-update nix-deps
 
 # The version comes from the git tag: v0.1.0 on a tag, 0.1.0-3-gabc1234 three
 # commits after it, abc1234 when there is no tag yet. Override with VERSION=...
@@ -39,15 +39,6 @@ tidy:
 	go mod tidy
 
 fix: tidy lint-fix nix-deps
-
-release:
-	@test -n "$(VERSION)" || (echo "Usage: make release VERSION=2.7.0" && exit 1)
-	keepachangelog release $(VERSION)
-	perl -pi -e 's/^pkgver=.*/pkgver=$(VERSION)/' aur/lazybitbucket-git/PKGBUILD
-	git add CHANGELOG.md aur/lazybitbucket-git/PKGBUILD
-	git commit -m "release v$(VERSION)"
-	git tag v$(VERSION)
-	@echo "Tagged v$(VERSION). Push with: git push && git push --tags"
 
 check-demo:
 	go tool golangci-lint run --build-tags demo ./...
