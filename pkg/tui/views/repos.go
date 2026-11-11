@@ -145,6 +145,17 @@ func (r *RepoList) SetCounts(counts map[string]int) {
 	r.applyFilter()
 }
 
+// MarkTotalUnknown blanks the All row's count. SetCounts sums what it was given,
+// which is the whole only when every repository was loaded.
+func (r *RepoList) MarkTotalUnknown() {
+	for i := range r.all {
+		if r.all[i].All {
+			r.all[i].OpenCount = unknownCount
+		}
+	}
+	r.applyFilter()
+}
+
 // SetActiveSlug marks the repository the pull request list is filtered by. An
 // empty slug marks the All row.
 func (r *RepoList) SetActiveSlug(slug string) {

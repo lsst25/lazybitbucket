@@ -139,16 +139,25 @@ func (a *App) handlePullRequestsLoaded(msg pullRequestsLoadedMsg) (tea.Model, te
 	if a.merged == nil {
 		a.merged = make(map[string][]bitbucket.PullRequest)
 	}
-	a.merged[msg.fetchKey] = bitbucket.MergePullRequests(msg.results)
+	a.merged[msg.fetchKey] = a.mergeFetched(msg.fetchKey, msg.results)
 	a.refilterTabs(msg.fetchKey)
 
 	if a.fetchKeyOf(a.prList.GetTabIndex()) != msg.fetchKey {
 		return a, nil
 	}
 
-	a.repoList.SetCounts(countsBySlug(a.merged[msg.fetchKey]))
+	a.updateRepoCounts(msg.fetchKey)
 
 	var cmds []tea.Cmd
+	// The user may have widened the view while this fetch was in flight; that
+	// request was dropped, so ask for what the view needs and this did not cover.
+	attempted := make(map[string]bool, len(msg.results))
+	for _, result := range msg.results {
+		attempted[result.Repo] = true
+	}
+	if cmd := a.fetchUnloadedPullRequests(msg.fetchKey, attempted); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if cmd := a.autoSelectGitBranch(); cmd != nil {
 		cmds = append(cmds, cmd)
 	} else if cmd := a.previewSelected(); cmd != nil {
@@ -158,6 +167,66 @@ func (a *App) handlePullRequestsLoaded(msg pullRequestsLoadedMsg) (tea.Model, te
 		cmds = append(cmds, cmd)
 	}
 	return a, tea.Batch(cmds...)
+}
+
+// mergeFetched folds one fetch into what is already held for its key. The
+// repositories the fetch covered are replaced by its answer, so a closed pull
+// request leaves the list; the ones it did not cover keep their rows, because a
+// scoped fetch asks for one repository and must not empty the others.
+func (a *App) mergeFetched(fetchKey string, results []bitbucket.RepoPullRequests) []bitbucket.PullRequest {
+	if a.loadedRepos == nil {
+		a.loadedRepos = make(map[string]map[string]bool)
+	}
+	if a.loadedRepos[fetchKey] == nil {
+		a.loadedRepos[fetchKey] = make(map[string]bool)
+	}
+
+	covered := make(map[string]bool, len(results))
+	for _, result := range results {
+		covered[result.Repo] = true
+		a.loadedRepos[fetchKey][result.Repo] = result.Err == nil
+	}
+
+	var order []string
+	kept := make(map[string][]bitbucket.PullRequest)
+	for _, pr := range a.merged[fetchKey] {
+		slug := pr.RepoSlug()
+		if covered[slug] {
+			continue
+		}
+		if _, seen := kept[slug]; !seen {
+			order = append(order, slug)
+		}
+		kept[slug] = append(kept[slug], pr)
+	}
+
+	all := slices.Clone(results)
+	for _, slug := range order {
+		all = append(all, bitbucket.RepoPullRequests{Repo: slug, PullRequests: kept[slug], Err: nil})
+	}
+	return bitbucket.MergePullRequests(all)
+}
+
+// updateRepoCounts shows the open count of every repository this key has
+// loaded. A repository that is not loaded stays unknown, and so does the All
+// total while any repository is missing, because a partial sum would read as
+// the whole.
+func (a *App) updateRepoCounts(fetchKey string) {
+	counts := countsBySlug(a.merged[fetchKey])
+	complete := true
+	for _, slug := range a.repoSlugs {
+		if !a.loadedRepos[fetchKey][slug] {
+			complete = false
+			continue
+		}
+		if _, ok := counts[slug]; !ok {
+			counts[slug] = 0
+		}
+	}
+	a.repoList.SetCounts(counts)
+	if !complete {
+		a.repoList.MarkTotalUnknown()
+	}
 }
 
 // autoSelectGitBranch moves the cursor to the pull request whose source branch
@@ -525,7 +594,13 @@ func (a *App) selectRepo(item *views.RepoItem) tea.Cmd {
 		// rather than a client-side filter.
 		return a.fetchPipelines()
 	}
-	return tea.Batch(a.previewSelected(), a.startPrefetch())
+	// A repository the view has not shown yet is fetched now; one already
+	// loaded is shown as it is and left to the refresh tick.
+	return tea.Batch(
+		a.previewSelected(),
+		a.startPrefetch(),
+		a.fetchUnloadedPullRequests(a.fetchKeyOf(a.prList.GetTabIndex()), nil),
+	)
 }
 
 // openBuild drills into a build status: its pipeline run when the status names

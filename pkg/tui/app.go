@@ -181,6 +181,10 @@ type App struct {
 	// than costing another request.
 	merged   map[string][]bitbucket.PullRequest
 	inFlight map[string]bool
+	// loadedRepos records, per fetch key, the repositories whose pull requests
+	// are in merged. A start inside a checkout fetches only that repository, so
+	// merged is usually a part of the whole until the user widens the view.
+	loadedRepos map[string]map[string]bool
 
 	prCache       map[string]*bitbucket.PullRequest
 	statusCache   map[string]statusEntry

@@ -426,10 +426,40 @@ func (a *App) listOptionsForKey(fetchKey string) bitbucket.ListPullRequestsOptio
 	}
 }
 
-// fetchPullRequests lists the pull requests behind one fetch key across every
-// repository. A second request for a key already in flight is dropped.
+// scopeRepos is the set of repositories a refresh asks for: the one repository
+// the list is filtered to, or every repository when there is no filter. The
+// others are fetched when the user first widens the view (see
+// fetchUnloadedPullRequests), not at startup.
+func (a *App) scopeRepos() []string {
+	if a.repoFilter != "" && slices.Contains(a.repoSlugs, a.repoFilter) {
+		return []string{a.repoFilter}
+	}
+	return slices.Clone(a.repoSlugs)
+}
+
+// fetchPullRequests lists the pull requests behind one fetch key for the
+// repositories in scope. A second request for a key already in flight is
+// dropped.
 func (a *App) fetchPullRequests(fetchKey string) tea.Cmd {
-	if a.workspace == "" || len(a.repoSlugs) == 0 || a.inFlight[fetchKey] {
+	return a.requestPullRequests(fetchKey, a.scopeRepos())
+}
+
+// fetchUnloadedPullRequests fetches the repositories in scope that this fetch
+// key has not loaded yet, skipping the ones in attempted. A repository that
+// failed is not loaded, so without the skip a failing repository would be
+// asked for again as soon as it answered.
+func (a *App) fetchUnloadedPullRequests(fetchKey string, attempted map[string]bool) tea.Cmd {
+	var missing []string
+	for _, slug := range a.scopeRepos() {
+		if !a.loadedRepos[fetchKey][slug] && !attempted[slug] {
+			missing = append(missing, slug)
+		}
+	}
+	return a.requestPullRequests(fetchKey, missing)
+}
+
+func (a *App) requestPullRequests(fetchKey string, repos []string) tea.Cmd {
+	if a.workspace == "" || len(repos) == 0 || a.inFlight[fetchKey] {
 		return nil
 	}
 	if a.inFlight == nil {
@@ -439,7 +469,6 @@ func (a *App) fetchPullRequests(fetchKey string) tea.Cmd {
 
 	ctx, client := a.context(), a.client
 	workspace := a.workspace
-	repos := slices.Clone(a.repoSlugs)
 	opts := a.listOptionsForKey(fetchKey)
 	a.logFlag.Store(true)
 

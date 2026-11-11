@@ -169,6 +169,16 @@ What exists:
   changed. A 404 (commit gone) drops those marks; any other failure keeps them hidden and retries on
   the next Files tab visit. `main.go` opens the store with `SetViewedStore(viewed.Open(...))`, except
   under `--demo`; an unreadable file falls back to memory with a status warning.
+  The list fetch is scoped: `scopeRepos` (`commands.go`) asks only for the repository the list is
+  filtered to — at startup the checkout's own, set by `scopeToCheckout` before the first fetch — and
+  every repository when there is no filter. `loadedRepos` records, per fetch key, which repositories
+  `merged` holds. `selectRepo` and the answer of a fetch call `fetchUnloadedPullRequests`, which
+  fetches the repositories in scope that are not loaded and not just attempted (a failing repository
+  is not retried in a loop). `mergeFetched` replaces only the repositories a fetch covered. The Repos
+  panel shows an unloaded repository's count as unknown, and the All total too while any is missing
+  (`RepoList.MarkTotalUnknown`). The refresh tick refreshes the repositories in scope only; one
+  loaded earlier and now out of scope stays as it was until it is selected again — and is not
+  refetched then, because it counts as loaded.
   Opening a pull request lives in `create.go` on `N`: it starts from the checkout rather than from a pull
   request (the repository is the configured one this checkout's remotes name), reads its prefill in
   one command — `git.LastCommitSubject` for the title, `GetRepository` for the default branch,

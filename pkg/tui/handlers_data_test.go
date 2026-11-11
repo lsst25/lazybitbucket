@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,8 +17,15 @@ import (
 	"github.com/lsst25/lazybitbucket/pkg/tui/views"
 )
 
-// loadedMsg builds a pullRequestsLoadedMsg out of per-repository results.
+// loadedMsg builds a pullRequestsLoadedMsg out of per-repository results. An
+// unfiltered fetch answers for every repository, so the test repositories left
+// out are answered empty; otherwise the app would ask for them again.
 func loadedMsg(results ...bitbucket.RepoPullRequests) pullRequestsLoadedMsg {
+	for _, repo := range []string{testRepo, testRepo2} {
+		if !slices.ContainsFunc(results, func(r bitbucket.RepoPullRequests) bool { return r.Repo == repo }) {
+			results = append(results, bitbucket.RepoPullRequests{Repo: repo})
+		}
+	}
 	return pullRequestsLoadedMsg{fetchKey: testFetchKey, results: results}
 }
 
