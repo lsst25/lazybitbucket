@@ -460,6 +460,7 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 
 	app.detailView.SetSplash(app.splashInfo)
 	app.helpBar.SetItems(app.helpBarItems())
+	app.helpBar.SetVersion(Version)
 	return app
 }
 

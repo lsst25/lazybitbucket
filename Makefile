@@ -1,13 +1,18 @@
 .PHONY: build build-version build-demo lint lint-fix lint-docs vet test clean check check-demo tidy fix release preview e2e e2e-gen e2e-update nix-deps
 
+# The version comes from the git tag: v0.1.0 on a tag, 0.1.0-3-gabc1234 three
+# commits after it, abc1234 when there is no tag yet. Override with VERSION=...
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
+LDFLAGS = -X main.version=$(or $(VERSION),dev)
+
 build:
-	go build -o lazybitbucket ./cmd/lazybitbucket
+	go build -ldflags "$(LDFLAGS)" -o lazybitbucket ./cmd/lazybitbucket
 
 build-demo:
-	go build -tags demo -o lazybitbucket ./cmd/lazybitbucket
+	go build -tags demo -ldflags "$(LDFLAGS)" -o lazybitbucket ./cmd/lazybitbucket
 
-build-version:
-	go build -ldflags "-s -w -X main.version=$$(git rev-parse --short HEAD)" -o lazybitbucket ./cmd/lazybitbucket
+# Kept for the old name: build stamps the version too now.
+build-version: build
 
 lint:
 	go tool golangci-lint run ./...

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"runtime/debug"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -19,10 +20,12 @@ import (
 	"github.com/lsst25/lazybitbucket/pkg/viewed"
 )
 
-// version is set at build time via ldflags.
-var version = "dev"
+// version is set at build time via ldflags; main resolves what is shown.
+var version = devVersion
 
 func main() {
+	info, _ := debug.ReadBuildInfo()
+	version = resolveVersion(version, info)
 	os.Exit(dispatch(os.Args[1:], os.Stdout, os.Stderr))
 }
 

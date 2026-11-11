@@ -271,7 +271,11 @@ Go 1.25+ (toolchain declared in `go.mod`). Nix flake and goreleaser config are i
 - `upstream` → `git@github.com:textfuel/lazyjira.git`, so `git fetch upstream && git merge upstream/main`
   can still pull their fixes. `pkg/jira` no longer exists here, so upstream changes to it do not apply;
   expect conflicts in `pkg/tui` and `pkg/config` instead.
-- **No tags.** The 49 inherited upstream tags were deleted so releases can start clean.
+- **No tags yet.** The 49 inherited upstream tags were deleted so releases can start clean. The
+  version is the git tag: `make build` stamps `git describe --tags --always --dirty` into
+  `main.version` (`VERSION=...` overrides it), goreleaser stamps the tag, and `resolveVersion`
+  (`cmd/lazybitbucket/version.go`) falls back to the embedded build information for `go install`.
+  The version shows at the right end of the help bar (`HelpBar.SetVersion`) and on the splash.
 - `fetch.pruneTags = false` is set repo-locally on purpose. The global `~/.gitconfig` sets it to `true`,
   which forces an explicit `refs/tags/*` refspec onto every fetch and would re-sync all 49 upstream tags
   back on the next `git fetch upstream`. `--no-tags` cannot suppress that. Do not "clean up" this override.

@@ -14,6 +14,10 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Added
 
+- The version of the app shows in dim gray at the right end of the help bar. A narrow terminal drops
+  it so the hints keep their room. `make build` takes the version from the git tag (`git describe`),
+  and `lazybitbucket version` prints the same. A build without a tag shows the commit; `go install`
+  shows the module version
 - `v` marks a changed file as viewed, on the Files tab and in a file diff, and goes to the next file
   that you have not viewed; `v` on a viewed file clears the mark. The Files tab shows a green `✔`
   and counts the marks in its label (`Files (5 · 2 viewed)`). A push that changes a file removes its
