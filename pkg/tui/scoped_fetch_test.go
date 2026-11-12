@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -101,6 +102,52 @@ func TestFetchPullRequests_WithoutAFilterAsksForEveryRepository(t *testing.T) {
 	runAll(t, app, app.fetchPullRequests(testFetchKey))
 
 	testkit.AssertSliceEqual(t, "repositories asked", recorder.asked(), []string{testRepo, testRepo2})
+}
+
+// The list fetch asks listFetchConcurrency repositories at once. Every request
+// waits until that many are in flight, so a lower bound would leave them
+// waiting and the test would say how many did arrive.
+func TestFetchPullRequests_AsksTheRepositoriesAtOnce(t *testing.T) {
+	t.Parallel()
+	fake := &bitbuckettest.FakeClient{T: t}
+	app := sizedApp(t, fake)
+	app.fetched = prStore{}
+	app.repoSlugs = nil
+	for index := range listFetchConcurrency {
+		app.repoSlugs = append(app.repoSlugs, "repo-"+strconv.Itoa(index))
+	}
+
+	var mu sync.Mutex
+	inFlight := 0
+	allIn := make(chan struct{})
+	fake.ListPullRequestsFunc = func(
+		ctx context.Context, _, _ string, _ bitbucket.ListPullRequestsOptions,
+	) ([]bitbucket.PullRequest, error) {
+		mu.Lock()
+		inFlight++
+		if inFlight == listFetchConcurrency {
+			close(allIn)
+		}
+		mu.Unlock()
+		select {
+		case <-allIn:
+			return nil, nil
+		case <-time.After(2 * time.Second):
+			return nil, errors.New("the other requests did not start")
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	msg, ok := app.fetchPullRequests(testFetchKey)().(pullRequestsLoadedMsg)
+
+	testkit.AssertEqual(t, "a list answer", ok, true)
+	testkit.AssertEqual(t, "repositories answered", len(msg.results), listFetchConcurrency)
+	for _, result := range msg.results {
+		if result.Err != nil {
+			t.Errorf("%s: %v", result.Repo, result.Err)
+		}
+	}
 }
 
 func TestSelectRepo_FetchesAnUnloadedRepositoryOnce(t *testing.T) {

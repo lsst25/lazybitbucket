@@ -9,11 +9,12 @@ import (
 	"sync"
 )
 
-// defaultFetchConcurrency is how many repositories FetchPullRequests queries at
-// once. Bitbucket allows roughly 1,000 requests per hour against
-// /2.0/repositories/* and asks for bounded concurrency, and the TUI runs its
-// own prefetch and preview streams alongside this one, so two is deliberate
-// rather than a placeholder.
+// defaultFetchConcurrency is how many repositories FetchPullRequests and
+// FetchPipelines query at once when the caller names no number. Bitbucket
+// allows roughly 1,000 requests per hour against /2.0/repositories/* and asks
+// for bounded concurrency, so the default is cautious. A caller that has
+// measured a higher number passes it: the TUI does for the pull request list
+// (see listFetchConcurrency in pkg/tui).
 const defaultFetchConcurrency = 2
 
 // RepoPullRequests is one repository's slice of a cross-repository fetch.

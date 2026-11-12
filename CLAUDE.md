@@ -184,7 +184,9 @@ What exists:
   too while any is missing (`RepoList.MarkTotalUnknown`). The refresh tick refreshes the
   repositories in scope only, which is also what `warnRefreshRate` counts. Unit tests start with
   both test repositories marked as read (`newAppWithFake`); a test of the scoped fetch itself
-  starts from an empty store (`scopedApp`).
+  starts from an empty store (`scopedApp`). A list fetch asks `listFetchConcurrency` = 8
+  repositories at once (measured the same day as the prefetch below); the client's own default
+  stays two, and the pipelines list still uses it — that one was not measured.
   The builds column is filled by the status prefetch: `startPrefetch` queues the stale rows **on
   screen** (`VisiblePullRequests`, at most `prefetchLimit` = 15) and `pumpPrefetch` keeps
   `prefetchConcurrency` requests in flight, which is all 15 — measured 2026-11-12: fifteen at once

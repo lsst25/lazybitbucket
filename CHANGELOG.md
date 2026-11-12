@@ -12,6 +12,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - The build results of the rows in the list arrive together. The status requests for the first 15
   rows now run at the same time, not one after the other, so the builds column is complete about
   0.6 s after the list and not 5 s after it. The number of requests is the same
+- The pull request list asks up to eight repositories at the same time, not two. With eight
+  repositories and no repository filter, the rows show after about 1.5 s and not 3 s. The step from
+  one repository to All repositories gains the same
 - The rows whose build results are read ahead are the rows on screen. With a repository filter set,
   the rows that the filter hides no longer take the place of the visible ones
 
