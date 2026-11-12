@@ -7,6 +7,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-12
+
 ### Fixed
 
 - The pull request list reads the repository that is in scope from every place that changes the tab
@@ -772,7 +774,8 @@ one are upstream lazyjira history, and their compare links still point at upstre
 - Cross-platform: macOS, Linux, Windows
 - Homebrew install via tap
 
-[Unreleased]: https://github.com/lsst25/lazybitbucket/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/lsst25/lazybitbucket/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/lsst25/lazybitbucket/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/lsst25/lazybitbucket/tree/v0.1.0
 [2.19.2]: https://github.com/textfuel/lazyjira/compare/v2.19.1...v2.19.2
 [2.19.1]: https://github.com/textfuel/lazyjira/compare/v2.19.0...v2.19.1
