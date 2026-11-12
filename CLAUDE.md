@@ -171,14 +171,20 @@ What exists:
   under `--demo`; an unreadable file falls back to memory with a status warning.
   The list fetch is scoped: `scopeRepos` (`commands.go`) asks only for the repository the list is
   filtered to — at startup the checkout's own, set by `scopeToCheckout` before the first fetch — and
-  every repository when there is no filter. `loadedRepos` records, per fetch key, which repositories
-  `merged` holds. `selectRepo` and the answer of a fetch call `fetchUnloadedPullRequests`, which
-  fetches the repositories in scope that are not loaded and not just attempted (a failing repository
-  is not retried in a loop). `mergeFetched` replaces only the repositories a fetch covered. The Repos
-  panel shows an unloaded repository's count as unknown, and the All total too while any is missing
-  (`RepoList.MarkTotalUnknown`). The refresh tick refreshes the repositories in scope only; one
-  loaded earlier and now out of scope stays as it was until it is selected again — and is not
-  refetched then, because it counts as loaded.
+  every repository when there is no filter. The answers live in `fetched` (`prStore`, `pr_store.go`):
+  per fetch key and per repository, **under the slug that was asked for** and with the time they
+  arrived; `merged` is derived from it by `rebuildMerged`, so anything that must survive a rebuild
+  (`patchMerged`, `addToOpenTabs`) writes the store too. `ensureScopeLoaded` is the one rule: the
+  list holds, for the tab in view, every repository in scope, none older than `refreshInterval`
+  (`repoDue`). Whatever changes the tab or the scope calls it rather than deciding for itself —
+  `selectRepo` in both views, `afterTabSwitch` (keys and mouse), `switchView` on the way back to the
+  pull requests, `L`, and the answer of a fetch, which passes the repositories it has just covered
+  so a failing one is not retried in a loop. A new place that changes the tab or the filter must
+  call it too. The Repos panel shows an unloaded repository's count as unknown, and the All total
+  too while any is missing (`RepoList.MarkTotalUnknown`). The refresh tick refreshes the
+  repositories in scope only, which is also what `warnRefreshRate` counts. Unit tests start with
+  both test repositories marked as read (`newAppWithFake`); a test of the scoped fetch itself
+  starts from an empty store (`scopedApp`).
   Opening a pull request lives in `create.go` on `N`: it starts from the checkout rather than from a pull
   request (the repository is the configured one this checkout's remotes name), reads its prefill in
   one command — `git.LastCommitSubject` for the title, `GetRepository` for the default branch,

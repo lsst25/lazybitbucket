@@ -327,9 +327,12 @@ func (a *App) handleTabAction(action Action) (tea.Model, tea.Cmd, bool) {
 }
 
 // afterTabSwitch fetches the new tab when nothing has been loaded for it, and
-// otherwise just previews whatever the cursor landed on. It goes through
+// otherwise previews whatever the cursor landed on. It goes through
 // refreshCmd so a tab switch also re-runs repository discovery when that is
-// what left the list empty.
+// what left the list empty. A tab that is loaded may still lack the
+// repositories now in scope — the filter can change while another tab is in
+// view, and tabs with different fetch keys do not share rows — so the scope is
+// checked either way.
 func (a *App) afterTabSwitch() tea.Cmd {
 	// Picking a tab is taking the cursor: the branch auto-selection must not
 	// move it, nor pull the user back to another tab, after this.
@@ -337,7 +340,7 @@ func (a *App) afterTabSwitch() tea.Cmd {
 	if !a.prList.HasCachedTab() {
 		return a.refreshCmd()
 	}
-	return tea.Batch(a.previewSelected(), a.startPrefetch())
+	return tea.Batch(a.previewSelected(), a.startPrefetch(), a.ensureScopeLoaded(nil))
 }
 
 // handleReviewAction is the detail panel's own key set: the four tab jumps, the

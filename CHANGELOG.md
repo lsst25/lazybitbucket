@@ -216,6 +216,17 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Fixed
 
+- The pull request list reads the repository that is in scope from every place that changes the tab
+  or the repository filter. Before, a repository picked in the pipelines view left the pull request
+  list empty after the switch back, `L` on a run of that repository said `is not in this tab`, and a
+  tab with its own state or query kept the rows of the old scope. `L` now says that the pull request
+  is still loading while its repository is read
+- A refresh replaces the rows of a repository under the name that was asked for. A repository whose
+  pull requests spell the slug differently no longer gains the same rows again on each refresh
+- A repository that was out of scope for longer than `refreshInterval` is read again when you return
+  to it. Before, it kept the rows of its first read
+- The warning about a short `refreshInterval` counts the repositories that the refresh reads, which
+  are the ones in scope, and goes away when the scope becomes small enough
 - A resolved conversation is recognised as resolved. Bitbucket marks one in a collection by sending
   `"resolution": {}` — the object, with every member stripped — and sends no resolution member at all
   on a conversation that is open, so reading the members to decide (as this did) made every resolved

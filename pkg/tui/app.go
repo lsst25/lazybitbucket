@@ -176,15 +176,16 @@ type App struct {
 	// because repoSlugs was never populated.
 	repoDiscoveryFailed bool
 
-	// merged holds the unfiltered MergePullRequests result per fetch key
-	// ("<state>|<query>"). Every tab sharing a key re-filters from here rather
-	// than costing another request.
+	// fetched holds every list answer per fetch key ("<state>|<query>") and
+	// per repository, with the time it arrived. A start inside a checkout
+	// fetches only that repository, so it is usually a part of the whole until
+	// the user widens the view (see ensureScopeLoaded).
+	fetched prStore
+	// merged is the flat, ordered list per fetch key, derived from fetched by
+	// rebuildMerged. Every tab sharing a key re-filters from here rather than
+	// costing another request.
 	merged   map[string][]bitbucket.PullRequest
 	inFlight map[string]bool
-	// loadedRepos records, per fetch key, the repositories whose pull requests
-	// are in merged. A start inside a checkout fetches only that repository, so
-	// merged is usually a part of the whole until the user widens the view.
-	loadedRepos map[string]map[string]bool
 
 	prCache       map[string]*bitbucket.PullRequest
 	statusCache   map[string]statusEntry
@@ -242,6 +243,9 @@ type App struct {
 
 	repoFilter   string
 	refreshEvery time.Duration
+	// refreshRateWarned records that the status warning on show is the refresh
+	// rate one, so warnRefreshRate clears only what it set.
+	refreshRateWarned bool
 
 	// rateLimit stores remaining+1 so the zero value reads as "unknown". It is
 	// written from the client's request callback, which runs on whatever
@@ -430,9 +434,7 @@ func NewAppWithAuth(cfg *config.Config, client bitbucket.ClientInterface, authMe
 	} else {
 		app.setWarning("refresh interval: " + err.Error())
 	}
-	if warning := refreshRateWarning(len(app.repoSlugs), app.refreshEvery); warning != "" {
-		app.setWarning(warning)
-	}
+	app.warnRefreshRate()
 
 	app.inTmux = os.Getenv("TMUX") != ""
 
@@ -474,6 +476,22 @@ func refreshRateWarning(repos int, every time.Duration) string {
 		return fmt.Sprintf("refresh interval too short for %d repositories", repos)
 	}
 	return ""
+}
+
+// warnRefreshRate checks the refresh interval against the repositories the
+// tick refreshes, which are the ones in scope and not every repository on the
+// list. The scope changes with the repository filter, so the warning is taken
+// back when it no longer holds; a warning about something else is left alone.
+func (a *App) warnRefreshRate() {
+	warning := refreshRateWarning(len(a.scopeRepos()), a.refreshEvery)
+	switch {
+	case warning != "":
+		a.setWarning(warning)
+		a.refreshRateWarned = true
+	case a.refreshRateWarned:
+		a.setWarning("")
+		a.refreshRateWarned = false
+	}
 }
 
 // rateLimitNoteBelow mirrors the threshold views.StatusPanel renders its

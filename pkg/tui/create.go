@@ -120,8 +120,11 @@ type createDescriptionEditedMsg struct {
 
 // pullRequestCreatedMsg is the created pull request, or why it could not be.
 type pullRequestCreatedMsg struct {
-	pr  *bitbucket.PullRequest
-	err error
+	pr *bitbucket.PullRequest
+	// slug is the repository the create was sent to, which is the name the
+	// list holds that repository's rows under.
+	slug string
+	err  error
 }
 
 // handleActionCreate starts the flow: the guards, then one command that reads
@@ -546,7 +549,7 @@ func (a *App) submitCreate(pending *pendingCreate) tea.Cmd {
 	a.logFlag.Store(true)
 	return func() tea.Msg {
 		created, err := client.CreatePullRequest(ctx, workspace, slug, create)
-		return pullRequestCreatedMsg{pr: created, err: err}
+		return pullRequestCreatedMsg{pr: created, slug: slug, err: err}
 	}
 }
 
@@ -565,7 +568,7 @@ func (a *App) handlePullRequestCreated(msg pullRequestCreatedMsg) (tea.Model, te
 	created := msg.pr
 	a.statusPanel.SetOnline(true)
 	a.prCache[created.Key()] = created
-	a.addToOpenTabs(created)
+	a.addToOpenTabs(msg.slug, created)
 	a.helpBar.SetStatusMsg("opened #" + strconv.Itoa(created.ID))
 
 	if !a.prList.SelectByKey(created.Key()) {
@@ -582,18 +585,18 @@ func (a *App) handlePullRequestCreated(msg pullRequestCreatedMsg) (tea.Model, te
 // the state it asked for (see fetchKeyOf), and a pull request that has just
 // been opened belongs to exactly the lists that asked for open ones; the tabs'
 // own Mine and Reviewing filters then decide which of them shows it.
-func (a *App) addToOpenTabs(created *bitbucket.PullRequest) {
-	for key, list := range a.merged {
-		state, _, _ := strings.Cut(key, "|")
-		if !strings.EqualFold(state, string(bitbucket.PullRequestOpen)) {
-			continue
-		}
-		if slices.ContainsFunc(list, func(pr bitbucket.PullRequest) bool {
-			return pr.Key() == created.Key()
-		}) {
-			continue
-		}
-		a.merged[key] = append([]bitbucket.PullRequest{*created}, list...)
+//
+// It goes into the store under slug, the repository it was created in, and the
+// flat lists are rebuilt from there: a row put only into a flat list would be
+// gone at the next rebuild. A list that has not loaded that repository is left
+// alone, and gets the pull request with the rest when it does.
+func (a *App) addToOpenTabs(slug string, created *bitbucket.PullRequest) {
+	open := func(fetchKey string) bool {
+		state, _, _ := strings.Cut(fetchKey, "|")
+		return strings.EqualFold(state, string(bitbucket.PullRequestOpen))
+	}
+	for _, fetchKey := range a.fetched.add(slug, created, open) {
+		a.rebuildMerged(fetchKey)
 	}
 	a.refilterTabs("")
 }

@@ -90,9 +90,7 @@ func (a *App) handleReposLoaded(msg reposLoadedMsg) (tea.Model, tea.Cmd) {
 			a.setWarning("showing the first 25 repositories — set bitbucket.repositories to choose")
 		}
 	}
-	if warning := refreshRateWarning(len(a.repoSlugs), a.refreshEvery); warning != "" {
-		a.setWarning(warning)
-	}
+	a.warnRefreshRate()
 	if a.detailView.Mode() == views.ModeSplash {
 		a.showSplash()
 	}
@@ -136,10 +134,7 @@ func (a *App) handlePullRequestsLoaded(msg pullRequestsLoadedMsg) (tea.Model, te
 		a.statusPanel.SetError("")
 	}
 
-	if a.merged == nil {
-		a.merged = make(map[string][]bitbucket.PullRequest)
-	}
-	a.merged[msg.fetchKey] = a.mergeFetched(msg.fetchKey, msg.results)
+	a.storeFetched(msg.fetchKey, msg.results)
 	a.refilterTabs(msg.fetchKey)
 
 	if a.fetchKeyOf(a.prList.GetTabIndex()) != msg.fetchKey {
@@ -151,11 +146,11 @@ func (a *App) handlePullRequestsLoaded(msg pullRequestsLoadedMsg) (tea.Model, te
 	var cmds []tea.Cmd
 	// The user may have widened the view while this fetch was in flight; that
 	// request was dropped, so ask for what the view needs and this did not cover.
-	attempted := make(map[string]bool, len(msg.results))
+	answered := make(map[string]bool, len(msg.results))
 	for _, result := range msg.results {
-		attempted[result.Repo] = true
+		answered[result.Repo] = true
 	}
-	if cmd := a.fetchUnloadedPullRequests(msg.fetchKey, attempted); cmd != nil {
+	if cmd := a.ensureScopeLoaded(answered); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	if cmd := a.autoSelectGitBranch(); cmd != nil {
@@ -169,59 +164,20 @@ func (a *App) handlePullRequestsLoaded(msg pullRequestsLoadedMsg) (tea.Model, te
 	return a, tea.Batch(cmds...)
 }
 
-// mergeFetched folds one fetch into what is already held for its key. The
-// repositories the fetch covered are replaced by its answer, so a closed pull
-// request leaves the list; the ones it did not cover keep their rows, because a
-// scoped fetch asks for one repository and must not empty the others.
-func (a *App) mergeFetched(fetchKey string, results []bitbucket.RepoPullRequests) []bitbucket.PullRequest {
-	if a.loadedRepos == nil {
-		a.loadedRepos = make(map[string]map[string]bool)
-	}
-	if a.loadedRepos[fetchKey] == nil {
-		a.loadedRepos[fetchKey] = make(map[string]bool)
-	}
-
-	covered := make(map[string]bool, len(results))
-	for _, result := range results {
-		covered[result.Repo] = true
-		a.loadedRepos[fetchKey][result.Repo] = result.Err == nil
-	}
-
-	var order []string
-	kept := make(map[string][]bitbucket.PullRequest)
-	for _, pr := range a.merged[fetchKey] {
-		slug := pr.RepoSlug()
-		if covered[slug] {
-			continue
-		}
-		if _, seen := kept[slug]; !seen {
-			order = append(order, slug)
-		}
-		kept[slug] = append(kept[slug], pr)
-	}
-
-	all := slices.Clone(results)
-	for _, slug := range order {
-		all = append(all, bitbucket.RepoPullRequests{Repo: slug, PullRequests: kept[slug], Err: nil})
-	}
-	return bitbucket.MergePullRequests(all)
-}
-
 // updateRepoCounts shows the open count of every repository this key has
 // loaded. A repository that is not loaded stays unknown, and so does the All
 // total while any repository is missing, because a partial sum would read as
 // the whole.
 func (a *App) updateRepoCounts(fetchKey string) {
-	counts := countsBySlug(a.merged[fetchKey])
+	counts := make(map[string]int, len(a.repoSlugs))
 	complete := true
 	for _, slug := range a.repoSlugs {
-		if !a.loadedRepos[fetchKey][slug] {
+		rows, loaded := a.fetched.get(fetchKey, slug)
+		if !loaded {
 			complete = false
 			continue
 		}
-		if _, ok := counts[slug]; !ok {
-			counts[slug] = 0
-		}
+		counts[slug] = len(rows.prs)
 	}
 	a.repoList.SetCounts(counts)
 	if !complete {
@@ -347,8 +303,12 @@ func (a *App) handlePullRequestDetailLoaded(msg pullRequestDetailLoadedMsg) (tea
 
 // patchMerged replaces a pull request wherever a fetch result holds it, so the
 // tab filters re-evaluate against the review data that just arrived rather
-// than against the list row it was missing from.
+// than against the list row it was missing from. The store is patched as well
+// as the flat lists: a rebuild must not bring the old row back, and the flat
+// lists are patched in place rather than rebuilt so the rows keep their order
+// under the cursor.
 func (a *App) patchMerged(pr *bitbucket.PullRequest) {
+	a.fetched.patch(pr)
 	key := pr.Key()
 	for _, prs := range a.merged {
 		for index := range prs {
@@ -589,18 +549,15 @@ func (a *App) selectRepo(item *views.RepoItem) tea.Cmd {
 	a.side = sideLeft
 	a.leftFocus = a.mainPanel()
 	a.updateFocusState()
+	a.warnRefreshRate()
 	if a.view == viewPipelines {
 		// The list is fetched per repository, so narrowing it is a new fetch
-		// rather than a client-side filter.
-		return a.fetchPipelines()
+		// rather than a client-side filter. The pull request list behind this
+		// view follows the same filter, so it is brought to the new scope too:
+		// it is what L and the switch back land on.
+		return tea.Batch(a.fetchPipelines(), a.ensureScopeLoaded(nil))
 	}
-	// A repository the view has not shown yet is fetched now; one already
-	// loaded is shown as it is and left to the refresh tick.
-	return tea.Batch(
-		a.previewSelected(),
-		a.startPrefetch(),
-		a.fetchUnloadedPullRequests(a.fetchKeyOf(a.prList.GetTabIndex()), nil),
-	)
+	return tea.Batch(a.previewSelected(), a.startPrefetch(), a.ensureScopeLoaded(nil))
 }
 
 // openBuild drills into a build status: its pipeline run when the status names
@@ -771,13 +728,4 @@ func (a *App) pullRequestByKey(key string) *bitbucket.PullRequest {
 func pipelineCacheKey(prKey string, build int) string {
 	repo, _, _ := strings.Cut(prKey, "#")
 	return repo + "#" + strconv.Itoa(build)
-}
-
-// countsBySlug counts pull requests per repository for the Repos panel.
-func countsBySlug(prs []bitbucket.PullRequest) map[string]int {
-	counts := make(map[string]int)
-	for index := range prs {
-		counts[prs[index].RepoSlug()]++
-	}
-	return counts
 }

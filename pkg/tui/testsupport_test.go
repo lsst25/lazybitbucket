@@ -77,6 +77,14 @@ func newAppWithFake(t *testing.T, fake *bitbuckettest.FakeClient) *App {
 	app.logPanel = views.NewLogPanel()
 	app.merged = map[string][]bitbucket.PullRequest{}
 	app.inFlight = map[string]bool{}
+	// Both repositories count as read for the default tab, the state most
+	// tests start from: they put rows straight into merged or the list, and a
+	// view switch or a repository pick must then not go looking for them. A
+	// test about the scoped fetch itself starts from an empty store instead
+	// (scopedApp).
+	for _, repo := range app.repoSlugs {
+		app.fetched.put(testFetchKey, repo, nil, testNow)
+	}
 	app.prCache = map[string]*bitbucket.PullRequest{}
 	app.statusCache = map[string]statusEntry{}
 	app.pipelineCache = map[string]*pipelineEntry{}

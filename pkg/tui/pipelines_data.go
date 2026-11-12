@@ -302,8 +302,17 @@ func (a *App) handleActionOpenPullRequest() tea.Cmd {
 		return nil
 	}
 	key := a.workspace + "/" + entry.Repo + "#" + strconv.Itoa(target.ID)
+	number := "pull request #" + strconv.Itoa(target.ID)
 	if !a.prList.SelectByKey(key) {
-		a.helpBar.SetStatusMsg("pull request #" + strconv.Itoa(target.ID) + " is not in this tab")
+		// A miss means "not in this tab" only once the tab holds the whole
+		// scope. While the run's repository is still being read, saying so
+		// would be wrong, and the key works as soon as the answer is in.
+		cmd := a.ensureScopeLoaded(nil)
+		if cmd != nil || a.inFlight[a.fetchKeyOf(a.prList.GetTabIndex())] {
+			a.helpBar.SetStatusMsg(number + " is still loading — try again in a moment")
+			return cmd
+		}
+		a.helpBar.SetStatusMsg(number + " is not in this tab")
 		return nil
 	}
 
@@ -312,5 +321,5 @@ func (a *App) handleActionOpenPullRequest() tea.Cmd {
 	a.leftFocus = focusPullRequests
 	a.applyView()
 	a.updateFocusState()
-	return a.previewSelected()
+	return tea.Batch(a.previewSelected(), a.ensureScopeLoaded(nil))
 }

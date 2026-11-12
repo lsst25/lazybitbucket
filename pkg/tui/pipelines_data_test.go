@@ -374,7 +374,7 @@ func TestPipelineEnter_FocusesTheDetailAndOpensAStepLog(t *testing.T) {
 	}
 }
 
-func TestPipelineOpenPullRequest_ItsThreeOutcomes(t *testing.T) {
+func TestPipelineOpenPullRequest_ItsOutcomes(t *testing.T) {
 	t.Parallel()
 
 	t.Run("the pull request is on the tab in view", func(t *testing.T) {
@@ -417,6 +417,39 @@ func TestPipelineOpenPullRequest_ItsThreeOutcomes(t *testing.T) {
 		if got := plain(app.helpBar.View()); !strings.Contains(got, "pull request #201 is not in this tab") {
 			t.Errorf("help bar = %q, want the not-in-this-tab refusal", got)
 		}
+	})
+
+	// A miss is only "not in this tab" once the tab holds the scope. Before
+	// that the key starts the read and says so, and works when it is in.
+	t.Run("the repository of the run is not read yet", func(t *testing.T) {
+		t.Parallel()
+		fake := &bitbuckettest.FakeClient{T: t}
+		stubPipelineList(fake)
+		stubPreview(fake)
+		fake.ListPullRequestsFunc = func(
+			_ context.Context, _, repo string, _ bitbucket.ListPullRequestsOptions,
+		) ([]bitbucket.PullRequest, error) {
+			if repo == testRepo2 {
+				return []bitbucket.PullRequest{newPR(testRepo2, 201, testTitle)}, nil
+			}
+			return nil, nil
+		}
+		app := loadedPipelinesApp(t, fake)
+		app.fetched = prStore{}
+
+		_, cmd := app.Update(runeKey('L'))
+
+		testkit.AssertEqual(t, "the view did not move yet", app.view, viewPipelines)
+		if got := plain(app.helpBar.View()); !strings.Contains(got, "pull request #201 is still loading") {
+			t.Errorf("help bar = %q, want the still-loading note", got)
+		}
+		runAll(t, app, cmd)
+
+		_, cmd = app.Update(runeKey('L'))
+		runAll(t, app, cmd)
+
+		testkit.AssertEqual(t, "view", app.view, viewPullRequests)
+		testkit.AssertEqual(t, "selection", app.prList.SelectedPullRequest().ID, 201)
 	})
 
 	t.Run("the run is not a pull request build", func(t *testing.T) {

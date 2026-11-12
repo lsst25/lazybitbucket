@@ -142,6 +142,9 @@ func (a *App) switchView() tea.Cmd {
 		cmds = append(cmds, a.showSelectedRun())
 	} else {
 		a.showPreviewedPullRequest()
+		// The repository filter is shared with the pipelines view and may have
+		// changed there, and the tick may have passed over what is in scope now.
+		cmds = append(cmds, a.ensureScopeLoaded(nil))
 	}
 
 	a.updateFocusState()

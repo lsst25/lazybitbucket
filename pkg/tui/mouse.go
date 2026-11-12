@@ -131,8 +131,8 @@ func (a *App) mouseClick(panel panelID, relY, x int) (tea.Model, tea.Cmd) {
 		a.userTookTheCursor()
 		if relY == 0 {
 			// Title bar — tab click.
-			if a.prList.ClickTabAt(x) && !a.prList.HasCachedTab() {
-				return a, a.refreshCmd()
+			if a.prList.ClickTabAt(x) {
+				return a, a.afterTabSwitch()
 			}
 			return a, a.previewSelected()
 		}

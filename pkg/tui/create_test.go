@@ -49,7 +49,7 @@ func createApp(t *testing.T, fake *bitbuckettest.FakeClient) *App {
 	app.gitRemoteRepos = []string{testWorkspace + "/" + testRepo}
 	// A loaded, empty Open tab: a create puts what it opened into the lists
 	// that are already in hand, and there is nothing to put it into otherwise.
-	app.merged[testFetchKey] = []bitbucket.PullRequest{}
+	app.storeFetched(testFetchKey, []bitbucket.RepoPullRequests{{Repo: testRepo}})
 	app.refilterTabs("")
 	return app
 }
@@ -464,20 +464,31 @@ func TestCreate_TheNewPullRequestLandsInTheOpenTabs(t *testing.T) {
 	fake := &bitbuckettest.FakeClient{T: t}
 	app := createApp(t, fake)
 	existing := newPR(testRepo, 101, testTitle)
-	app.merged["OPEN|"] = []bitbucket.PullRequest{existing}
-	app.merged["MERGED|"] = []bitbucket.PullRequest{existing}
+	for _, fetchKey := range []string{"OPEN|", "MERGED|"} {
+		app.storeFetched(fetchKey, []bitbucket.RepoPullRequests{
+			{Repo: testRepo, PullRequests: []bitbucket.PullRequest{existing}},
+		})
+	}
+	// An open list that has not read the repository is not given one row of it.
+	app.storeFetched("OPEN|label", []bitbucket.RepoPullRequests{{Repo: testRepo2}})
 
 	created := newPR(testRepo, 104, "Add a token bucket rate limiter")
-	app.addToOpenTabs(&created)
+	app.addToOpenTabs(testRepo, &created)
 
 	testkit.AssertEqual(t, "open tab", len(app.merged["OPEN|"]), 2)
 	testkit.AssertEqual(t, "newest first", app.merged["OPEN|"][0].ID, 104)
 	// A merged-state tab is not a list a new pull request belongs to.
 	testkit.AssertEqual(t, "merged tab", len(app.merged["MERGED|"]), 1)
+	testkit.AssertEqual(t, "list without the repository", len(app.merged["OPEN|label"]), 0)
 
 	// Applying the same answer twice must not double it.
-	app.addToOpenTabs(&created)
+	app.addToOpenTabs(testRepo, &created)
 	testkit.AssertEqual(t, "open tab after a second apply", len(app.merged["OPEN|"]), 2)
+
+	// A later answer for another repository rebuilds the list; the new pull
+	// request must still be in it.
+	app.storeFetched("OPEN|", []bitbucket.RepoPullRequests{{Repo: testRepo2}})
+	testkit.AssertEqual(t, "open tab after a rebuild", len(app.merged["OPEN|"]), 2)
 }
 
 func TestDemo_CreateOpensAPullRequestThroughTheRealRoutes(t *testing.T) {

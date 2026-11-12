@@ -579,19 +579,6 @@ func TestCurrentPullRequest_PrefersThePreview(t *testing.T) {
 	}
 }
 
-func TestCountsBySlug(t *testing.T) {
-	t.Parallel()
-
-	counts := countsBySlug([]bitbucket.PullRequest{
-		newPR(testRepo, 101, testTitle),
-		newPR(testRepo, 102, "second"),
-		newPR(testRepo2, 40, "third"),
-	})
-
-	testkit.AssertEqual(t, testRepo, counts[testRepo], 2)
-	testkit.AssertEqual(t, testRepo2, counts[testRepo2], 1)
-}
-
 func stillOnline(app *App) bool {
 	return !containsPlain(app.View(), "✗")
 }
