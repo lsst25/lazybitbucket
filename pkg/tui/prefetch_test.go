@@ -25,7 +25,7 @@ func prefetchApp(t *testing.T, fake *bitbuckettest.FakeClient) *App {
 	return app
 }
 
-func TestStartPrefetch_QueuesTheStaleRowsAndChainsOneAtATime(t *testing.T) {
+func TestStartPrefetch_AsksForEveryStaleRowAtOnce(t *testing.T) {
 	t.Parallel()
 	fake := &bitbuckettest.FakeClient{T: t}
 	fake.ListPullRequestStatusesFunc = func(_ context.Context, _, repo string, _ int,
@@ -36,17 +36,30 @@ func TestStartPrefetch_QueuesTheStaleRowsAndChainsOneAtATime(t *testing.T) {
 
 	cmd := app.startPrefetch()
 
-	testkit.AssertEqual(t, "epoch bumped", app.prefetchEpoch, 1)
-	testkit.AssertEqual(t, "queue length after the head is popped", len(app.prefetchQueue), 2)
+	testkit.AssertEqual(t, "every row is in flight", len(app.prefetching), 3)
+	testkit.AssertEqual(t, "nothing waits in the queue", len(app.prefetchQueue), 0)
 	if cmd == nil {
-		t.Fatal("startPrefetch should have started the chain")
+		t.Fatal("startPrefetch should have started the requests")
 	}
 
 	runAll(t, app, cmd)
 
 	testkit.AssertEqual(t, "one request per row", fake.CallCount("ListPullRequestStatuses"), 3)
-	testkit.AssertEqual(t, "queue drained", len(app.prefetchQueue), 0)
+	testkit.AssertEqual(t, "nothing left in flight", len(app.prefetching), 0)
 	testkit.AssertEqual(t, "cached rows", len(app.statusCache), 3)
+}
+
+// The rows that are warmed are the ones on screen: with a repository filter
+// set, a row the filter hides is not worth a request.
+func TestStartPrefetch_WarmsOnlyTheRowsOnScreen(t *testing.T) {
+	t.Parallel()
+	app := prefetchApp(t, &bitbuckettest.FakeClient{T: t})
+	app.prList.SetRepoFilter(testRepo2)
+
+	_ = app.startPrefetch()
+
+	testkit.AssertEqual(t, "rows in flight", len(app.prefetching), 1)
+	testkit.AssertEqual(t, "the visible row", app.prefetching[testWorkspace+"/"+testRepo2+"#40"], true)
 }
 
 func TestStartPrefetch_SkipsRowsWhoseStatusesAreFresh(t *testing.T) {
@@ -81,35 +94,79 @@ func TestStartPrefetch_StopsAtTheLimit(t *testing.T) {
 
 	_ = app.startPrefetch()
 
-	// One is already popped by prefetchNext.
-	testkit.AssertEqual(t, "queue capped", len(app.prefetchQueue), prefetchLimit-1)
+	testkit.AssertEqual(t, "requests capped", len(app.prefetching), prefetchLimit)
+	testkit.AssertEqual(t, "nothing queued past the limit", len(app.prefetchQueue), 0)
+
+	// A refill while those are in flight asks for nothing twice, and the rows
+	// in flight still count against the limit.
+	cmd := app.startPrefetch()
+
+	if cmd != nil {
+		t.Error("a refill must not ask again for rows that are in flight")
+	}
+	testkit.AssertEqual(t, "still capped", len(app.prefetching), prefetchLimit)
+	testkit.AssertEqual(t, "still nothing queued", len(app.prefetchQueue), 0)
 }
 
-func TestPrefetch_StaleEpochResultIsDroppedAndBreaksTheChain(t *testing.T) {
+// A refill does not cancel what is in flight, so the pool is what keeps a
+// second batch from being stacked on the first: it waits in the queue, and
+// each answer lets one more through.
+func TestPrefetch_APoolThatIsFullMakesTheNextBatchWait(t *testing.T) {
+	t.Parallel()
+	app := sizedApp(t, &bitbuckettest.FakeClient{T: t})
+	batch := func(first int) []bitbucket.PullRequest {
+		prs := make([]bitbucket.PullRequest, prefetchLimit)
+		for i := range prs {
+			prs[i] = withAuthor(newPR(testRepo, first+i, testTitle), testUserUUID)
+		}
+		return prs
+	}
+	firstBatch := batch(100)
+	app.prList.SetPullRequests(firstBatch)
+	_ = app.startPrefetch()
+
+	app.prList.SetPullRequests(batch(500))
+	cmd := app.startPrefetch()
+
+	if cmd != nil {
+		t.Error("a full pool must not start more requests")
+	}
+	testkit.AssertEqual(t, "second batch waits", len(app.prefetchQueue), prefetchLimit)
+
+	_, cmd = app.Update(prefetchedMsg{key: firstBatch[0].Key()})
+
+	if cmd == nil {
+		t.Error("an answer must let the next request through")
+	}
+	testkit.AssertEqual(t, "pool full again", len(app.prefetching), prefetchConcurrency)
+	testkit.AssertEqual(t, "one less waits", len(app.prefetchQueue), prefetchLimit-1)
+}
+
+// Every cache a prefetch fills is keyed by the pull request, so an answer is
+// worth keeping whatever the list shows when it arrives.
+func TestPrefetch_AnAnswerForARowThatLeftTheScreenIsKept(t *testing.T) {
 	t.Parallel()
 	app := prefetchApp(t, &bitbuckettest.FakeClient{T: t})
-	app.prefetchEpoch = 4
+	_ = app.startPrefetch()
+	app.prList.SetRepoFilter(testRepo2)
+	_ = app.startPrefetch()
 
-	_, cmd := app.Update(prefetchedMsg{
+	_, _ = app.Update(prefetchedMsg{
 		key:      testPRKey,
-		epoch:    1,
 		statuses: []bitbucket.CommitStatus{newStatus(testRepo, 412, bitbucket.StatusSuccessful)},
 	})
 
-	if cmd != nil {
-		t.Error("a superseded prefetch result must not continue the chain")
+	if _, ok := app.statusCache[testPRKey]; !ok {
+		t.Error("the answer of a request that was already sent must reach the cache")
 	}
-	if _, ok := app.statusCache[testPRKey]; ok {
-		t.Error("a superseded prefetch result must not reach the cache")
-	}
+	testkit.AssertEqual(t, "no longer in flight", app.prefetching[testPRKey], false)
 }
 
 func TestPrefetch_ErrorsAreSilent(t *testing.T) {
 	t.Parallel()
 	app := prefetchApp(t, &bitbuckettest.FakeClient{T: t})
-	app.prefetchEpoch = 1
 
-	_, _ = app.Update(prefetchedMsg{key: testPRKey, epoch: 1, err: errors.New(testBoom)})
+	_, _ = app.Update(prefetchedMsg{key: testPRKey, err: errors.New(testBoom)})
 
 	testkit.AssertEqual(t, "status untouched", app.statusPanel.ErrorMessage(), "")
 	if _, ok := app.statusCache[testPRKey]; ok {
@@ -121,11 +178,10 @@ func TestPrefetch_ArrivingReviewDataRefiltersTheTabs(t *testing.T) {
 	t.Parallel()
 	app := prefetchApp(t, &bitbuckettest.FakeClient{T: t})
 	app.currentUser = &bitbucket.Account{UUID: testUserUUID}
-	app.prefetchEpoch = 1
 	app.prList.SetTabIndex(2) // Reviewing
 
 	detail := withReviewer(newPR(testRepo, 101, testTitle), testUserUUID)
-	_, _ = app.Update(prefetchedMsg{key: testPRKey, epoch: 1, pr: &detail})
+	_, _ = app.Update(prefetchedMsg{key: testPRKey, pr: &detail})
 
 	if _, ok := app.prCache[testPRKey]; !ok {
 		t.Fatal("the prefetched detail should have been cached")

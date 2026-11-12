@@ -185,6 +185,12 @@ What exists:
   repositories in scope only, which is also what `warnRefreshRate` counts. Unit tests start with
   both test repositories marked as read (`newAppWithFake`); a test of the scoped fetch itself
   starts from an empty store (`scopedApp`).
+  The builds column is filled by the status prefetch: `startPrefetch` queues the stale rows **on
+  screen** (`VisiblePullRequests`, at most `prefetchLimit` = 15) and `pumpPrefetch` keeps
+  `prefetchConcurrency` requests in flight, which is all 15 — measured 2026-11-12: fifteen at once
+  answer as fast as one alone and none is refused. A refill does not cancel what is in flight and
+  no answer is dropped (`prefetching` marks the keys in flight, so nothing is asked for twice); the
+  pool is what stops quick tab switches from stacking batches.
   Opening a pull request lives in `create.go` on `N`: it starts from the checkout rather than from a pull
   request (the repository is the configured one this checkout's remotes name), reads its prefill in
   one command — `git.LastCommitSubject` for the title, `GetRepository` for the default branch,

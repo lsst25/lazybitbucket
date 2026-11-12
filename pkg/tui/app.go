@@ -219,10 +219,13 @@ type App struct {
 	lastRendererError    string
 
 	// prefetchQueue is the remaining pull request keys to warm, head first.
-	// prefetchEpoch is bumped whenever the queue is refilled so that in-flight
-	// results from a superseded tab or repository filter are dropped.
+	// prefetching is the keys with a request in flight, at most
+	// prefetchConcurrency of them. A refill replaces the queue and leaves the
+	// requests in flight alone: what they answer is true for their pull
+	// request whatever the list shows by then, and asking again would cost a
+	// second request for the same answer.
 	prefetchQueue []string
-	prefetchEpoch int
+	prefetching   map[string]bool
 
 	// previewKey is the pull request shown on the right; previewEpoch is bumped
 	// on every selection so debounce ticks and responses from a superseded

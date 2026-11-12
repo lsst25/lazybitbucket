@@ -66,11 +66,11 @@ type previewDebounceMsg struct {
 	epoch int
 }
 
-// prefetchedMsg carries one warmed pull request. The handler chains the next
-// prefetch, so exactly one prefetch request is in flight at a time.
+// prefetchedMsg carries one warmed pull request. The handler starts the next
+// one in the queue, which keeps prefetchConcurrency requests in flight until
+// the queue is empty.
 type prefetchedMsg struct {
 	key       string
-	epoch     int
 	statuses  []bitbucket.CommitStatus
 	updatedOn time.Time
 	pr        *bitbucket.PullRequest
@@ -495,25 +495,47 @@ func (a *App) fetchStatuses(pr *bitbucket.PullRequest, epoch int) tea.Cmd {
 	}
 }
 
+// pumpPrefetch starts queued prefetches until prefetchConcurrency are in
+// flight or the queue is empty. It runs when the queue is refilled and after
+// every answer, so the pool stays full without a goroutine of its own.
+func (a *App) pumpPrefetch() tea.Cmd {
+	var cmds []tea.Cmd
+	for len(a.prefetching) < prefetchConcurrency {
+		cmd := a.prefetchNext()
+		if cmd == nil {
+			break
+		}
+		cmds = append(cmds, cmd)
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
+}
+
 // prefetchNext pops the head of the prefetch queue and warms it: statuses
-// always, detail as well when the list item carries no review data. Errors are
-// carried, not raised — a prefetch failure must never interrupt the user.
+// always, detail as well when the list item carries no review data. The key is
+// marked as in flight until its answer is handled. Errors are carried, not
+// raised — a prefetch failure must never interrupt the user.
 func (a *App) prefetchNext() tea.Cmd {
 	for len(a.prefetchQueue) > 0 {
 		key := a.prefetchQueue[0]
 		a.prefetchQueue = a.prefetchQueue[1:]
 		pr := a.pullRequestByKey(key)
-		if pr == nil {
+		if pr == nil || a.prefetching[key] {
 			continue
 		}
+		if a.prefetching == nil {
+			a.prefetching = make(map[string]bool)
+		}
+		a.prefetching[key] = true
 		ctx, client := a.context(), a.client
 		workspace, slug, id := pr.Workspace(), pr.RepoSlug(), pr.ID
 		updatedOn := pr.UpdatedOn
 		needDetail := !pr.HasReviewData()
-		epoch := a.prefetchEpoch
 		return func() tea.Msg {
 			msg := prefetchedMsg{
-				key: key, epoch: epoch, statuses: nil,
+				key: key, statuses: nil,
 				updatedOn: updatedOn, pr: nil, err: nil,
 			}
 			statuses, err := client.ListPullRequestStatuses(ctx, workspace, slug, id)

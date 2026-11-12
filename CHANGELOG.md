@@ -7,6 +7,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- The build results of the rows in the list arrive together. The status requests for the first 15
+  rows now run at the same time, not one after the other, so the builds column is complete about
+  0.6 s after the list and not 5 s after it. The number of requests is the same
+- The rows whose build results are read ahead are the rows on screen. With a repository filter set,
+  the rows that the filter hides no longer take the place of the visible ones
+
 ## [0.1.1] - 2026-11-12
 
 ### Fixed

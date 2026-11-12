@@ -20,6 +20,16 @@ const previewDebounce = 150 * time.Millisecond
 // roughly 1000 requests an hour, so the list is warmed from the top down.
 const prefetchLimit = 15
 
+// prefetchConcurrency is how many of those are in flight at once: all of them.
+// It changes how soon the builds column fills, not how many requests that
+// costs, and the hourly budget counts requests. Measured against the API on
+// 2026-11-12: fifteen status requests at once answer in about 0.3 s each, the
+// same as one alone, and none is refused; one at a time they took 5.5 s, four
+// at a time 1.4 s, all at once 0.6 s. It stays a bound of its own because a
+// refill does not cancel what is in flight: without it, quick tab switches
+// would stack a batch per tab.
+const prefetchConcurrency = prefetchLimit
+
 // filterMine and filterReviewing are the client-side tab filters.
 const (
 	filterMine      = "mine"
@@ -361,13 +371,12 @@ func (a *App) handlePreviewDebounce(msg previewDebounceMsg) (tea.Model, tea.Cmd)
 	return a, tea.Batch(cmds...)
 }
 
-// handlePrefetched fills the caches from a warmed pull request and chains the
-// next one, so exactly one prefetch request is ever in flight. Failures are
-// silent: a warm-up must never interrupt the user.
+// handlePrefetched fills the caches from a warmed pull request and starts the
+// next one in the queue. Failures are silent: a warm-up must never interrupt
+// the user. An answer for a row that has left the screen is kept all the same:
+// every cache it fills is keyed by the pull request.
 func (a *App) handlePrefetched(msg prefetchedMsg) (tea.Model, tea.Cmd) {
-	if msg.epoch != a.prefetchEpoch {
-		return a, nil
-	}
+	delete(a.prefetching, msg.key)
 	if msg.err == nil {
 		a.cacheStatuses(msg.key, msg.statuses, msg.updatedOn)
 		a.buildsPanel.SetStatuses(msg.key, msg.statuses)
@@ -379,7 +388,7 @@ func (a *App) handlePrefetched(msg prefetchedMsg) (tea.Model, tea.Cmd) {
 		a.prList.PatchPullRequest(msg.pr)
 		a.refilterTabs("")
 	}
-	return a, a.prefetchNext()
+	return a, a.pumpPrefetch()
 }
 
 // handlePipelineLoaded caches a pipeline run and its steps, and shows them when
@@ -588,21 +597,28 @@ func (a *App) openBuild(status *bitbucket.CommitStatus) (tea.Model, tea.Cmd) {
 	return a, tea.Batch(focusCmd, a.fetchPipeline(pr.Workspace(), pr.RepoSlug(), key, build))
 }
 
-// startPrefetch refills the prefetch queue for the tab in view and starts the
-// chain. Bumping the epoch drops results from the previous queue.
+// startPrefetch refills the prefetch queue with the stale rows on screen, top
+// down, and fills the pool. The rows are the ones the repository and search
+// filters leave, because those are what the user is looking at. A row whose
+// request is still in flight from the queue before counts against the limit
+// but is not asked for twice.
 func (a *App) startPrefetch() tea.Cmd {
-	a.prefetchEpoch++
 	a.prefetchQueue = nil
-	prs := a.prList.CurrentPullRequests()
+	budget := prefetchLimit
+	prs := a.prList.VisiblePullRequests()
 	for index := range prs {
-		if len(a.prefetchQueue) >= prefetchLimit {
+		if budget == 0 {
 			break
 		}
-		if a.statusesStale(&prs[index]) {
-			a.prefetchQueue = append(a.prefetchQueue, prs[index].Key())
+		if !a.statusesStale(&prs[index]) {
+			continue
+		}
+		budget--
+		if key := prs[index].Key(); !a.prefetching[key] {
+			a.prefetchQueue = append(a.prefetchQueue, key)
 		}
 	}
-	return a.prefetchNext()
+	return a.pumpPrefetch()
 }
 
 // statusesStale decides whether a pull request's cached statuses are worth a

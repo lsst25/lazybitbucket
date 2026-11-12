@@ -212,8 +212,8 @@ func TestUpdate_RoutesEveryBranch(t *testing.T) {
 			wantCmd: false,
 		},
 		{
-			name:    "a stale prefetch result is dropped",
-			msg:     prefetchedMsg{key: testPRKey, epoch: 99},
+			name:    "a prefetch result with nothing queued starts nothing",
+			msg:     prefetchedMsg{key: testPRKey},
 			wantCmd: false,
 		},
 		{

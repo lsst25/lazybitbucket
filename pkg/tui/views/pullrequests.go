@@ -190,6 +190,10 @@ func (m *PullRequestList) SetPullRequestsForTab(tab int, prs []bitbucket.PullReq
 // CurrentPullRequests returns the active tab's pull requests before filtering.
 func (m *PullRequestList) CurrentPullRequests() []bitbucket.PullRequest { return m.all }
 
+// VisiblePullRequests returns the rows the list shows: the active tab's pull
+// requests after the repository and search filters, in display order.
+func (m *PullRequestList) VisiblePullRequests() []bitbucket.PullRequest { return m.items }
+
 // TabPullRequests returns a tab's pull requests before the repository and
 // search filters, nil for a tab that has not been loaded. It is how a caller
 // looks for a pull request in a tab the user is not on — the active tab is in
