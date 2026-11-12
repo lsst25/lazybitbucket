@@ -7,6 +7,38 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- The pull request list reads the repository that is in scope from every place that changes the tab
+  or the repository filter. Before, a repository picked in the pipelines view left the pull request
+  list empty after the switch back, `L` on a run of that repository said `is not in this tab`, and a
+  tab with its own state or query kept the rows of the old scope. `L` now says that the pull request
+  is still loading while its repository is read
+- A refresh replaces the rows of a repository under the name that was asked for. A repository whose
+  pull requests spell the slug differently no longer gains the same rows again on each refresh
+- A repository that was out of scope for longer than `refreshInterval` is read again when you return
+  to it. Before, it kept the rows of its first read
+- The warning about a short `refreshInterval` counts the repositories that the refresh reads, which
+  are the ones in scope, and goes away when the scope becomes small enough
+
+### Changed
+
+- The version of the app shows in the bottom border of the Status panel, where the list panels show
+  their position. It showed at the right end of the help bar, where it took the room of one to three
+  key hints on a terminal narrower than about 180 columns
+- The version reads the same on every surface: `v0.1.0` in the Status panel, on the splash and from
+  `lazybitbucket version`. A build that has no version number shows `dev-` and the commit; this
+  includes a Nix build, which knows only the commit
+
+### Removed
+
+- The release pipeline that came with lazyjira: the `release` workflow, `.goreleaser.yml`, the AUR
+  `PKGBUILD`, `make release`, and the Homebrew, AUR, deb, rpm, apk and Windows install notes and the
+  release badge in the README. This project does not publish releases. A `v*` tag releases nothing;
+  `make tag V=0.2.0` creates one after it checks that this file has a section for the version
+
+## [0.1.0] - 2026-11-11
+
 lazyjira is now lazybitbucket: a terminal UI for Bitbucket Cloud pull requests. The Bubbletea shell
 (panels, layout, theming, keybinding config, custom commands, git integration, packaging) is
 inherited; the domain layer is new. Versioning restarts for this project — the entries below this
@@ -216,17 +248,6 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Fixed
 
-- The pull request list reads the repository that is in scope from every place that changes the tab
-  or the repository filter. Before, a repository picked in the pipelines view left the pull request
-  list empty after the switch back, `L` on a run of that repository said `is not in this tab`, and a
-  tab with its own state or query kept the rows of the old scope. `L` now says that the pull request
-  is still loading while its repository is read
-- A refresh replaces the rows of a repository under the name that was asked for. A repository whose
-  pull requests spell the slug differently no longer gains the same rows again on each refresh
-- A repository that was out of scope for longer than `refreshInterval` is read again when you return
-  to it. Before, it kept the rows of its first read
-- The warning about a short `refreshInterval` counts the repositories that the refresh reads, which
-  are the ones in scope, and goes away when the scope becomes small enough
 - A resolved conversation is recognised as resolved. Bitbucket marks one in a collection by sending
   `"resolution": {}` — the object, with every member stripped — and sends no resolution member at all
   on a conversation that is open, so reading the members to decide (as this did) made every resolved
@@ -238,6 +259,10 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Changed
 
+- A start inside a checkout asks only for the pull requests of that repository, which is one list
+  request and not one for each configured repository. The other repositories are read when you pick
+  them, or all of them when you pick All repositories. Until a repository is read, the Repos panel
+  shows no count for it, and no total
 - A keybinding set in the config now takes its key from whatever default held it, instead of leaving
   two actions on one key for `Keymap.Match` to pick between by map order. An action left with no key
   at all is simply unbound, and an action's other keys are untouched
@@ -274,9 +299,6 @@ one are upstream lazyjira history, and their compare links still point at upstre
 
 ### Removed
 
-- The release pipeline that came with lazyjira: the `release` workflow, `.goreleaser.yml`, the AUR
-  `PKGBUILD`, `make release`, and the Homebrew, AUR, deb, rpm, apk and Windows install notes in the
-  README. This project does not publish releases. A `v*` tag now releases nothing
 - Everything Jira: `pkg/jira`, JQL search and history, issue create/edit/transition, comments,
   the info panel and custom fields, ADF conversion and rendering, mentions, issue hierarchy, and
   Jira Server / Data Center and mTLS support
@@ -750,7 +772,8 @@ one are upstream lazyjira history, and their compare links still point at upstre
 - Cross-platform: macOS, Linux, Windows
 - Homebrew install via tap
 
-[Unreleased]: https://github.com/textfuel/lazyjira/compare/v2.19.2...HEAD
+[Unreleased]: https://github.com/lsst25/lazybitbucket/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/lsst25/lazybitbucket/tree/v0.1.0
 [2.19.2]: https://github.com/textfuel/lazyjira/compare/v2.19.1...v2.19.2
 [2.19.1]: https://github.com/textfuel/lazyjira/compare/v2.19.0...v2.19.1
 [2.19.0]: https://github.com/textfuel/lazyjira/compare/v2.18.0...v2.19.0

@@ -1,8 +1,8 @@
-.PHONY: build build-version build-demo lint lint-fix lint-docs vet test clean check check-demo tidy fix preview e2e e2e-gen e2e-update nix-deps
+.PHONY: build build-version build-demo lint lint-fix lint-docs vet test clean check check-demo tidy fix tag preview e2e e2e-gen e2e-update nix-deps
 
-# The version comes from the git tag: v0.1.0 on a tag, 0.1.0-3-gabc1234 three
+# The version comes from the git tag: v0.1.0 on a tag, v0.1.0-3-gabc1234 three
 # commits after it, abc1234 when there is no tag yet. Override with VERSION=...
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null)
 LDFLAGS = -X main.version=$(or $(VERSION),dev)
 
 build:
@@ -39,6 +39,17 @@ tidy:
 	go mod tidy
 
 fix: tidy lint-fix nix-deps
+
+# Tag a version: make tag V=0.2.0. Nothing is published; the tag only sets the
+# version that build stamps. CHANGELOG.md must have the section first, so move
+# the [Unreleased] entries under "## [0.2.0] - <date>" and commit before this.
+# push.followTags sends an annotated tag with the next push of the branch.
+tag:
+	@test -n "$(V)" || (echo "Usage: make tag V=0.2.0" && exit 1)
+	@grep -q '^## \[$(V)\]' CHANGELOG.md || (echo "CHANGELOG.md has no [$(V)] section" && exit 1)
+	@test -z "$$(git status --porcelain)" || (echo "the tree is not clean: commit first" && exit 1)
+	git tag -a v$(V) -m v$(V)
+	@echo "Tagged v$(V). It goes out with the next push of the branch."
 
 check-demo:
 	go tool golangci-lint run --build-tags demo ./...

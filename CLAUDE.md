@@ -279,11 +279,16 @@ removed, because this project is not released.
 - `upstream` → `git@github.com:textfuel/lazyjira.git`, so `git fetch upstream && git merge upstream/main`
   can still pull their fixes. `pkg/jira` no longer exists here, so upstream changes to it do not apply;
   expect conflicts in `pkg/tui` and `pkg/config` instead.
-- **No tags yet.** The 49 inherited upstream tags were deleted so releases can start clean. The
-  version is the git tag: `make build` stamps `git describe --tags --always --dirty` into
-  `main.version` (`VERSION=...` overrides it), and `resolveVersion`
-  (`cmd/lazybitbucket/version.go`) falls back to the embedded build information for `go install`.
-  The version shows at the right end of the help bar (`HelpBar.SetVersion`) and on the splash.
+- **The only tags are this project's own**, starting at `v0.1.0`. The 49 inherited upstream tags
+  were deleted so versioning can start clean. The version is the git tag: `make build` stamps
+  `git describe --tags --always --dirty` into `main.version` (`VERSION=...` overrides it), and
+  `resolveVersion` (`cmd/lazybitbucket/version.go`) falls back to the embedded build information for
+  `go install`. `resolveVersion` alone decides the shown form — `v0.1.0` for a version number,
+  `dev-<commit>` for anything else, which includes a Nix build — and every surface prints it as it
+  is: `lazybitbucket version`, the splash, and the bottom border of the Status panel
+  (`StatusPanel.SetVersion`; the help bar was tried first and cost key hints). `make tag V=0.2.0`
+  creates the annotated tag once `CHANGELOG.md` has a `## [0.2.0]` section. A published tag is not
+  moved; a fix gets the next version.
 - `fetch.pruneTags = false` is set repo-locally on purpose. The global `~/.gitconfig` sets it to `true`,
   which forces an explicit `refs/tags/*` refspec onto every fetch and would re-sync all 49 upstream tags
   back on the next `git fetch upstream`. `--no-tags` cannot suppress that. Do not "clean up" this override.
@@ -300,8 +305,9 @@ Everything user-visible is `lazybitbucket`:
   mode on, as can `--read-only`).
 - Packaging: GitHub `lsst25/lazybitbucket` and nix attr `.#lazybitbucket`. Nothing is published: no
   releases, no Homebrew tap, no AUR, no deb/rpm/apk. A `v*` tag releases nothing.
-- `LICENSE` keeps the upstream copyright notice, and the `CHANGELOG.md` compare links **stay** pointed at
-  upstream — that is accurate history. Everything below the `[Unreleased]` section is upstream's.
+- `LICENSE` keeps the upstream copyright notice, and the `CHANGELOG.md` compare links of the `2.x`
+  sections **stay** pointed at upstream — that is accurate history. `[Unreleased]` and `[0.1.0]` are
+  this project's and link to it; everything below the `[0.1.0]` section is upstream's.
 
 Auth: Atlassian removed app passwords on 2026-07-28. There is no app-password mode. Two credential
 shapes: a token alone (API token or access token) sent as `Authorization: Bearer`, or an Atlassian

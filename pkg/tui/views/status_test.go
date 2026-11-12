@@ -29,6 +29,37 @@ func TestStatusPanel_NewStatusPanel_StartsCleanAndOnline(t *testing.T) {
 	}
 }
 
+func TestStatusPanel_SetVersion_SitsInTheBottomBorder(t *testing.T) {
+	t.Parallel()
+	panel := makeStatusPanel()
+	bare := strings.Split(stripANSI(panel.View()), "\n")
+	panel.SetVersion("v0.1.0")
+
+	lines := strings.Split(stripANSI(panel.View()), "\n")
+
+	testkit.AssertEqual(t, "the panel keeps its height", len(lines), len(bare))
+	last := lines[len(lines)-1]
+	if !strings.HasSuffix(last, "v0.1.0─╯") {
+		t.Errorf("bottom border = %q, want the version at its right end", last)
+	}
+	testkit.AssertEqual(t, "border width", lipgloss.Width(last), 80)
+}
+
+func TestStatusPanel_SetVersion_IsDroppedWhenTheBorderCannotHoldIt(t *testing.T) {
+	t.Parallel()
+	panel := makeStatusPanel()
+	panel.SetVersion("v0.1.0-12-gabc1234-dirty")
+	panel.SetSize(20, 10)
+
+	lines := strings.Split(stripANSI(panel.View()), "\n")
+
+	last := lines[len(lines)-1]
+	if strings.Contains(last, "v0.1") {
+		t.Errorf("bottom border = %q, a version that does not fit is not cut", last)
+	}
+	testkit.AssertEqual(t, "border width", lipgloss.Width(last), 20)
+}
+
 func TestStatusPanel_SetScope_UpdatesTheSummaryLine(t *testing.T) {
 	t.Parallel()
 	panel := makeStatusPanel()

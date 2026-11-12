@@ -22,12 +22,13 @@ func TestResolveVersion(t *testing.T) {
 		info    *debug.BuildInfo
 		want    string
 	}{
-		{"stamped wins", "0.2.0", vcs("abcdef1234567", "false"), "0.2.0"},
-		{"stamped loses its v", "v0.2.0", nil, "0.2.0"},
-		{"stamped describe output", "0.2.0-3-gabc1234-dirty", nil, "0.2.0-3-gabc1234-dirty"},
+		{"stamped wins", "v0.2.0", vcs("abcdef1234567", "false"), "v0.2.0"},
+		{"stamped without a v gets one", "0.2.0", nil, "v0.2.0"},
+		{"stamped describe output", "v0.2.0-3-gabc1234-dirty", nil, "v0.2.0-3-gabc1234-dirty"},
 		{"untagged build stamps a bare hash", "07388ec", nil, "dev-07388ec"},
 		{"untagged dirty build", "07388ec-dirty", nil, "dev-07388ec-dirty"},
-		{"module version from go install", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.3.1"}}, "0.3.1"},
+		{"a dev label is kept", "dev-local", nil, "dev-local"},
+		{"module version from go install", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.3.1"}}, "v0.3.1"},
 		{"commit of a checkout", "dev", vcs("abcdef1234567", "false"), "dev-abcdef1"},
 		{"dirty checkout", "dev", vcs("abcdef1234567", "true"), "dev-abcdef1-dirty"},
 		{"no build information", "dev", nil, "dev"},

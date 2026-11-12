@@ -41,6 +41,7 @@ type StatusPanel struct {
 	warnText  string
 	readOnly  bool
 	viewName  string
+	version   string
 	rateLimit int
 	width     int
 	height    int
@@ -78,6 +79,21 @@ func (s *StatusPanel) SetReadOnly(readOnly bool) { s.readOnly = readOnly }
 // the numbering is named after, and set in every other view so the reader can
 // see at a glance why [3] is a different panel than it was.
 func (s *StatusPanel) SetViewName(name string) { s.viewName = name }
+
+// SetVersion sets the version the panel wears in its bottom border, where the
+// list panels put their "3 of 12". The border has nothing else to say in this
+// panel, so the version costs no row and no key hint. It is shown as given.
+func (s *StatusPanel) SetVersion(version string) { s.version = version }
+
+// footer is the version, or nothing when the border is too short to hold it
+// whole: a version cut in half reads as a different version.
+func (s *StatusPanel) footer() string {
+	// The border keeps a corner and one dash on each side of the footer.
+	if lipgloss.Width(s.version) > s.width-4 {
+		return ""
+	}
+	return s.version
+}
 
 // title is the panel title, with the view name appended when there is one.
 func (s *StatusPanel) title() string {
@@ -176,5 +192,6 @@ func (s *StatusPanel) View() string {
 		lines = append(lines, " "+s.theme.WarningText.Render(components.TruncateEnd(note, contentW-1)))
 	}
 
-	return components.RenderPanel(s.title(), strings.Join(lines, "\n"), s.width, innerHeight, s.focused)
+	return components.RenderPanelFull(
+		s.title(), s.footer(), strings.Join(lines, "\n"), s.width, innerHeight, s.focused, nil)
 }

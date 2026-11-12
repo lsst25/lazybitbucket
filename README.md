@@ -1,6 +1,5 @@
 <p align="center">
   <a href="https://go.dev/"><img src="https://img.shields.io/github/go-mod/go-version/lsst25/lazybitbucket" alt="Go"></a>
-  <a href="https://github.com/lsst25/lazybitbucket/releases"><img src="https://img.shields.io/github/v/release/lsst25/lazybitbucket" alt="Release"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 

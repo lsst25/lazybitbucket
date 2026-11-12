@@ -1,7 +1,6 @@
 package components
 
 import (
-	"regexp"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,18 +19,8 @@ type HelpItem struct {
 type HelpBar struct {
 	items     []HelpItem
 	statusMsg string // transient message shown left of hints (green)
-	version   string // shown dim at the right end when there is room
 	width     int
 }
-
-// versionGap is the least space kept between the hints and the version, and the
-// least number of columns the hints keep before the version is dropped.
-const (
-	versionGap     = 2
-	versionMinRoom = 40
-	// helpOverhead is the leading space plus the " ..." of a truncated line.
-	helpOverhead = 5
-)
 
 // NewHelpBar creates a help bar with the given items.
 func NewHelpBar(items []HelpItem) HelpBar {
@@ -46,20 +35,6 @@ func (h *HelpBar) SetItems(items []HelpItem) {
 // SetStatusMsg sets a transient message shown left of hints.
 func (h *HelpBar) SetStatusMsg(msg string) {
 	h.statusMsg = msg
-}
-
-// releaseVersion matches a version number such as "0.1.0" or "1.2.3-4-gabc1234".
-// A bare commit hash does not match, even when it starts with a digit.
-var releaseVersion = regexp.MustCompile(`^\d+\.\d+`)
-
-// SetVersion sets the version shown at the right end of the bar. A version
-// number is shown as "v1.2.3"; anything else (a "dev" build) is shown as it
-// is. An empty string shows nothing.
-func (h *HelpBar) SetVersion(version string) {
-	h.version = version
-	if releaseVersion.MatchString(version) {
-		h.version = "v" + version
-	}
 }
 
 // SetWidth updates the help bar width.
@@ -83,17 +58,6 @@ func (h HelpBar) View() string {
 	sep := blueStyle.Render(" | ")
 
 	availW := h.width
-
-	// The version takes the right end only when the hints keep enough room; on
-	// a narrow terminal the hints matter more.
-	versionW := lipgloss.Width(h.version)
-	showVersion := h.version != "" && h.width >= versionMinRoom+versionW+versionGap
-	if showVersion {
-		// The leading space and a possible " ..." come on top of the hints, so
-		// they are reserved too; otherwise a truncated line would squeeze the
-		// version out.
-		availW -= versionW + versionGap + helpOverhead
-	}
 
 	// Status message (accent colour) on the left.
 	prefix := ""
@@ -121,17 +85,8 @@ func (h HelpBar) View() string {
 	if truncated {
 		result += blueStyle.Render(" ...")
 	}
-	left := " " + result
 	if prefix != "" {
-		left = prefix + result
+		return prefix + result
 	}
-	if !showVersion {
-		return left
-	}
-	pad := h.width - lipgloss.Width(left) - versionW - 1
-	if pad < 1 {
-		return left
-	}
-	dim := lipgloss.NewStyle().Foreground(theme.ColorGray)
-	return left + strings.Repeat(" ", pad) + dim.Render(h.version)
+	return " " + result
 }
